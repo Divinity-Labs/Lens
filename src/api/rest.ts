@@ -21,15 +21,45 @@ function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
 }
 
+/**
+ * Resolve a requested pair against the ones this network watches.
+ *
+ * The issuer is honoured when the caller supplies one. It used to be discarded
+ * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
+ * and a request for Circle's mainnet USDC was answered with testnet USDC's
+ * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
+ *
+ * That is the worst failure mode an oracle has: not a refusal, but a confident
+ * wrong number. Asset codes are not unique on Stellar — anyone can issue
+ * "USDC", and Horizon lists many — so the issuer is the only thing that
+ * identifies an asset. A bare code still matches on code alone, since callers
+ * quoting XLM or a single-issuer asset rely on that.
+ */
 function findPair(assetA: string, assetB: string, network: NetworkName) {
-  const normalize = (a: string) => a.toLowerCase() === 'native' ? 'XLM' : a.split(':')[0].toUpperCase()
-  const cA = normalize(assetA)
-  const cB = normalize(assetB)
-  return getNetworkConfig(network).pairs.find(p => {
-    const pA = p.assetA.code.toUpperCase()
-    const pB = p.assetB.code.toUpperCase()
-    return (cA === pA && cB === pB) || (cA === pB && cB === pA)
-  })
+  const parse = (a: string) => {
+    if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
+    const [code, issuer] = a.split(':')
+    return { code: (code ?? '').toUpperCase(), issuer: issuer ?? null }
+  }
+  const qA = parse(assetA)
+  const qB = parse(assetB)
+
+  const matches = (
+    q: { code: string; issuer: string | null },
+    side: { code: string; issuer?: string | null },
+  ) => {
+    if (q.code !== side.code.toUpperCase()) return false
+    // Only enforce the issuer when both sides name one; XLM has none, and a
+    // caller passing a bare code is not asserting which issuer they meant.
+    if (!q.issuer || !side.issuer) return true
+    return q.issuer === side.issuer
+  }
+
+  return getNetworkConfig(network).pairs.find(
+    p =>
+      (matches(qA, p.assetA) && matches(qB, p.assetB)) ||
+      (matches(qA, p.assetB) && matches(qB, p.assetA)),
+  )
 }
 
 export async function registerRESTRoutes(app: FastifyInstance) {
