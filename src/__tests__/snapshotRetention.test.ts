@@ -14,7 +14,12 @@ vi.mock('bullmq', () => ({
   Worker: class {},
 }))
 
-import { pruneOldSnapshots, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from '../jobs/snapshotRetention'
+import {
+  pruneOldSnapshots,
+  pruneAllNetworks,
+  SNAPSHOT_PRUNE_BATCH_SIZE,
+  SNAPSHOT_RETENTION_DAYS,
+} from '../jobs/snapshotRetention'
 import { activeNetwork } from '../config'
 
 describe('pruneOldSnapshots', () => {
@@ -23,15 +28,17 @@ describe('pruneOldSnapshots', () => {
   })
 
   it('defaults to the 30-day retention window', async () => {
-    mockQuery.mockResolvedValue({ rowCount: 5 })
+    mockQuery.mockResolvedValueOnce({ rowCount: 5 }).mockResolvedValueOnce({ rowCount: 0 })
 
     const pruned = await pruneOldSnapshots()
 
     expect(SNAPSHOT_RETENTION_DAYS).toBe(30)
     expect(pruned).toBe(5)
-    expect(mockQuery.mock.calls[0][1]).toEqual([activeNetwork, 30])
-    expect(mockQuery.mock.calls[0][0]).toMatch(/DELETE FROM price_snapshots/)
+    expect(mockQuery.mock.calls[0][1]).toEqual([activeNetwork, 30, SNAPSHOT_PRUNE_BATCH_SIZE])
+    expect(mockQuery.mock.calls[0][0]).toMatch(/DELETE FROM price_snapshots AS snapshots/)
+    expect(mockQuery.mock.calls[0][0]).toMatch(/LIMIT \$3\s+FOR UPDATE SKIP LOCKED/)
     expect(mockQuery.mock.calls[0][0]).toMatch(/ts < NOW\(\) - \(\$2 \|\| ' days'\)::interval/)
+    expect(mockQuery).toHaveBeenCalledTimes(2)
   })
 
   it('honors a custom retention window', async () => {
@@ -56,13 +63,44 @@ describe('pruneOldSnapshots network argument', () => {
   })
 
   it('binds the requested network instead of the active one', async () => {
-    mockQuery.mockResolvedValue({ rowCount: 2 })
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 2 })
+      .mockResolvedValueOnce({ rowCount: 0 })
+      .mockResolvedValueOnce({ rowCount: 2 })
+      .mockResolvedValueOnce({ rowCount: 0 })
 
     await pruneOldSnapshots(30, 'mainnet')
     await pruneOldSnapshots(30, 'testnet')
 
-    expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet', 30])
-    expect(mockQuery.mock.calls[1][1]).toEqual(['testnet', 30])
+    expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet', 30, SNAPSHOT_PRUNE_BATCH_SIZE])
+    expect(mockQuery.mock.calls[2][1]).toEqual(['testnet', 30, SNAPSHOT_PRUNE_BATCH_SIZE])
+  })
+
+  it('drains multiple bounded batches and reports cumulative progress', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 2 })
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rowCount: 0 })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const onProgress = vi.fn()
+
+    try {
+      expect(await pruneOldSnapshots(14, 'mainnet', 2, onProgress)).toBe(3)
+      expect(mockQuery.mock.calls.map(call => call[1])).toEqual([
+        ['mainnet', 14, 2],
+        ['mainnet', 14, 2],
+        ['mainnet', 14, 2],
+      ])
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('batch 2 (1 rows; 3 total)'))
+      expect(onProgress).toHaveBeenLastCalledWith({ network: 'mainnet', batch: 2, batchRows: 1, totalPruned: 3 })
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('rejects an invalid batch size before querying', async () => {
+    await expect(pruneOldSnapshots(30, activeNetwork, 0)).rejects.toThrow(/positive integer/)
+    expect(mockQuery).not.toHaveBeenCalled()
   })
 })
 
