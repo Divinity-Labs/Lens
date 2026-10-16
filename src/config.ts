@@ -6,6 +6,17 @@ import type { WatchedPair, AssetId } from './types'
 
 export type NetworkName = 'testnet' | 'mainnet'
 
+export interface PeggedAssetConfig {
+  /** The pegged asset (e.g. USDC, EURC, etc.) */
+  asset: AssetId
+  /** The target code or asset it is pegged to (e.g. "USD", "EUR") */
+  target: string
+  /** The explicit numeric target price against target (e.g. 1.0) */
+  targetPrice: number
+  /** Lookback window in hours for rolling worst deviation (default: 24) */
+  windowHours?: number
+}
+
 /** Per-network configuration block. */
 export interface NetworkConfig {
   horizon: {
@@ -41,6 +52,8 @@ export interface NetworkConfig {
   }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
+  /** Configured pegged assets for this network. */
+  pegged: PeggedAssetConfig[]
   facilitator: {
     /** Secret key for the facilitator's fee-paying account */
     secretKey?: string
@@ -81,6 +94,36 @@ function parseWatchedPairs(raw: string): WatchedPair[] {
     const assetA = parseAsset(a)
     const assetB = parseAsset(b)
     return { assetA, assetB, pairKey: makePairKey(assetA, assetB) }
+  })
+}
+
+// ── Pegged assets parsing ───────────────────────────────────────────────────
+
+export function parsePeggedAssets(raw: string): PeggedAssetConfig[] {
+  if (!raw.trim()) return []
+  return raw.split(',').map(entry => {
+    // format: ASSET:ISSUER=TARGET:TARGET_PRICE[:WINDOW_HOURS]
+    // e.g. "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN=USD:1.0"
+    const [assetStr, targetDef] = entry.trim().split('=')
+    if (!assetStr || !targetDef) {
+      throw new Error(
+        `Invalid pegged asset format: "${entry}". Expected "ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]"`
+      )
+    }
+    const asset = parseAsset(assetStr)
+    const targetParts = targetDef.split(':')
+    const target = targetParts[0].trim().toUpperCase()
+    const targetPrice = parseFloat(targetParts[1] ?? '1.0')
+    if (isNaN(targetPrice)) {
+      throw new Error(`Invalid target price in pegged asset: "${entry}"`)
+    }
+    const windowHours = targetParts[2] ? parseInt(targetParts[2], 10) : undefined
+    return {
+      asset,
+      target,
+      targetPrice,
+      windowHours: windowHours && !isNaN(windowHours) ? windowHours : 24,
+    }
   })
 }
 
@@ -198,6 +241,20 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (network === 'testnet' ? process.env.WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
 
+  // ── Pegged assets ─────────────────────────────────────────────────────────
+  // Configured assets that are expected to track a peg target.
+  // Default on mainnet includes USDC (Circle) pegged to USD at 1.0.
+  // Default on testnet includes testnet USDC pegged to USD at 1.0.
+  const TESTNET_DEFAULT_PEGGED =
+    'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5=USD:1.0'
+  const MAINNET_DEFAULT_PEGGED =
+    'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN=USD:1.0'
+
+  const rawPegged =
+    process.env[`PEGGED_ASSETS_${suffix}`] ||
+    (network === 'testnet' ? process.env.PEGGED_ASSETS : undefined) ||
+    (network === 'mainnet' ? MAINNET_DEFAULT_PEGGED : TESTNET_DEFAULT_PEGGED)
+
   // ── Facilitator ───────────────────────────────────────────────────────────
   const facilitatorSecretKey =
     process.env[`FACILITATOR_SECRET_KEY_${suffix}`] ||
@@ -226,6 +283,7 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     },
     oracle: { enabled: oracleEnabled, reflectorContractId },
     pairs: parseWatchedPairs(rawPairs),
+    pegged: parsePeggedAssets(rawPegged),
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
 }
@@ -322,6 +380,7 @@ export const config = {
   get aquarius() { return resolveNetwork(activeNetwork).aquarius },
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
+  get pegged()   { return resolveNetwork(activeNetwork).pegged },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 
   // ── Global / network-agnostic ──────────────────────────────────────────────
