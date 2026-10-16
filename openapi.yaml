@@ -673,11 +673,13 @@ paths:
   /compare/{asset}:
     get:
       operationId: compareAsset
-      summary: Compare Lens and Reflector oracle prices for an asset
+      summary: Compare Lens prices with every configured external oracle
       description: >-
-        Returns 200 even when both Lens and Reflector have no data for the
-        asset. The `status` field distinguishes "no_data" from "aligned",
+        Returns 200 even when both Lens and all configured oracles have no data
+        for the asset. The `status` field distinguishes "no_data" from "aligned",
         "minor_deviation", "major_deviation" and "partial" (one source only).
+        The response includes both the legacy `reflector` field for backward
+        compatibility and an `oracles` array listing every configured source.
       security: []
       parameters:
         - name: asset
@@ -686,6 +688,7 @@ paths:
           schema:
             type: string
           example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
           description: Price comparison (includes status:"no_data" when both sources are null)
@@ -1498,11 +1501,14 @@ components:
 
     CompareResponse:
       type: object
-      required: [asset, lens, reflector, deviationPct, status, fetchedAt]
+      required: [asset, network, lens, reflector, deviationPct, status, fetchedAt, oracles]
       additionalProperties: false
       properties:
         asset:
           type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
         lens:
           type: number
           nullable: true
@@ -1518,6 +1524,29 @@ components:
         fetchedAt:
           type: string
           format: date-time
+        oracles:
+          type: array
+          description: One result per configured adapter; unavailable sources remain present with a status.
+          items:
+            type: object
+            required: [name, price, timestamp, deviationPct, status]
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+              price:
+                type: number
+                nullable: true
+              timestamp:
+                type: string
+                format: date-time
+                nullable: true
+              deviationPct:
+                type: number
+                nullable: true
+              status:
+                type: string
+                enum: [available, unreachable, not_configured]
 
     ScreenerRow:
       type: object
