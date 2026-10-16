@@ -3,7 +3,7 @@ import cors from '@fastify/cors'
 import compress from '@fastify/compress'
 import rateLimit from '@fastify/rate-limit'
 import { registerRESTRoutes } from './api/rest'
-import { registerGraphQL } from './api/graphql'
+import { registerGraphQL, type GraphQLUiOptions } from './api/graphql'
 import { registerWebhookRoutes } from './routes/webhooks'
 import { registerCandleRoutes } from './routes/candles'
 import { registerPairsRoutes } from './routes/pairs'
@@ -36,6 +36,7 @@ export interface BuildAppOptions {
    * routes — a duplicated list would drift and defeat the point.
    */
   onRoute?: (routeOptions: RouteOptions) => void
+  graphqlUi?: GraphQLUiOptions
 }
 
 /**
@@ -137,7 +138,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerBasketRoutes(app)
   await registerDiscoveryRoutes(app)
   await registerSettleRoute(app)
-  await registerGraphQL(app)
+  await registerGraphQL(app, options.graphqlUi)
   await registerWebSocket(app)
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)

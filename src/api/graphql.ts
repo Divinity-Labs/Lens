@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { NoSchemaIntrospectionCustomRule } from 'graphql'
 import { price_requests_total } from '../metrics'
 import mercurius, { withFilter, type MercuriusContext } from 'mercurius'
 import { getCachedPrice } from '../redis'
@@ -87,6 +88,33 @@ const schema = `
     priceUpdated(pair: String!, network: String): PriceUpdate!
   }
 `
+
+export interface GraphQLUiOptions {
+  environment?: string
+  graphiqlEnabled?: boolean
+  introspectionEnabled?: boolean
+}
+
+/**
+ * GraphiQL is an interactive console, so production defaults it off. Schema
+ * introspection is controlled independently: it remains on by default because
+ * this is a public read API and clients need schema discovery, but operators
+ * can disable it for production deployments that require a private schema.
+ */
+export function resolveGraphQLUiOptions(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: GraphQLUiOptions = {},
+): Required<GraphQLUiOptions> {
+  const isProduction = (overrides.environment ?? env.NODE_ENV) === 'production'
+  const parseBoolean = (value: string | undefined, fallback: boolean) =>
+    value === undefined || value.trim() === '' ? fallback : value.toLowerCase() === 'true'
+
+  return {
+    environment: overrides.environment ?? env.NODE_ENV ?? 'development',
+    graphiqlEnabled: overrides.graphiqlEnabled ?? parseBoolean(env.GRAPHIQL_ENABLED, !isProduction),
+    introspectionEnabled: overrides.introspectionEnabled ?? parseBoolean(env.GRAPHQL_INTROSPECTION_ENABLED, true),
+  }
+}
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -201,11 +229,16 @@ const resolvers = {
   },
 }
 
-export async function registerGraphQL(app: FastifyInstance) {
+export async function registerGraphQL(app: FastifyInstance, uiOptions: GraphQLUiOptions = {}) {
+  const { graphiqlEnabled, introspectionEnabled } = resolveGraphQLUiOptions(process.env, uiOptions)
   await app.register(mercurius, {
     schema,
     resolvers,
-    graphiql: true,
+    graphiql: graphiqlEnabled,
+    // Public schema introspection is useful to API clients and remains
+    // independent from whether the browser IDE is available. Mercurius exposes
+    // this through a validation rule rather than an `introspection` option.
+    validationRules: introspectionEnabled ? undefined : [NoSchemaIntrospectionCustomRule],
     path: '/graphql',
     subscription: {
       // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
