@@ -1,10 +1,5 @@
-import 'dotenv/config'
 import { execSync } from 'child_process'
-
-if (!process.env.DIRECT_DATABASE_URL && process.env.DATABASE_URL) {
-  process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL
-}
-import { config, type NetworkName } from './config'
+import { config, ensureDirectDatabaseUrl, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
@@ -29,6 +24,7 @@ import { markBootComplete } from './health'
 const log = createLogger('startup')
 
 async function main() {
+  ensureDirectDatabaseUrl()
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
   log.info('running database migrations')
   execSync('node node_modules/prisma/build/index.js db push --accept-data-loss', { stdio: 'inherit' })

@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
 import { api_key_auth_failures_total } from '../metrics'
+import { getEnvironment } from '../config'
 
 type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired'
 
@@ -76,7 +77,7 @@ async function lookupApiKeyResult(
  * usage), so the two surfaces cannot drift apart.
  */
 export function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
+  const adminToken = getEnvironment().ADMIN_TOKEN
   if (!adminToken) return false
   const supplied =
     (req.headers['x-admin-token'] as string | undefined) ??
