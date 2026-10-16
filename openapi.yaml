@@ -119,6 +119,44 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /price/{assetA}/{assetB}/split:
+    get:
+      operationId: getSplitRecommendation
+      summary: Get optimal split route proportions minimizing slippage
+      security:
+        - x402: []
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: amount
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 1000
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Split recommendation and comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SplitRecommendation'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          description: Pair not watched or no liquidity
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /price/{assetA}/{assetB}/history:
     get:
       operationId: getPriceHistory
@@ -1272,6 +1310,124 @@ components:
           type: number
         recommendation:
           type: string
+        split:
+          $ref: '#/components/schemas/SplitRecommendation'
+
+    SplitRecommendation:
+      type: object
+      required: [splitRecommended, assetA, assetB, pairKey, network, amount, message, provenance]
+      additionalProperties: false
+      properties:
+        splitRecommended:
+          type: boolean
+        assetA:
+          type: string
+        assetB:
+          type: string
+        pairKey:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        amount:
+          type: number
+        reason:
+          type: string
+        message:
+          type: string
+        proportions:
+          type: object
+          required: [SDEX, AMM]
+          additionalProperties: false
+          properties:
+            SDEX:
+              type: number
+            AMM:
+              type: number
+        allocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/SplitVenueAllocation'
+        estimatedOutput:
+          type: number
+        effectivePrice:
+          type: number
+        slippagePct:
+          type: number
+        singleVenue:
+          type: object
+          required: [route, output, price, slippagePct]
+          additionalProperties: false
+          properties:
+            route:
+              type: string
+              enum: [SDEX, AMM]
+            output:
+              type: number
+            price:
+              type: number
+            slippagePct:
+              type: number
+        comparison:
+          $ref: '#/components/schemas/SplitComparison'
+        provenance:
+          $ref: '#/components/schemas/SplitProvenance'
+        error:
+          type: string
+
+    SplitVenueAllocation:
+      type: object
+      required: [venue, proportion, amount, estimatedOutput, effectivePrice]
+      additionalProperties: false
+      properties:
+        venue:
+          type: string
+          enum: [SDEX, AMM]
+        proportion:
+          type: number
+        amount:
+          type: number
+        estimatedOutput:
+          type: number
+        effectivePrice:
+          type: number
+
+    SplitComparison:
+      type: object
+      required: [singleVenueRoute, singleVenueOutput, singleVenueEffectivePrice, singleVenueSlippagePct, outputImprovement, outputImprovementPct]
+      additionalProperties: false
+      properties:
+        singleVenueRoute:
+          type: string
+          enum: [SDEX, AMM]
+        singleVenueOutput:
+          type: number
+        singleVenueEffectivePrice:
+          type: number
+        singleVenueSlippagePct:
+          type: number
+        outputImprovement:
+          type: number
+        outputImprovementPct:
+          type: number
+
+    SplitProvenance:
+      type: object
+      required: [venues, samples, asOf, freshnessSeconds]
+      additionalProperties: false
+      properties:
+        venues:
+          type: array
+          items:
+            type: string
+        samples:
+          type: integer
+        asOf:
+          type: string
+          format: date-time
+        freshnessSeconds:
+          type: integer
+          nullable: true
 
     PriceBucket:
       type: object
