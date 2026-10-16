@@ -80,6 +80,7 @@ function validAggregate() {
     confidence: 'high' as const,
     lastTradeAgeSeconds: 10,
     stale: false,
+    excludedVenues: [] as string[],
     bestRoute: 'SDEX' as const,
   }
 }

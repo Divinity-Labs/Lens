@@ -24,6 +24,7 @@ import { getRpcServer } from '../../network/clients'
 import { upsertPricePoints } from '../../db'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { recordVenueSuccess, recordVenueFailure, recordVenueReadSuccess } from '../../venueHeartbeat'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -230,6 +231,8 @@ export async function ingestPool(
       console.debug(
         `[soroswap] Skipping empty pool ${poolEntry.poolAddress} for ${pair.pairKey}`
       )
+      // Reserves were read and the pool is simply empty; the adapter is alive.
+      recordVenueReadSuccess('soroswap_amm', network)
       return
     }
 
@@ -251,6 +254,7 @@ export async function ingestPool(
       ],
       network
     )
+    recordVenueSuccess('soroswap_amm', network)
 
     const trackerKey = pair.pairKey
     const { previousPrice } = setLastPrice('Soroswap', network, trackerKey, spotPrice)
@@ -280,6 +284,7 @@ export async function ingestPool(
       `[soroswap] ingestPool error for ${poolEntry.poolAddress}:`,
       (err as Error).message
     )
+    recordVenueFailure('soroswap_amm', network)
   }
 }
 

@@ -19,7 +19,7 @@ import type { FastifyInstance, FastifySchema } from 'fastify'
 /** GET /status */
 export const statusResponseSchema = {
   type: 'object',
-  required: ['ok', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds'],
+  required: ['ok', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds', 'venueHeartbeats'],
   additionalProperties: false,
   properties: {
     ok: { type: 'boolean' },
@@ -33,6 +33,23 @@ export const statusResponseSchema = {
     // Seconds since the last ingester write for this network, null before the
     // first one. Lets `/status` reveal a stalled ingester on its own.
     ingestLagSeconds: { type: ['integer', 'null'] },
+    // Per-venue heartbeat state (Issue #219).
+    venueHeartbeats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'network', 'lastSuccess', 'lastWrite', 'consecutiveFailures', 'stalenessThresholdMs'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string' },
+          network: { type: 'string', enum: ['testnet', 'mainnet'] },
+          lastSuccess: { type: ['string', 'null'] },
+          lastWrite: { type: ['string', 'null'] },
+          consecutiveFailures: { type: 'integer' },
+          stalenessThresholdMs: { type: 'integer' },
+        },
+      },
+    },
   },
 } as const
 
@@ -59,6 +76,7 @@ export const priceResponseSchema = {
     'confidence',
     'lastTradeAgeSeconds',
     'stale',
+    'excludedVenues',
     'bestRoute',
     'lastUpdated',
   ],
@@ -83,6 +101,9 @@ export const priceResponseSchema = {
     confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
     lastTradeAgeSeconds: { type: ['integer', 'null'] },
     stale: { type: 'boolean' },
+    // Venues whose last written price is older than their staleness threshold;
+    // their prices are excluded from this aggregate. Empty when all venues are live.
+    excludedVenues: { type: 'array', items: { type: 'string' } },
     bestRoute: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'UNKNOWN'] },
     lastUpdated: { type: 'string' },
   },

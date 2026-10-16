@@ -4,6 +4,7 @@ import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '..
 import { resolvePageLedgers } from '../../ingesters/toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { recordVenueSuccess, recordVenueFailure, recordVenueReadSuccess } from '../../venueHeartbeat'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -106,6 +107,11 @@ export async function snapshotPool(
       const trackerKey = pair.pairKey
       const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
 
+      // The snapshot wrote a fresh AMM price point from the pool's current
+      // reserves, so the venue has produced new data this cycle even when no
+      // trades occurred.
+      recordVenueSuccess('AMM', network)
+
       publishPriceUpdate({
         pair: pair.pairKey,
         price: spotPrice,
@@ -142,7 +148,10 @@ export async function ingestPoolTrades(
     const data = (await response.json()) as any
     const records = data._embedded?.records ?? []
 
-    if (!records.length) return
+    if (!records.length) {
+      recordVenueReadSuccess('AMM', network)
+      return
+    }
 
     // Horizon returns no `ledger` on a pool trade; it lives in the TOID prefix.
     const ledgers = resolvePageLedgers(
@@ -153,6 +162,7 @@ export async function ingestPoolTrades(
       console.error(
         `[amm] pool ${pool.id.slice(0, 8)}: no ledger derivable from ${records.length} trades; skipping batch`
       )
+      recordVenueReadSuccess('AMM', network)
       return
     }
 
@@ -193,6 +203,7 @@ export async function ingestPoolTrades(
       { pair: pair.pairKey, network },
       Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
     )
+    recordVenueSuccess('AMM', network)
 
     const lastRecord = records[records.length - 1]
     await setIndexerCursor(stateId, lastRecord.paging_token, network, ledgers[ledgers.length - 1])
@@ -214,6 +225,7 @@ export async function ingestPoolTrades(
     }).catch((err) => console.error('[amm] webhook dispatch error:', err.message))
   } catch (err) {
     console.error(`[amm] Trade ingest error for pool ${pool.id}:`, (err as Error).message)
+    recordVenueFailure('AMM', network)
   }
 }
 
