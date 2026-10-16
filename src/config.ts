@@ -1,6 +1,122 @@
 import 'dotenv/config'
 import { Networks, StrKey } from '@stellar/stellar-sdk'
+import { z } from 'zod'
 import type { WatchedPair, AssetId } from './types'
+
+const envSchema = z.object({
+  NODE_ENV: z.string().optional(), DATABASE_URL: z.string().optional(), DIRECT_DATABASE_URL: z.string().optional(),
+  REDIS_URL: z.string().optional(), PORT: z.string().optional(), HOST: z.string().optional(),
+  STELLAR_NETWORK: z.string().optional(), ENABLED_NETWORKS: z.string().optional(),
+  HORIZON_URL: z.string().optional(), HORIZON_URL_TESTNET: z.string().optional(), HORIZON_URL_MAINNET: z.string().optional(),
+  RPC_URL: z.string().optional(), RPC_URL_TESTNET: z.string().optional(), RPC_URL_MAINNET: z.string().optional(),
+  NETWORK_PASSPHRASE: z.string().optional(), NETWORK_PASSPHRASE_TESTNET: z.string().optional(), NETWORK_PASSPHRASE_MAINNET: z.string().optional(),
+  SOROSWAP_FACTORY_ADDRESS: z.string().optional(), SOROSWAP_FACTORY_ADDRESS_TESTNET: z.string().optional(), SOROSWAP_FACTORY_ADDRESS_MAINNET: z.string().optional(),
+  SOROSWAP_TOKEN_LIST_URL: z.string().optional(), SOROSWAP_TOKEN_LIST_URL_TESTNET: z.string().optional(), SOROSWAP_TOKEN_LIST_URL_MAINNET: z.string().optional(),
+  SOROSWAP_ENABLED_TESTNET: z.string().optional(), SOROSWAP_ENABLED_MAINNET: z.string().optional(),
+  SOROSWAP_POLL_INTERVAL_MS: z.string().optional(), SOROSWAP_POLL_INTERVAL_MS_TESTNET: z.string().optional(), SOROSWAP_POLL_INTERVAL_MS_MAINNET: z.string().optional(),
+  AQUARIUS_API_URL: z.string().optional(), AQUARIUS_API_URL_TESTNET: z.string().optional(), AQUARIUS_API_URL_MAINNET: z.string().optional(),
+  AQUARIUS_ENABLED_TESTNET: z.string().optional(), AQUARIUS_ENABLED_MAINNET: z.string().optional(),
+  REFLECTOR_CONTRACT_ID: z.string().optional(), REFLECTOR_CONTRACT_ID_TESTNET: z.string().optional(), REFLECTOR_CONTRACT_ID_MAINNET: z.string().optional(),
+  REFLECTOR_ENABLED_TESTNET: z.string().optional(), REFLECTOR_ENABLED_MAINNET: z.string().optional(),
+  WATCHED_PAIRS: z.string().optional(), WATCHED_PAIRS_TESTNET: z.string().optional(), WATCHED_PAIRS_MAINNET: z.string().optional(),
+  FACILITATOR_SECRET_KEY: z.string().optional(), FACILITATOR_SECRET_KEY_TESTNET: z.string().optional(), FACILITATOR_SECRET_KEY_MAINNET: z.string().optional(),
+  FACILITATOR_FEE_STROOPS: z.string().optional(), FACILITATOR_FEE_STROOPS_TESTNET: z.string().optional(), FACILITATOR_FEE_STROOPS_MAINNET: z.string().optional(),
+  POLL_INTERVAL_MS: z.string().optional(), SDEX_PAGE_SIZE: z.string().optional(), AMM_PAGE_SIZE: z.string().optional(), PRICE_CACHE_TTL: z.string().optional(),
+  ADMIN_API_KEY: z.string().optional(), ADMIN_TOKEN: z.string().optional(), REQUIRE_API_KEY: z.string().optional(), RATE_LIMIT_IP_MAX: z.string().optional(),
+  X402_FACILITATOR_URL: z.string().optional(), ORACLE_PAYMENT_ADDRESS: z.string().optional(),
+  ORACLE_PAYMENT_ADDRESS_TESTNET: z.string().optional(), ORACLE_PAYMENT_ADDRESS_MAINNET: z.string().optional(),
+  SNAPSHOT_PRUNE_BATCH_SIZE: z.string().optional(), BAZAAR_CATALOG_WRITES_PER_MIN: z.string().optional(), BAZAAR_CATALOG_WRITES_PER_DAY: z.string().optional(),
+}).strict()
+
+const numericEnvironmentKeys = [
+  'PORT', 'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE', 'PRICE_CACHE_TTL', 'RATE_LIMIT_IP_MAX',
+  'SNAPSHOT_PRUNE_BATCH_SIZE', 'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
+  'SOROSWAP_POLL_INTERVAL_MS', 'SOROSWAP_POLL_INTERVAL_MS_TESTNET', 'SOROSWAP_POLL_INTERVAL_MS_MAINNET',
+  'FACILITATOR_FEE_STROOPS', 'FACILITATOR_FEE_STROOPS_TESTNET', 'FACILITATOR_FEE_STROOPS_MAINNET',
+] as const
+const booleanEnvironmentKeys = [
+  'REQUIRE_API_KEY',
+  'SOROSWAP_ENABLED_TESTNET', 'SOROSWAP_ENABLED_MAINNET', 'AQUARIUS_ENABLED_TESTNET', 'AQUARIUS_ENABLED_MAINNET',
+  'REFLECTOR_ENABLED_TESTNET', 'REFLECTOR_ENABLED_MAINNET',
+] as const
+const urlEnvironmentKeys = [
+  'DATABASE_URL', 'DIRECT_DATABASE_URL', 'REDIS_URL',
+  'HORIZON_URL', 'HORIZON_URL_TESTNET', 'HORIZON_URL_MAINNET',
+  'RPC_URL', 'RPC_URL_TESTNET', 'RPC_URL_MAINNET',
+  'SOROSWAP_TOKEN_LIST_URL', 'SOROSWAP_TOKEN_LIST_URL_TESTNET', 'SOROSWAP_TOKEN_LIST_URL_MAINNET',
+  'AQUARIUS_API_URL', 'AQUARIUS_API_URL_TESTNET', 'AQUARIUS_API_URL_MAINNET', 'X402_FACILITATOR_URL',
+] as const
+const parsedEnvironmentSchema = envSchema.superRefine((env, ctx) => {
+  for (const key of numericEnvironmentKeys) {
+    const value = env[key]
+    if (value !== undefined && value.trim() !== '' && (!/^-?\d+$/.test(value.trim()) || !Number.isSafeInteger(Number(value)))) {
+      ctx.addIssue({ code: 'custom', path: [key], message: 'must be a safe integer' })
+    }
+  }
+  for (const key of booleanEnvironmentKeys) {
+    const value = env[key]
+    if (value !== undefined && value !== '' && value !== 'true' && value !== 'false') {
+      ctx.addIssue({ code: 'custom', path: [key], message: 'must be true or false' })
+    }
+  }
+  for (const key of urlEnvironmentKeys) {
+    const value = env[key]
+    if (value?.trim()) {
+      try {
+        new URL(value)
+      } catch {
+        ctx.addIssue({ code: 'custom', path: [key], message: 'must be a valid URL' })
+      }
+    }
+  }
+  if (env.NODE_ENV && !['development', 'test', 'production'].includes(env.NODE_ENV)) {
+    ctx.addIssue({ code: 'custom', path: ['NODE_ENV'], message: 'must be development, test, or production' })
+  }
+  if (env.STELLAR_NETWORK && !['testnet', 'mainnet'].includes(env.STELLAR_NETWORK.toLowerCase())) {
+    ctx.addIssue({ code: 'custom', path: ['STELLAR_NETWORK'], message: 'must be testnet or mainnet' })
+  }
+  if (env.NODE_ENV === 'production') {
+    for (const key of ['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY', 'ADMIN_TOKEN'] as const) {
+      if (!env[key]?.trim()) ctx.addIssue({ code: 'custom', path: [key], message: 'is required in production' })
+    }
+  }
+})
+
+export type Environment = z.infer<typeof envSchema>
+let parsedEnvironment: Environment | undefined
+let environmentFingerprint = ''
+
+export function parseEnvironment(source: Record<string, string | undefined>): Environment {
+  const defined = Object.fromEntries(Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined))
+  const parsed = parsedEnvironmentSchema.safeParse(defined)
+  if (!parsed.success) {
+    const details = parsed.error.issues.map(issue => `${String(issue.path[0] ?? 'environment')} ${issue.message}`)
+    throw new Error(`[config] Invalid environment: ${details.join('; ')}`)
+  }
+  return parsed.data
+}
+
+/** Parse the complete process environment once, and again only if a caller changes it. */
+export function getEnvironment(): Environment {
+  const source = Object.fromEntries(Object.keys(envSchema.shape).map(key => [key, process.env[key]]))
+  const fingerprint = JSON.stringify(source)
+  if (!parsedEnvironment || fingerprint !== environmentFingerprint) {
+    parsedEnvironment = parseEnvironment(source)
+    environmentFingerprint = fingerprint
+  }
+  return parsedEnvironment
+}
+
+/** Read a schema-declared variable selected dynamically by a network suffix. */
+export function getEnvironmentValue(name: string): string | undefined {
+  return (getEnvironment() as Record<string, string | undefined>)[name]
+}
+
+/** Prisma's CLI uses DIRECT_DATABASE_URL; fall back to the application URL. */
+export function ensureDirectDatabaseUrl(): void {
+  const env = getEnvironment()
+  if (!env.DIRECT_DATABASE_URL && env.DATABASE_URL) process.env.DIRECT_DATABASE_URL = env.DATABASE_URL
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -114,30 +230,30 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
   // ── Horizon ──────────────────────────────────────────────────────────────
   const horizonUrl =
-    process.env[`HORIZON_URL_${suffix}`] ||
-    (network === 'testnet' ? process.env.HORIZON_URL : undefined) ||
+    getEnvironmentValue(`HORIZON_URL_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().HORIZON_URL : undefined) ||
     (network === 'mainnet'
       ? 'https://horizon.stellar.org'
       : 'https://horizon-testnet.stellar.org')
 
   // ── Soroban RPC ───────────────────────────────────────────────────────────
   const rpcUrl =
-    process.env[`RPC_URL_${suffix}`] ||
-    (network === 'testnet' ? process.env.RPC_URL : undefined) ||
+    getEnvironmentValue(`RPC_URL_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().RPC_URL : undefined) ||
     (network === 'mainnet'
       ? 'https://mainnet.sorobanrpc.com'
       : 'https://soroban-testnet.stellar.org')
 
   // ── Network passphrase ────────────────────────────────────────────────────
   const passphrase =
-    process.env[`NETWORK_PASSPHRASE_${suffix}`] ||
-    (network === 'testnet' ? process.env.NETWORK_PASSPHRASE : undefined) ||
+    getEnvironmentValue(`NETWORK_PASSPHRASE_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().NETWORK_PASSPHRASE : undefined) ||
     (network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET)
 
   // ── Soroswap factory ──────────────────────────────────────────────────────
   const soroswapFactory =
-    process.env[`SOROSWAP_FACTORY_ADDRESS_${suffix}`] ||
-    process.env.SOROSWAP_FACTORY_ADDRESS ||
+    getEnvironmentValue(`SOROSWAP_FACTORY_ADDRESS_${suffix}`) ||
+    getEnvironment().SOROSWAP_FACTORY_ADDRESS ||
     (network === 'mainnet'
       ? 'CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2'
       : 'CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY')
@@ -145,17 +261,17 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Soroswap token-list is a single canonical list covering both networks by
   // default, but can be overridden per network (e.g. a testnet-specific list).
   const soroswapTokenListUrl =
-    process.env[`SOROSWAP_TOKEN_LIST_URL_${suffix}`] ||
-    process.env.SOROSWAP_TOKEN_LIST_URL ||
+    getEnvironmentValue(`SOROSWAP_TOKEN_LIST_URL_${suffix}`) ||
+    getEnvironment().SOROSWAP_TOKEN_LIST_URL ||
     'https://raw.githubusercontent.com/soroswap/token-list/main/tokenList.json'
 
   const soroswapEnabled =
-    (process.env[`SOROSWAP_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`SOROSWAP_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(soroswapFactory, `SOROSWAP_FACTORY_ADDRESS_${suffix}`)
 
   const soroswapPollMs = parseInt(
-    process.env[`SOROSWAP_POLL_INTERVAL_MS_${suffix}`] ||
-    process.env.SOROSWAP_POLL_INTERVAL_MS ||
+    getEnvironmentValue(`SOROSWAP_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().SOROSWAP_POLL_INTERVAL_MS ||
     '60000',
     10
   )
@@ -164,12 +280,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Aquarius only runs on Stellar classic mainnet today — there is no public
   // testnet deployment, so it is disabled there by default.
   const aquariusApiUrl =
-    process.env[`AQUARIUS_API_URL_${suffix}`] ||
-    process.env.AQUARIUS_API_URL ||
+    getEnvironmentValue(`AQUARIUS_API_URL_${suffix}`) ||
+    getEnvironment().AQUARIUS_API_URL ||
     'https://amm.aquarius.network/api/v1/pools/'
 
   const aquariusEnabled =
-    (process.env[`AQUARIUS_ENABLED_${suffix}`] ?? (network === 'mainnet' ? 'true' : 'false')).toLowerCase() !== 'false'
+    (getEnvironmentValue(`AQUARIUS_ENABLED_${suffix}`) ?? (network === 'mainnet' ? 'true' : 'false')).toLowerCase() !== 'false'
 
   // ── Reflector oracle ──────────────────────────────────────────────────────
   // No built-in default: the previous mainnet literal was a malformed
@@ -177,12 +293,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Reflector's published deployments. Set REFLECTOR_CONTRACT_ID_<NETWORK> to
   // the oracle contract listed at https://reflector.network to enable it.
   const reflectorContractId =
-    process.env[`REFLECTOR_CONTRACT_ID_${suffix}`] ||
-    process.env.REFLECTOR_CONTRACT_ID ||
+    getEnvironmentValue(`REFLECTOR_CONTRACT_ID_${suffix}`) ||
+    getEnvironment().REFLECTOR_CONTRACT_ID ||
     ''
 
   const oracleEnabled =
-    (process.env[`REFLECTOR_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`REFLECTOR_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(reflectorContractId, `REFLECTOR_CONTRACT_ID_${suffix}`)
 
   // ── Watched pairs ─────────────────────────────────────────────────────────
@@ -194,18 +310,18 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // than by asset code — Horizon lists many unrelated assets also called USDC,
   // and picking the wrong one would quote a price no one trades at.
   const rawPairs =
-    process.env[`WATCHED_PAIRS_${suffix}`] ||
-    (network === 'testnet' ? process.env.WATCHED_PAIRS : undefined) ||
+    getEnvironmentValue(`WATCHED_PAIRS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
 
   // ── Facilitator ───────────────────────────────────────────────────────────
   const facilitatorSecretKey =
-    process.env[`FACILITATOR_SECRET_KEY_${suffix}`] ||
-    (network === 'testnet' ? process.env.FACILITATOR_SECRET_KEY : undefined)
+    getEnvironmentValue(`FACILITATOR_SECRET_KEY_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().FACILITATOR_SECRET_KEY : undefined)
 
   const facilitatorFeeStroops = parseInt(
-    process.env[`FACILITATOR_FEE_STROOPS_${suffix}`] ||
-    process.env.FACILITATOR_FEE_STROOPS ||
+    getEnvironmentValue(`FACILITATOR_FEE_STROOPS_${suffix}`) ||
+    getEnvironment().FACILITATOR_FEE_STROOPS ||
     '50000',
     10
   )
@@ -234,22 +350,22 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
 const globalConfig = {
   db: {
-    url: process.env.DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
+    url: getEnvironment().DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
   },
   redis: {
-    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    url: getEnvironment().REDIS_URL ?? 'redis://localhost:6379',
   },
   api: {
-    port: parseInt(process.env.PORT ?? '3002', 10),
-    host: process.env.HOST ?? '0.0.0.0',
+    port: parseInt(getEnvironment().PORT ?? '3002', 10),
+    host: getEnvironment().HOST ?? '0.0.0.0',
   },
   indexer: {
-    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
-    sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
-    ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    pollIntervalMs: parseInt(getEnvironment().POLL_INTERVAL_MS ?? '5000', 10),
+    sdexPageSize: parseInt(getEnvironment().SDEX_PAGE_SIZE ?? '200', 10),
+    ammPageSize: parseInt(getEnvironment().AMM_PAGE_SIZE ?? '200', 10),
   },
   cache: {
-    priceTtl: parseInt(process.env.PRICE_CACHE_TTL ?? '10', 10),
+    priceTtl: parseInt(getEnvironment().PRICE_CACHE_TTL ?? '10', 10),
   },
 } as const
 
@@ -287,7 +403,7 @@ export function getNetworkConfig(network: NetworkName): NetworkConfig {
  * Falls back to `'testnet'` when unset so local dev always works.
  */
 export const activeNetwork: NetworkName =
-  (process.env.STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
+  (getEnvironment().STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
     ? 'mainnet'
     : 'testnet'
 

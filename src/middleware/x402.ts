@@ -4,6 +4,7 @@ import { checkQuota, recordUsage, parseCents, getQuotaConfig } from '../x402/met
 import { X402_NETWORK_LABEL, paymentAddressFor, isX402Configured, getX402ResourceServer } from '../x402/network'
 import fp from 'fastify-plugin'
 import './network' // declares req.network on the FastifyRequest type
+import { getEnvironment } from '../config'
 
 export interface GatedRoute {
   readonly path: string
@@ -88,7 +89,7 @@ export function matchGatedRoute(
  */
 async function x402Plugin(app: FastifyInstance) {
   // Read at plugin init time (not module load) so tests can inject env vars before app.register()
-  const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
+  const FACILITATOR_URL = getEnvironment().X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
 
   if (!isX402Configured()) {
     app.log.warn('[oracle] ORACLE_PAYMENT_ADDRESS not set — x402 gating disabled')

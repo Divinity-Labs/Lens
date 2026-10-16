@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { getActivePairs, parseAssetStr, makePairKey, registerPair, persistPair, hasPair } from '../pairsRegistry'
 import { pgPool } from '../db'
-import { activeNetwork } from '../config'
+import { activeNetwork, getEnvironment } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 export async function registerPairsRoutes(app: FastifyInstance) {
@@ -61,7 +61,7 @@ export async function registerPairsRoutes(app: FastifyInstance) {
     Body: { assetA?: string; assetB?: string }
   }>('/pairs', async (req, reply) => {
     // Auth check — read at request time so env can be set after module load
-    const ADMIN_API_KEY = process.env.ADMIN_API_KEY
+    const ADMIN_API_KEY = getEnvironment().ADMIN_API_KEY
     const key = req.headers['x-admin-key'] ?? req.headers['authorization']?.replace(/^Bearer /, '')
     if (!ADMIN_API_KEY || key !== ADMIN_API_KEY) {
       return reply.status(401).send({ error: 'Unauthorized — provide a valid X-Admin-Key header' })

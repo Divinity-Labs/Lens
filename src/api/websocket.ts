@@ -6,8 +6,9 @@ import { X402_NETWORK_LABEL, paymentAddressFor, getX402ResourceServer } from '..
 import { resolveNetworkName } from '../middleware/network'
 import { fanOutManager } from '../ws/fanout'
 import { v4 as uuid } from 'uuid'
+import { getEnvironment } from '../config'
 
-const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
+const FACILITATOR_URL = getEnvironment().X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
 
 export async function registerWebSocket(app: FastifyInstance) {
   await app.register(websocket)

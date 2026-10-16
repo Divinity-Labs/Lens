@@ -26,6 +26,7 @@ import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
 import { getMetrics } from './metrics'
+import { getEnvironment } from './config'
 
 export interface BuildAppOptions {
   /**
@@ -78,7 +79,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // that req.apiKey is populated when the limiter evaluates its per-key quota
   // (both run in the onRequest phase, in registration order). Disabled when
   // REQUIRE_API_KEY=false. Routes marked `config.public` bypass auth.
-  if (process.env.REQUIRE_API_KEY !== 'false') {
+  if (getEnvironment().REQUIRE_API_KEY !== 'false') {
     await app.register(registerApiKeyAuth)
   } else {
     app.log.warn('[auth] REQUIRE_API_KEY=false — API key authentication disabled')
@@ -89,7 +90,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // requests fall back to a conservative shared limit keyed by IP. The IP
   // fallback is overridable via RATE_LIMIT_IP_MAX so load tests (which flood
   // from a single IP without a key) can measure the endpoint, not the limiter.
-  const ipRateLimitMax = parseInt(process.env.RATE_LIMIT_IP_MAX ?? '100', 10)
+  const ipRateLimitMax = parseInt(getEnvironment().RATE_LIMIT_IP_MAX ?? '100', 10)
   await app.register(rateLimit, {
     max: (req) => req.apiKey?.ratePerMin ?? ipRateLimitMax,
     timeWindow: '1 minute',
