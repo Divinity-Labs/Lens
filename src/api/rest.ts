@@ -96,6 +96,16 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   })
 
 
+  // Readiness requires the database, unlike liveness, and fails closed.
+  app.get('/ready', { config: { public: true } }, async (_req, reply) => {
+    try {
+      await pgPool.query('SELECT 1')
+      return { ok: true }
+    } catch {
+      return reply.status(503).send({ ok: false })
+    }
+  })
+
   // GET /price/:assetA/:assetB
   app.get<{ Params: { assetA: string; assetB: string } }>(
     '/price/:assetA/:assetB',

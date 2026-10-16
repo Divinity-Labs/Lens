@@ -139,3 +139,26 @@ describe('GET /status', () => {
     expect(mockQuery).not.toHaveBeenCalled()
   })
 })
+
+describe('GET /ready', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('answers healthy when PostgreSQL accepts a query', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    const app = await buildApp()
+    const response = await app.inject({ method: 'GET', url: '/ready' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ ok: true })
+    expect(mockQuery).toHaveBeenCalledWith('SELECT 1')
+    await app.close()
+  })
+
+  it('fails closed when PostgreSQL is unavailable', async () => {
+    mockQuery.mockRejectedValue(new Error('database unavailable'))
+    const app = await buildApp()
+    const response = await app.inject({ method: 'GET', url: '/ready' })
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toEqual({ ok: false })
+    await app.close()
+  })
+})
