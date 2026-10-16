@@ -26,6 +26,7 @@ import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
 import { getMetrics } from './metrics'
+import { createCorsDelegator, type CorsConfig } from './cors'
 
 export interface BuildAppOptions {
   /**
@@ -36,6 +37,10 @@ export interface BuildAppOptions {
    * routes — a duplicated list would drift and defeat the point.
    */
   onRoute?: (routeOptions: RouteOptions) => void
+  /**
+   * Optional CORS configuration override (useful in testing).
+   */
+  corsConfig?: CorsConfig
 }
 
 /**
@@ -58,7 +63,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.addHook('onRoute', options.onRoute)
   }
 
-  await app.register(cors, { origin: true })
+  await app.register(cors, { delegator: createCorsDelegator(options.corsConfig) })
   await app.register(compress)
 
   // HTTP request/latency metrics. Registered FIRST, ahead of the network
