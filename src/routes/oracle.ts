@@ -11,7 +11,7 @@ function deviationPct(lens: number | null, oracle: number | null): number | null
   return parseFloat((Math.abs(oracle - lens) / Math.abs(oracle) * 100).toFixed(4))
 }
 
-function deviationStatus(deviation: number | null): 'aligned' | 'minor_deviation' | 'major_deviation' | 'partial' {
+function deviationStatus(deviation: number | null): 'aligned' | 'minor_deviation' | 'major_deviation' | 'partial' | 'no_data' {
   if (deviation === null) return 'partial'
   return deviation < 1 ? 'aligned' : deviation < 5 ? 'minor_deviation' : 'major_deviation'
 }
@@ -59,10 +59,14 @@ export async function registerOracleRoutes(
 
       const lensPrice = dbResult.rows[0] ? parseFloat(dbResult.rows[0].vwap) : null
       const anyOracleConfigured = oracleResults.some(result => result.configured)
-      if (lensPrice === null && !anyOracleConfigured) {
-        return reply.status(404).send({ error: `No price data found for asset ${assetCode}` })
-      }
-
+      
+      // CHANGE FROM UPSTREAM (#262): Return 200 even when both Lens and all oracles have no data.
+      // The asset code itself is valid, the query succeeded, there is just no data.
+      // A 404 would imply the asset is invalid or the endpoint does not exist.
+      // The `status: "no_data"` field carries the semantic difference a 404 once tried to convey.
+      // ONLY return 404 if no oracles are configured (truly not supported).
+      const anyOracleHasData = oracleResults.some(result => result.quote?.price !== null && result.quote?.price !== undefined)
+      
       const oracles = oracleResults.map(result => {
         const delta = deviationPct(lensPrice, result.quote?.price ?? null)
         return {
@@ -77,6 +81,14 @@ export async function registerOracleRoutes(
       const reflectorPrice = reflector?.quote?.price ?? null
       const reflectorDeviation = deviationPct(lensPrice, reflectorPrice)
 
+      // Determine overall status: if both Lens and all configured oracles have no data, status is 'no_data'
+      let overallStatus: 'aligned' | 'minor_deviation' | 'major_deviation' | 'partial' | 'no_data'
+      if (lensPrice === null && !anyOracleHasData && anyOracleConfigured) {
+        overallStatus = 'no_data'
+      } else {
+        overallStatus = deviationStatus(reflectorDeviation)
+      }
+
       return {
         asset: assetCode,
         network,
@@ -84,7 +96,7 @@ export async function registerOracleRoutes(
         // Keep the original fields while clients migrate to the multi-oracle list.
         reflector: reflectorPrice,
         deviationPct: reflectorDeviation,
-        status: deviationStatus(reflectorDeviation),
+        status: overallStatus,
         fetchedAt: new Date().toISOString(),
         oracles,
       }
