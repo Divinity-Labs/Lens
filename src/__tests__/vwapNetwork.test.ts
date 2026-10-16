@@ -6,7 +6,7 @@ vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
 
-import { calculateVWAP, calculateOHLCV, getPriceChange24h, getAggregatedPrice } from '../aggregator/vwap'
+import { calculateVWAP, calculateVWAPExact, calculateOHLCV, getPriceChange24h, getAggregatedPrice } from '../aggregator/vwap'
 import type { NetworkName } from '../config'
 
 // ── A seeded stand-in for the two `price_points`/`pool_snapshots` tables ──────
@@ -114,6 +114,7 @@ function installSeededDb() {
         rows: [{
           price_24h_ago: String(sorted[0]?.price ?? 0),
           price_now: String(sorted[sorted.length - 1]?.price ?? 0),
+          price_change: String(sorted[0]?.price ? ((sorted[sorted.length - 1]?.price ?? 0) - sorted[0].price) / sorted[0].price * 100 : 0),
         }],
       }
     }
@@ -142,11 +143,11 @@ function installSeededDb() {
       return { rows: [{ sources: String(sources.size) }] }
     }
 
-    if (sql.includes('GROUP BY source')) {
+    if (sql.includes('SUM(base_volume::numeric) FILTER')) {
       const rows = rowsInWindow(network, pairKey, windowMinutes)
-      const bySource = new Map<string, number>()
-      for (const r of rows) bySource.set(r.source, (bySource.get(r.source) ?? 0) + r.baseVolume)
-      return { rows: [...bySource].map(([source, vol]) => ({ source, vol: String(vol) })) }
+      const sdex = rows.filter(row => row.source === 'SDEX').reduce((sum, row) => sum + row.baseVolume, 0)
+      const amm = rows.filter(row => row.source === 'AMM').reduce((sum, row) => sum + row.baseVolume, 0)
+      return { rows: [{ sdex_volume: String(sdex), amm_volume: String(amm), total_volume: String(sdex + amm) }] }
     }
 
     // OHLCV: open/close bracket the window, high/low/volume/count cover it.
@@ -155,10 +156,10 @@ function installSeededDb() {
       const prices = rows.map(r => r.price)
       return {
         rows: [{
-          open: prices[0],
-          high: prices.length ? Math.max(...prices) : 0,
-          low: prices.length ? Math.min(...prices) : 0,
-          close: prices[prices.length - 1],
+          open: String(prices[0] ?? 0),
+          high: String(prices.length ? Math.max(...prices) : 0),
+          low: String(prices.length ? Math.min(...prices) : 0),
+          close: String(prices[prices.length - 1] ?? 0),
           volume: String(rows.reduce((acc, r) => acc + r.baseVolume, 0)),
           trade_count: String(rows.length),
         }],
@@ -179,6 +180,11 @@ describe('aggregator network scoping', () => {
   beforeEach(() => {
     mockQuery.mockReset()
     installSeededDb()
+  })
+
+  it('keeps PostgreSQL decimal text intact for the exact VWAP path', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ vwap: '0.123456789012345678' }] })
+    await expect(calculateVWAPExact(PAIR, 60, 'testnet')).resolves.toBe('0.123456789012345678')
   })
 
   it('calculateVWAP returns a different price per network for the same pairKey', async () => {

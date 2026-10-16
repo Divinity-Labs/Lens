@@ -14,12 +14,19 @@ import type { NetworkName } from '../config'
  * refinement: there is no default that is correct by accident, and a caller
  * that doesn't know which chain it is quoting should refuse rather than guess.
  */
-export async function calculateVWAP(
+function requireDecimalString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(value)) {
+    throw new TypeError(`Expected PostgreSQL numeric text for ${field}`)
+  }
+  return value
+}
+
+export async function calculateVWAPExact(
   pairKey: string,
   windowMinutes: number,
   network: NetworkName,
   source?: 'SDEX' | 'AMM'
-): Promise<number> {
+): Promise<string> {
   const sourceFilter = source ? `AND source = $4` : ''
   const params: (string | number)[] = [pairKey, network, windowMinutes]
   if (source) params.push(source)
@@ -37,16 +44,25 @@ export async function calculateVWAP(
        ${sourceFilter}`,
     params
   )
-  return parseFloat(result.rows[0]?.vwap ?? '0')
+  return requireDecimalString(result.rows[0]?.vwap ?? '0', 'VWAP')
 }
 
-export async function calculateOHLCV(
+export async function calculateVWAP(
+  pairKey: string,
+  windowMinutes: number,
+  network: NetworkName,
+  source?: 'SDEX' | 'AMM'
+): Promise<number> {
+  return Number(await calculateVWAPExact(pairKey, windowMinutes, network, source))
+}
+
+export async function calculateOHLCVExact(
   pairKey: string,
   windowMinutes: number,
   network: NetworkName
 ): Promise<{
-  open: number; high: number; low: number; close: number
-  volume: number; tradeCount: number
+  open: string; high: string; low: string; close: string
+  volume: string; tradeCount: number
 }> {
   const result = await pgPool.query(
     `SELECT
@@ -70,51 +86,79 @@ export async function calculateOHLCV(
   )
   const row = result.rows[0]
   return {
-    open: parseFloat(row?.open ?? '0'),
-    high: parseFloat(row?.high ?? '0'),
-    low: parseFloat(row?.low ?? '0'),
-    close: parseFloat(row?.close ?? '0'),
-    volume: parseFloat(row?.volume ?? '0'),
+    open: requireDecimalString(row?.open ?? '0', 'OHLCV open'),
+    high: requireDecimalString(row?.high ?? '0', 'OHLCV high'),
+    low: requireDecimalString(row?.low ?? '0', 'OHLCV low'),
+    close: requireDecimalString(row?.close ?? '0', 'OHLCV close'),
+    volume: requireDecimalString(row?.volume ?? '0', 'OHLCV volume'),
     tradeCount: parseInt(row?.trade_count ?? '0', 10),
   }
 }
 
+export async function calculateOHLCV(
+  pairKey: string,
+  windowMinutes: number,
+  network: NetworkName
+): Promise<{
+  open: number; high: number; low: number; close: number
+  volume: number; tradeCount: number
+}> {
+  const exact = await calculateOHLCVExact(pairKey, windowMinutes, network)
+  return {
+    open: Number(exact.open),
+    high: Number(exact.high),
+    low: Number(exact.low),
+    close: Number(exact.close),
+    volume: Number(exact.volume),
+    tradeCount: exact.tradeCount,
+  }
+}
+
 export async function getPriceChange24h(pairKey: string, network: NetworkName): Promise<number> {
+  return Number(await getPriceChange24hExact(pairKey, network))
+}
+
+export async function getPriceChange24hExact(pairKey: string, network: NetworkName): Promise<string> {
   const result = await pgPool.query(
-    `SELECT
-       (SELECT price::numeric FROM price_points
-        WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - INTERVAL '24 hours'
-        ORDER BY timestamp ASC LIMIT 1) AS price_24h_ago,
-       (SELECT price::numeric FROM price_points
-        WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - INTERVAL '24 hours'
-        ORDER BY timestamp DESC LIMIT 1) AS price_now`,
+    `WITH prices AS (
+       SELECT
+         (SELECT price::numeric FROM price_points
+          WHERE pair_key = $1 AND network = $2
+            AND timestamp > NOW() - INTERVAL '24 hours'
+          ORDER BY timestamp ASC LIMIT 1) AS price_24h_ago,
+         (SELECT price::numeric FROM price_points
+          WHERE pair_key = $1 AND network = $2
+            AND timestamp > NOW() - INTERVAL '24 hours'
+          ORDER BY timestamp DESC LIMIT 1) AS price_now
+     )
+     SELECT CASE WHEN COALESCE(price_24h_ago, 0) = 0 THEN 0
+                 ELSE ((price_now - price_24h_ago) / price_24h_ago) * 100
+            END AS price_change
+     FROM prices`,
     [pairKey, network]
   )
-  const row = result.rows[0]
-  const ago = parseFloat(row?.price_24h_ago ?? '0')
-  const now = parseFloat(row?.price_now ?? '0')
-  if (ago === 0) return 0
-  return ((now - ago) / ago) * 100
+  return requireDecimalString(result.rows[0]?.price_change ?? '0', '24-hour price change')
 }
 
 export async function getAggregatedPrice(pairKey: string, network: NetworkName): Promise<{
   price: number; sdexPrice: number; ammPrice: number
+  priceExact: string; sdexPriceExact: string; ammPriceExact: string
   volume24h: number; sdexVolume24h: number; ammVolume24h: number
+  volume24hExact: string; sdexVolume24hExact: string; ammVolume24hExact: string
   vwap1m: number; vwap5m: number; vwap1h: number; vwap24h: number
-  priceChange24h: number; sources: number
+  vwap1mExact: string; vwap5mExact: string; vwap1hExact: string; vwap24hExact: string
+  priceChange24h: number; priceChange24hExact: string; sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
   stale: boolean
 }> {
-  const [vwap1m, vwap5m, vwap1h, vwap24h, sdexVwap24h, priceChange24h, ammSpotResult, lastTradeResult] = await Promise.all([
-    calculateVWAP(pairKey, 1, network),
-    calculateVWAP(pairKey, 5, network),
-    calculateVWAP(pairKey, 60, network),
-    calculateVWAP(pairKey, 1440, network),
-    calculateVWAP(pairKey, 1440, network, 'SDEX'),
-    getPriceChange24h(pairKey, network),
+  const [vwap1mExact, vwap5mExact, vwap1hExact, vwap24hExact, sdexPriceExact, priceChange24hExact, ammSpotResult, lastTradeResult] = await Promise.all([
+    calculateVWAPExact(pairKey, 1, network),
+    calculateVWAPExact(pairKey, 5, network),
+    calculateVWAPExact(pairKey, 60, network),
+    calculateVWAPExact(pairKey, 1440, network),
+    calculateVWAPExact(pairKey, 1440, network, 'SDEX'),
+    getPriceChange24hExact(pairKey, network),
     // AMM price: latest spot_price averaged across pools for this pair, on this
     // network only. Both halves of the lookup are network-filtered: the outer
     // scan of pool_snapshots, and the price_points subquery that decides which
@@ -144,22 +188,20 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
 
   const volResult = await pgPool.query(
     `SELECT
-       source,
-       SUM(base_volume::numeric) AS vol
+       COALESCE(SUM(base_volume::numeric) FILTER (WHERE source = 'SDEX'), 0) AS sdex_volume,
+       COALESCE(SUM(base_volume::numeric) FILTER (WHERE source = 'AMM'), 0) AS amm_volume,
+       COALESCE(SUM(base_volume::numeric) FILTER (WHERE source IN ('SDEX', 'AMM')), 0) AS total_volume
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '24 hours'
-     GROUP BY source`,
+       AND timestamp > NOW() - INTERVAL '24 hours'`,
     [pairKey, network]
   )
 
-  let sdexVolume24h = 0
-  let ammVolume24h = 0
-  for (const row of volResult.rows) {
-    if (row.source === 'SDEX') sdexVolume24h = parseFloat(row.vol)
-    else if (row.source === 'AMM') ammVolume24h = parseFloat(row.vol)
-  }
+  const volumeRow = (volResult.rows[0] ?? {}) as Record<string, unknown>
+  const sdexVolume24hExact = requireDecimalString(volumeRow.sdex_volume ?? '0', 'SDEX volume')
+  const ammVolume24hExact = requireDecimalString(volumeRow.amm_volume ?? '0', 'AMM volume')
+  const volume24hExact = requireDecimalString(volumeRow.total_volume ?? '0', '24-hour volume')
 
   const sourcesResult = await pgPool.query(
     `SELECT COUNT(DISTINCT COALESCE(pool_id, 'sdex')) AS sources
@@ -170,11 +212,20 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
     [pairKey, network]
   )
 
-  const ammPrice = parseFloat(ammSpotResult.rows[0]?.amm_price ?? '0')
+  const ammPriceExact = requireDecimalString(ammSpotResult.rows[0]?.amm_price ?? '0', 'AMM price')
+  const ammPrice = Number(ammPriceExact)
+  const vwap1m = Number(vwap1mExact)
+  const vwap5m = Number(vwap5mExact)
+  const vwap1h = Number(vwap1hExact)
+  const vwap24h = Number(vwap24hExact)
+  const sdexPrice = Number(sdexPriceExact)
+  const sdexVolume24h = Number(sdexVolume24hExact)
+  const ammVolume24h = Number(ammVolume24hExact)
+  const volume24h = Number(volume24hExact)
+  const priceChange24h = Number(priceChange24hExact)
   const lastTrade = lastTradeResult.rows[0]?.last_trade
   const lastTradeAgeSeconds = lastTrade ? Math.floor((Date.now() - new Date(lastTrade).getTime()) / 1000) : null
   const sources = parseInt(sourcesResult.rows[0]?.sources ?? '0', 10)
-  const volume24h = sdexVolume24h + ammVolume24h
 
 
   let confidence: 'high' | 'medium' | 'low' | 'unknown' = 'unknown'
@@ -192,16 +243,27 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
 
   return {
     price: vwap1h || vwap24h || ammPrice || 0,
-    sdexPrice: sdexVwap24h,
+    priceExact: isNonZeroDecimal(vwap1hExact) ? vwap1hExact : isNonZeroDecimal(vwap24hExact) ? vwap24hExact : ammPriceExact,
+    sdexPrice,
+    sdexPriceExact,
     ammPrice,
+    ammPriceExact,
     volume24h,
+    volume24hExact,
     sdexVolume24h,
+    sdexVolume24hExact,
     ammVolume24h,
+    ammVolume24hExact,
     vwap1m,
+    vwap1mExact,
     vwap5m,
+    vwap5mExact,
     vwap1h,
+    vwap1hExact,
     vwap24h,
+    vwap24hExact,
     priceChange24h,
+    priceChange24hExact,
     sources,
     confidence,
     lastTradeAgeSeconds,

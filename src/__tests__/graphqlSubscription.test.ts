@@ -10,9 +10,14 @@ vi.mock('../redis', () => ({ getCachedPrice: vi.fn() }))
 vi.mock('../db', () => ({ pgPool: { query: vi.fn() } }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({ config: { pairs: [] } }))
+vi.mock('../config', () => ({
+  config: { pairs: [{ pairKey: 'USDC/XLM', assetA: { code: 'XLM', issuer: null }, assetB: { code: 'USDC', issuer: 'ISSUER' } }] },
+  activeNetwork: 'testnet',
+}))
 
 import { registerGraphQL } from '../api/graphql'
+import { getAggregatedPrice } from '../aggregator/vwap'
+import { getBestRoute } from '../aggregator/bestRoute'
 import { publishPriceUpdate, priceEmitter } from '../events'
 
 const SUBPROTOCOL = 'graphql-transport-ws'
@@ -179,5 +184,40 @@ describe('GraphQL priceUpdated subscription', () => {
 
     expect(received).toBe(false)
     ws.close()
+  })
+})
+
+describe('GraphQL exact decimal fields', () => {
+  it('returns stored decimal text without converting it through a double', async () => {
+    vi.mocked(getAggregatedPrice).mockResolvedValue({
+      price: 0, priceExact: '0.123456789012345678',
+      sdexPrice: 0, sdexPriceExact: '0.123456789012345678',
+      ammPrice: 0, ammPriceExact: '0',
+      volume24h: 0, volume24hExact: '0',
+      sdexVolume24h: 0, sdexVolume24hExact: '0',
+      ammVolume24h: 0, ammVolume24hExact: '0',
+      vwap1m: 0, vwap1mExact: '0', vwap5m: 0, vwap5mExact: '0',
+      vwap1h: 0, vwap1hExact: '0', vwap24h: 0, vwap24hExact: '0',
+      priceChange24h: 0, priceChange24hExact: '0', sources: 0,
+      confidence: 'unknown', lastTradeAgeSeconds: null, stale: false,
+    })
+    vi.mocked(getBestRoute).mockResolvedValue({ route: 'SDEX' } as any)
+
+    const { app } = await buildServer()
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/graphql',
+        payload: { query: '{ getPrice(assetA: "XLM", assetB: "USDC") { priceExact sdexPriceExact } }' },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data.getPrice).toEqual({
+        priceExact: '0.123456789012345678',
+        sdexPriceExact: '0.123456789012345678',
+      })
+      expect(String(Number('0.123456789012345678'))).not.toBe('0.123456789012345678')
+    } finally {
+      await app.close()
+    }
   })
 })
