@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { findOverlappingGaps } from '../backfill/gaps'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -164,6 +165,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
       const window = req.query.window ?? '1h'
       const limit = Math.min(parseInt(req.query.limit ?? '100', 10), 1000)
       const pairKey = makePairKey(assetA, assetB)
@@ -184,6 +186,25 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         [pairKey, window, network, limit]
       )
 
+      const windowMs: Record<string, number> = {
+        '1m': 60_000,
+        '5m': 300_000,
+        '1h': 3600_000,
+        '24h': 86400_000,
+      }
+      const span = (windowMs[window] ?? 3600_000) * limit
+      const now = new Date()
+      const queryStart = new Date(now.getTime() - span)
+
+      const overlappingGaps = await findOverlappingGaps({
+        network,
+        pair: pairKey,
+        start: queryStart,
+        end: now,
+      })
+
+      const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
       return {
         pairKey,
         network,
@@ -200,6 +221,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           high: r.high_price,
           low: r.low_price,
         })),
+        ...gapDeclaration,
       }
     }
   )

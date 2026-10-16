@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { findOverlappingGaps } from '../backfill/gaps'
 
 /** Supported aggregation intervals → bucket width in seconds. */
 export const HISTORY_INTERVAL_SECONDS: Record<string, number> = {
@@ -162,6 +163,14 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
 
     const network = req.network ?? activeNetwork
     const points = await queryHistory(pair, from, to, intervalSecs, network)
+    const overlappingGaps = await findOverlappingGaps({
+      network,
+      pair,
+      start: from,
+      end: to,
+    })
+
+    const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
 
     if (format === 'csv') {
       // Deliberately no response schema here: Fastify's JSON serializer must
@@ -177,6 +186,7 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
       to: to.toISOString(),
       count: points.length,
       points,
+      ...gapDeclaration,
     }
   })
 }

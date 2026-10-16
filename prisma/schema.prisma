@@ -270,3 +270,20 @@ model ApiKey {
 
   @@map("api_keys")
 }
+
+model IngestionGap {
+  id         String   @id @default(uuid())
+  network    String   @default("testnet")
+  source     String
+  pair       String   @map("pair_key")
+  start      DateTime @map("start_time")
+  end        DateTime @map("end_time")
+  status     String   @default("open")
+  detectedAt DateTime @default(now()) @map("detected_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([network, pair, source, status])
+  @@index([network, pair, start, end])
+  @@map("ingestion_gaps")
+}
+

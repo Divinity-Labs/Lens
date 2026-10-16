@@ -9,6 +9,7 @@ export const prisma = globalForPrisma.prisma ?? new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+;(globalThis as any).__lens_prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer
@@ -17,6 +18,7 @@ export const pgPool = new Pool({
   connectionString: config.db.url,
   ssl: config.db.url.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
 })
+;(globalThis as any).__lens_pgPool = pgPool
 
 // Instrument raw pg queries
 const originalQuery = pgPool.query.bind(pgPool)
@@ -38,6 +40,7 @@ pgPool.query = (async (...args: any[]) => {
  * stops that reappearing the next time a venue is added.
  */
 export async function upsertPricePoints(points: {
+  id?: string
   assetA: string; assetB: string; pairKey: string; source: string
   poolId?: string; price: number; baseVolume: number; counterVolume: number
   ledger: number; timestamp: Date; eventId?: string
@@ -45,6 +48,7 @@ export async function upsertPricePoints(points: {
   if (points.length === 0) return 0
   const result = await prisma.pricePoint.createMany({
     data: points.map(p => ({
+      id: p.id ?? (p.eventId ? `${network}:${p.source}:${p.eventId}` : undefined),
       network,
       assetA: p.assetA,
       assetB: p.assetB,
