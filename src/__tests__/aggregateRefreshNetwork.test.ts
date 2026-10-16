@@ -3,15 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const {
   addedJobs, queueNames, workers,
   mockUpsert, mockSetCachedPrice,
-  mockCalculateVWAP, mockCalculateOHLCV, mockGetAggregatedPrice, mockGetBestRoute,
+  mockCalculateVWAPExact, mockCalculateOHLCVExact, mockGetAggregatedPrice, mockGetBestRoute,
 } = vi.hoisted(() => ({
   addedJobs: [] as Array<{ queue: string; name: string; data: any; opts: any }>,
   queueNames: [] as string[],
   workers: [] as Array<{ name: string; processor: (job: any) => Promise<void> }>,
   mockUpsert: vi.fn(),
   mockSetCachedPrice: vi.fn(),
-  mockCalculateVWAP: vi.fn(),
-  mockCalculateOHLCV: vi.fn(),
+  mockCalculateVWAPExact: vi.fn(),
+  mockCalculateOHLCVExact: vi.fn(),
   mockGetAggregatedPrice: vi.fn(),
   mockGetBestRoute: vi.fn(),
 }))
@@ -51,8 +51,8 @@ vi.mock('../db', () => ({
 vi.mock('../redis', () => ({ setCachedPrice: mockSetCachedPrice }))
 
 vi.mock('../aggregator/vwap', () => ({
-  calculateVWAP: mockCalculateVWAP,
-  calculateOHLCV: mockCalculateOHLCV,
+  calculateVWAPExact: mockCalculateVWAPExact,
+  calculateOHLCVExact: mockCalculateOHLCVExact,
   getAggregatedPrice: mockGetAggregatedPrice,
 }))
 
@@ -89,8 +89,8 @@ describe('aggregateRefresh runs once per enabled network', () => {
     queueNames.length = 0
     workers.length = 0
     vi.clearAllMocks()
-    mockCalculateVWAP.mockResolvedValue(0.25)
-    mockCalculateOHLCV.mockResolvedValue({ open: 0.2, high: 0.3, low: 0.2, close: 0.25, volume: 100, tradeCount: 3 })
+    mockCalculateVWAPExact.mockResolvedValue('0.25')
+    mockCalculateOHLCVExact.mockResolvedValue({ open: '0.2', high: '0.3', low: '0.2', close: '0.25', volume: '100', tradeCount: 3 })
     mockGetAggregatedPrice.mockResolvedValue({ price: 0.25 })
     mockGetBestRoute.mockResolvedValue({ route: 'SDEX' })
     mockSetCachedPrice.mockResolvedValue(undefined)
@@ -137,10 +137,10 @@ describe('aggregateRefresh runs once per enabled network', () => {
     expect(mockGetBestRoute).toHaveBeenCalledWith(
       mainnetPair.assetA, mainnetPair.assetB, mainnetPair.pairKey, 1000, 'mainnet'
     )
-    for (const call of mockCalculateVWAP.mock.calls) {
+    for (const call of mockCalculateVWAPExact.mock.calls) {
       expect(call).toContain('mainnet')
     }
-    for (const call of mockCalculateOHLCV.mock.calls) {
+    for (const call of mockCalculateOHLCVExact.mock.calls) {
       expect(call).toContain('mainnet')
     }
     expect(mockSetCachedPrice).toHaveBeenCalledWith(
