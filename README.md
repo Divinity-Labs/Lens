@@ -23,6 +23,7 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
 | GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; ~30-day retention |
 | GET | `/pools` | Active AMM pools being watched |
+| GET | `/yield?window=24h` | Per-pool fee APR (`24h`, `7d`, `30d`) with reserves, realised quote volume, pool fee, sample freshness, and incomplete-window coverage |
 | GET | `/pairs` | Watched trading pairs |
 | GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
 | GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
@@ -471,6 +472,11 @@ curl -s http://localhost:3002/pools | jq '.pools[0]'
 #   "fee_bp": 30,
 #   "timestamp": "<seeded-anchor-timestamp>"
 # }
+
+# /yield — annualized fee APR for the requested window; incomplete snapshot
+# coverage is reported on each pool and its `apr` remains an estimate from the
+# requested period. `volumeQuote` and `tvlQuote` are both denominated in asset B.
+curl -s 'http://localhost:3002/yield?window=24h&network=testnet' | jq '.pools[0]'
 
 # /price/:assetA/:assetB — aggregated VWAP + best route
 curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated}'

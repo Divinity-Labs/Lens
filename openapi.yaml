@@ -213,6 +213,39 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /yield:
+    get:
+      operationId: getYield
+      summary: Get AMM pool fee APR estimates
+      description: >-
+        Estimates annualized fee APR from each pool's realised Horizon AMM trade
+        volume, current reserves, and that pool's fee rate. APR is expressed as
+        a percent and annualized from the requested 24h, 7d, or 30d window.
+        Snapshot coverage is included per pool; incomplete windows remain
+        explicitly marked. Volume and TVL use asset B as the quote denomination.
+      security: []
+      parameters:
+        - name: window
+          in: query
+          required: false
+          description: Lookback and annualization window. Defaults to 24h.
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 24h
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Per-pool fee APR with volume, reserves, fee, and coverage inputs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YieldResponse'
+        '400':
+          description: Unsupported window
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /candles/{assetA}/{assetB}:
     get:
       operationId: getCandles
@@ -1305,6 +1338,152 @@ components:
         low:
           type: number
           nullable: true
+
+    YieldResponse:
+      type: object
+      required: [network, window, windowStart, windowEnd, annualizedDays, annualizationBasis, coverageToleranceSeconds, pools]
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          enum: [24h, 7d, 30d]
+        windowStart:
+          type: string
+          format: date-time
+        windowEnd:
+          type: string
+          format: date-time
+        annualizedDays:
+          type: integer
+          example: 365
+        annualizationBasis:
+          type: string
+          enum: [requested_window]
+        coverageToleranceSeconds:
+          type: integer
+        message:
+          type: string
+          description: Present when no pool snapshots are indexed for the network.
+        pools:
+          type: array
+          items:
+            $ref: '#/components/schemas/PoolFeeApr'
+
+    PoolFeeApr:
+      type: object
+      required: [poolId, assetA, assetB, reserves, spotPrice, feeBp, feeRate, volumeQuote, volumeAsset, tradeCount, tvlQuote, apr, aprUnit, annualizationBasis, status, coverage, provenance]
+      properties:
+        poolId:
+          type: string
+          description: Full Stellar liquidity pool ID.
+        assetA:
+          $ref: '#/components/schemas/YieldAsset'
+        assetB:
+          $ref: '#/components/schemas/YieldAsset'
+        reserves:
+          type: object
+          required: [assetA, assetB]
+          properties:
+            assetA:
+              type: number
+            assetB:
+              type: number
+        spotPrice:
+          type: number
+          description: Asset B per asset A, used to value reserves in asset B.
+        feeBp:
+          type: number
+          description: Pool fee in basis points.
+        feeRate:
+          type: number
+          description: Pool fee as a fraction (feeBp / 10000).
+        volumeQuote:
+          type: number
+          description: Realised trade volume in asset B units during the stated window.
+        volumeAsset:
+          $ref: '#/components/schemas/YieldAsset'
+        tradeCount:
+          type: integer
+        tvlQuote:
+          type: number
+          nullable: true
+          description: reserveA × spotPrice + reserveB, in asset B units; null when the pool has no liquidity.
+        apr:
+          type: number
+          nullable: true
+          description: Annualized fee APR percent; null when TVL is unavailable.
+        aprUnit:
+          type: string
+          enum: [percent]
+        annualizationBasis:
+          type: string
+          enum: [requested_window]
+        status:
+          type: string
+          enum: [ready, incomplete, no_liquidity]
+        coverage:
+          $ref: '#/components/schemas/YieldCoverage'
+        provenance:
+          $ref: '#/components/schemas/YieldProvenance'
+
+    YieldCoverage:
+      type: object
+      required: [complete, snapshotSampleCount, sampledFrom, sampledThrough, largestGapSeconds, maxGapSeconds, basis]
+      properties:
+        complete:
+          type: boolean
+        snapshotSampleCount:
+          type: integer
+        sampledFrom:
+          type: string
+          format: date-time
+          nullable: true
+        sampledThrough:
+          type: string
+          format: date-time
+          nullable: true
+        largestGapSeconds:
+          type: number
+        maxGapSeconds:
+          type: integer
+        basis:
+          type: string
+          enum: [pool_reserve_snapshots]
+
+    YieldAsset:
+      type: object
+      required: [code, issuer, issuerKnown]
+      properties:
+        code:
+          type: string
+        issuer:
+          type: string
+          nullable: true
+        issuerKnown:
+          type: boolean
+          description: False when a legacy snapshot did not retain the credit asset issuer.
+
+    YieldProvenance:
+      type: object
+      required: [venues, volumeSampleCount, lastTradeAt, lastSnapshotAt, snapshotAgeSeconds]
+      properties:
+        venues:
+          type: array
+          items:
+            type: string
+        volumeSampleCount:
+          type: integer
+        lastTradeAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSnapshotAt:
+          type: string
+          format: date-time
+        snapshotAgeSeconds:
+          type: integer
 
     PriceLevel:
       type: object

@@ -183,6 +183,104 @@ export const poolsResponseSchema = {
   },
 } as const
 
+/** GET /yield — fee APR estimates with their reserve, trade, and coverage inputs. */
+export const yieldResponseSchema = {
+  type: 'object',
+  required: [
+    'network', 'window', 'windowStart', 'windowEnd', 'annualizedDays',
+    'annualizationBasis', 'coverageToleranceSeconds', 'pools',
+  ],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    window: { type: 'string', enum: ['24h', '7d', '30d'] },
+    windowStart: { type: 'string', format: 'date-time' },
+    windowEnd: { type: 'string', format: 'date-time' },
+    annualizedDays: { type: 'integer' },
+    annualizationBasis: { type: 'string', enum: ['requested_window'] },
+    coverageToleranceSeconds: { type: 'integer' },
+    message: { type: 'string' },
+    pools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: [
+          'poolId', 'assetA', 'assetB', 'reserves', 'spotPrice', 'feeBp', 'feeRate',
+          'volumeQuote', 'volumeAsset', 'tradeCount', 'tvlQuote', 'apr', 'aprUnit',
+          'annualizationBasis', 'status', 'coverage', 'provenance',
+        ],
+        additionalProperties: false,
+        properties: {
+          poolId: { type: 'string' },
+          assetA: {
+            type: 'object', required: ['code', 'issuer', 'issuerKnown'], additionalProperties: false,
+            properties: {
+              code: { type: 'string' }, issuer: { type: ['string', 'null'] }, issuerKnown: { type: 'boolean' },
+            },
+          },
+          assetB: {
+            type: 'object', required: ['code', 'issuer', 'issuerKnown'], additionalProperties: false,
+            properties: {
+              code: { type: 'string' }, issuer: { type: ['string', 'null'] }, issuerKnown: { type: 'boolean' },
+            },
+          },
+          reserves: {
+            type: 'object', required: ['assetA', 'assetB'], additionalProperties: false,
+            properties: { assetA: { type: 'number' }, assetB: { type: 'number' } },
+          },
+          spotPrice: { type: 'number' },
+          feeBp: { type: 'number' },
+          feeRate: { type: 'number' },
+          volumeQuote: { type: 'number' },
+          volumeAsset: {
+            type: 'object', required: ['code', 'issuer', 'issuerKnown'], additionalProperties: false,
+            properties: {
+              code: { type: 'string' }, issuer: { type: ['string', 'null'] }, issuerKnown: { type: 'boolean' },
+            },
+          },
+          tradeCount: { type: 'integer' },
+          tvlQuote: { type: ['number', 'null'] },
+          apr: { type: ['number', 'null'] },
+          aprUnit: { type: 'string', enum: ['percent'] },
+          annualizationBasis: { type: 'string', enum: ['requested_window'] },
+          status: { type: 'string', enum: ['ready', 'incomplete', 'no_liquidity'] },
+          coverage: {
+            type: 'object',
+            required: [
+              'complete', 'snapshotSampleCount', 'sampledFrom', 'sampledThrough',
+              'largestGapSeconds', 'maxGapSeconds', 'basis',
+            ],
+            additionalProperties: false,
+            properties: {
+              complete: { type: 'boolean' },
+              snapshotSampleCount: { type: 'integer' },
+              sampledFrom: { type: ['string', 'null'], format: 'date-time' },
+              sampledThrough: { type: ['string', 'null'], format: 'date-time' },
+              largestGapSeconds: { type: 'number' },
+              maxGapSeconds: { type: 'integer' },
+              basis: { type: 'string', enum: ['pool_reserve_snapshots'] },
+            },
+          },
+          provenance: {
+            type: 'object',
+            required: [
+              'venues', 'volumeSampleCount', 'lastTradeAt', 'lastSnapshotAt', 'snapshotAgeSeconds',
+            ],
+            additionalProperties: false,
+            properties: {
+              venues: { type: 'array', items: { type: 'string' } },
+              volumeSampleCount: { type: 'integer' },
+              lastTradeAt: { type: ['string', 'null'], format: 'date-time' },
+              lastSnapshotAt: { type: 'string', format: 'date-time' },
+              snapshotAgeSeconds: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const
+
 export const depthResponseSchema = {
   type: 'object',
   required: ['assetA', 'assetB', 'pairKey', 'spotPrice', 'executionPrice', 'slippagePct', 'asks', 'bids', 'source'],
