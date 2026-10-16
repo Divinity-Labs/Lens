@@ -674,6 +674,10 @@ paths:
     get:
       operationId: compareAsset
       summary: Compare Lens and Reflector oracle prices for an asset
+      description: >-
+        Returns 200 even when both Lens and Reflector have no data for the
+        asset. The `status` field distinguishes "no_data" from "aligned",
+        "minor_deviation", "major_deviation" and "partial" (one source only).
       security: []
       parameters:
         - name: asset
@@ -684,13 +688,11 @@ paths:
           example: XLM
       responses:
         '200':
-          description: Price comparison
+          description: Price comparison (includes status:"no_data" when both sources are null)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompareResponse'
-        '404':
-          description: No price data found for the asset
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -809,6 +811,11 @@ paths:
     get:
       operationId: getBasket
       summary: Compute the weighted price of a basket of assets
+      description: >-
+        Returns 200 even when one or more assets have no price data. The
+        response body will contain an `error` field listing the missing assets
+        and `reason: "missing_price_data"` rather than computing a partial
+        basket price. A 404 would imply the assets themselves are invalid.
       security: []
       parameters:
         - name: asset
@@ -835,15 +842,13 @@ paths:
           example: [0.6, 0.4]
       responses:
         '200':
-          description: Basket price
+          description: Basket price or error with reason when price data is missing
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BasketResponse'
         '400':
           description: Missing assets or mismatched/invalid weights
-        '404':
-          description: No price data for one or more assets
         '429':
           $ref: '#/components/responses/TooManyRequests'
 

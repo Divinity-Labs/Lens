@@ -26,10 +26,10 @@ export async function registerOracleRoutes(app: FastifyInstance) {
 
     const lensPrice = dbResult.rows[0] ? parseFloat(dbResult.rows[0].vwap) : null
 
-    if (reflectorPrice === null && lensPrice === null) {
-      return reply.status(404).send({ error: `No price data found for asset ${assetCode}` })
-    }
-
+    // 200 even when both are null: the asset code itself is valid, the query
+    // succeeded, there is just no data. A 404 would imply the asset is invalid
+    // or the endpoint does not exist. The `status: "no_data"` field carries the
+    // semantic difference a 404 once tried to convey.
     const deviation =
       reflectorPrice !== null && lensPrice !== null
         ? Math.abs(reflectorPrice - lensPrice) / reflectorPrice
@@ -41,7 +41,9 @@ export async function registerOracleRoutes(app: FastifyInstance) {
       reflector: reflectorPrice,
       deviationPct: deviation !== null ? parseFloat((deviation * 100).toFixed(4)) : null,
       status:
-        deviation !== null
+        reflectorPrice === null && lensPrice === null
+          ? 'no_data'
+          : deviation !== null
           ? deviation < 0.01
             ? 'aligned'
             : deviation < 0.05
