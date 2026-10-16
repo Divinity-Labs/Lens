@@ -19,8 +19,7 @@ lens/
 │   ├── db.ts               # Postgres pool / Prisma client
 │   ├── api/                # REST + GraphQL route implementations
 │   ├── routes/             # Additional REST route modules
-│   ├── ingesters/          # SDEX + AMM ingester loops
-│   ├── ingest/             # Venue/oracle adapters (Horizon AMM, Aquarius, Reflector)
+│   ├── ingest/             # Venue/oracle adapters + ingester loops (SDEX, Horizon AMM, Soroswap, Aquarius, Reflector)
 │   ├── aggregator/         # VWAP + best-route calculation
 │   ├── pricing/            # TWAP, depth and aggregate helpers
 │   ├── middleware/         # Network selector, x402, auth, metrics
