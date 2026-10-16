@@ -168,6 +168,7 @@ import WebSocket from "ws"; // browsers already have WebSocket globally
 const client = createClient({
   url: "ws://localhost:3002/graphql",
   webSocketImpl: WebSocket, // omit in the browser
+  connectionParams: { authorization: `Bearer ${process.env.LENS_API_KEY}` },
 });
 
 // `subscribe` returns an unsubscribe function — call it to close the channel.
@@ -189,6 +190,11 @@ const unsubscribe = client.subscribe(
 // unsubscribe();
 ```
 
+Subscriptions require a valid API key in `connectionParams` and are metered at
+the same `$0.10` price as a GraphQL query when each subscription starts. The
+default concurrent subscription limit is 10 per API key; set
+`GRAPHQL_MAX_SUBSCRIPTIONS_PER_KEY` to change it.
+
 > **`network` is optional but you almost always want it.** Since #117 every
 > enabled network runs its own ingester loop and they all publish to the same
 > stream, so omitting it interleaves testnet and mainnet prices for the same
@@ -202,7 +208,8 @@ const unsubscribe = client.subscribe(
 
 ## Usage Examples
 
-Lens gates `/price`, `/pools`, and `/candles` behind x402 micropayments on Stellar (testnet by default). The `/status` endpoint is free.
+Lens gates `/price`, `/pools`, `/candles`, and GraphQL POST queries behind x402
+micropayments on Stellar (testnet by default). The `/status` endpoint is free.
 
 ### 1. Free health check (no payment)
 
@@ -317,7 +324,8 @@ curl -X POST http://localhost:3002/graphql \
 
 Or interactively at [http://localhost:3002/graphiql](http://localhost:3002/graphiql).
 
-> **Note:** the current `GATED_ROUTES` map in [`src/middleware/x402.ts`](src/middleware/x402.ts) gates `/price`, `/pools`, and `/candles` only — `/graphql` is not gated. If you intend price data from GraphQL to require the same payment as REST, extend `GATED_ROUTES` (or add a per-resolver guard).
+GraphQL POST queries are included in `GATED_ROUTES` at `$0.10`. WebSocket
+subscriptions require an API key and record the same amount once per activation.
 
 ## Documentation
 Detailed system design and data flow diagrams can be found in the [Architecture Overview](docs/architecture.md).
@@ -491,6 +499,7 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 | `DATABASE_URL` | PostgreSQL connection string | - | **Yes** |
 | `REDIS_URL` | Redis connection string | - | **Yes** |
 | `PRICE_CACHE_TTL` | Cache duration for price data (seconds) | `10` | No |
+| `GRAPHQL_MAX_SUBSCRIPTIONS_PER_KEY` | Maximum concurrent GraphQL subscriptions per API key | `10` | No |
 | `HORIZON_URL` | Stellar Horizon server URL | - | No |
 | `RPC_URL` | Soroban RPC server URL | - | No |
 | `NETWORK_PASSPHRASE` | Stellar network passphrase | - | No |

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { x402_payments_received_total } from '../metrics'
 import { checkQuota, recordUsage, parseCents, getQuotaConfig } from '../x402/metering'
 import { X402_NETWORK_LABEL, paymentAddressFor, isX402Configured, getX402ResourceServer } from '../x402/network'
+import { GRAPHQL_REQUEST_PRICE } from '../x402/pricing'
 import fp from 'fastify-plugin'
 import './network' // declares req.network on the FastifyRequest type
 
@@ -35,7 +36,7 @@ export const GATED_ROUTES: readonly GatedRoute[] = [
   {
     path: '/graphql',
     method: 'POST',
-    price: '$0.10',
+    price: GRAPHQL_REQUEST_PRICE,
     description: 'GraphQL queries for price data and market information',
   },
 ] as const

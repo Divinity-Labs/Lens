@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { price_requests_total } from '../metrics'
 import mercurius, { withFilter, type MercuriusContext } from 'mercurius'
+import { extractBearer, lookupApiKey, type ApiKeyContext } from './auth'
+import { checkQuota, parseCents, recordUsage } from '../x402/metering'
+import { GRAPHQL_REQUEST_PRICE } from '../x402/pricing'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
@@ -12,6 +15,16 @@ import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../even
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
 // each subscriber then filters it down to the pair they asked for.
 const PRICE_TOPIC = 'PRICE_UPDATED'
+const activeSubscriptionsByKey = new Map<string, number>()
+
+interface GraphQLSubscriptionContext extends MercuriusContext {
+  apiKey?: ApiKeyContext
+}
+
+function maxSubscriptionsPerKey(): number {
+  const configuredLimit = Number.parseInt(process.env.GRAPHQL_MAX_SUBSCRIPTIONS_PER_KEY ?? '10', 10)
+  return Number.isSafeInteger(configuredLimit) && configuredLimit > 0 ? configuredLimit : 10
+}
 
 const schema = `
   type AggregatedPrice {
@@ -182,10 +195,44 @@ const resolvers = {
       subscribe: withFilter<
         { priceUpdated: PricePublishedEvent },
         unknown,
-        MercuriusContext,
+        GraphQLSubscriptionContext,
         { pair: string; network?: string | null }
       >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
+        async (_root, _args, { pubsub, apiKey }) => {
+          if (!apiKey) throw new Error('A valid API key is required for subscriptions')
+          const activeCount = activeSubscriptionsByKey.get(apiKey.id) ?? 0
+          if (activeCount >= maxSubscriptionsPerKey()) {
+            throw new Error('Concurrent subscription limit exceeded')
+          }
+          activeSubscriptionsByKey.set(apiKey.id, activeCount + 1)
+
+          let released = false
+          const release = () => {
+            if (released) return
+            released = true
+            const count = activeSubscriptionsByKey.get(apiKey.id) ?? 0
+            if (count <= 1) activeSubscriptionsByKey.delete(apiKey.id)
+            else activeSubscriptionsByKey.set(apiKey.id, count - 1)
+          }
+
+          try {
+            const quota = await checkQuota(apiKey.id)
+            if (!quota.allowed) throw new Error('API key usage quota exceeded')
+            await recordUsage(apiKey.id, parseCents(GRAPHQL_REQUEST_PRICE))
+
+            const source = await pubsub.subscribe(PRICE_TOPIC)
+            return (async function* () {
+              try {
+                for await (const payload of source) yield payload
+              } finally {
+                release()
+              }
+            })()
+          } catch (error) {
+            release()
+            throw error
+          }
+        },
         // Both loops publish to one topic, so the network filter has to happen
         // here. Omitting `network` keeps every chain — the message carries its
         // own `network` field, so the subscriber can still tell them apart.
@@ -212,6 +259,19 @@ export async function registerGraphQL(app: FastifyInstance) {
       // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
+      onConnect: async ({ payload }) => {
+        const initPayload = payload && typeof payload === 'object'
+          ? payload as Record<string, unknown>
+          : {}
+        const authorization = initPayload.authorization ?? initPayload.Authorization
+        const token = typeof initPayload.apiKey === 'string'
+          ? initPayload.apiKey
+          : extractBearer(typeof authorization === 'string' ? authorization : undefined)
+        if (!token) return false
+
+        const apiKey = await lookupApiKey(token)
+        return apiKey ? { apiKey } : false
+      },
     },
   })
 
