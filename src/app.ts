@@ -12,6 +12,7 @@ import { registerHistoryRoutes } from './api/history'
 import { registerX402 } from './middleware/x402'
 import { registerNetworkSelector } from './middleware/network'
 import { registerHttpMetrics } from './middleware/httpMetrics'
+import { registerRequestId } from './middleware/requestId'
 import { registerWebSocket } from './api/websocket'
 import { registerApiKeyAuth } from './api/auth'
 import { registerAdminRoutes } from './api/admin'
@@ -66,6 +67,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // plugins reject (400/401/402/429) still have their timer started and are
   // counted. See src/middleware/httpMetrics.ts.
   await app.register(registerHttpMetrics)
+
+  // Accept an inbound x-request-id header or generate a UUID, bind it to the
+  // per-request pino logger so every log line carries it, and echo it back as a
+  // response header on every response (including early-exit 4xx rejections).
+  // Registered immediately after httpMetrics so the id is present from the very
+  // first onRequest hook onwards.
+  await app.register(registerRequestId)
 
   // Resolves the per-request Stellar network (?network= query param / x-network
   // header) onto req.network, validating it (400 on an unrecognised value).
@@ -144,6 +152,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get('/metrics', { config: { public: true } }, async (req, reply) => {
     reply.type('text/plain; version=0.0.4; charset=utf-8')
     return await getMetrics()
+  })
+
+  // Global error handler — adds `requestId` to every error body so a caller
+  // reporting a failure can quote one short string that ties to the log lines.
+  // Delegates formatting to Fastify's default handler for the status code and
+  // error name; we only inject the extra field.
+  app.setErrorHandler(async (error, req, reply) => {
+    const statusCode = error.statusCode ?? 500
+    reply.status(statusCode).send({
+      statusCode,
+      error: error.name === 'FastifyError' ? error.code : (error.name ?? 'Error'),
+      message: error.message,
+      requestId: req.requestId,
+    })
   })
 
   return app

@@ -29,6 +29,11 @@
         "responses": {
           "200": {
             "description": "API status",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -109,6 +114,11 @@
         "responses": {
           "200": {
             "description": "Aggregated price data",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -171,6 +181,11 @@
         "responses": {
           "200": {
             "description": "Best route information",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -239,6 +254,11 @@
         "responses": {
           "200": {
             "description": "Price history",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -287,6 +307,11 @@
         "responses": {
           "200": {
             "description": "List of pools",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -404,6 +429,11 @@
         "responses": {
           "200": {
             "description": "Candle data",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -524,6 +554,11 @@
         "responses": {
           "200": {
             "description": "Historical price snapshots",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -601,6 +636,11 @@
         "responses": {
           "200": {
             "description": "List of pairs",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -672,7 +712,12 @@
         },
         "responses": {
           "201": {
-            "description": "Pair added"
+            "description": "Pair added",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
           },
           "400": {
             "description": "Invalid input"
@@ -734,6 +779,11 @@
         "responses": {
           "200": {
             "description": "Depth ladder",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -827,6 +877,11 @@
         "responses": {
           "200": {
             "description": "TWAP result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -918,6 +973,11 @@
         "responses": {
           "200": {
             "description": "VWAP result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -978,6 +1038,11 @@
         "responses": {
           "200": {
             "description": "Aggregated volume",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1036,6 +1101,11 @@
         "responses": {
           "200": {
             "description": "Per-venue spreads",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1078,6 +1148,11 @@
         "responses": {
           "200": {
             "description": "Price comparison",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1204,6 +1279,11 @@
         "responses": {
           "200": {
             "description": "Screened pairs",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1252,6 +1332,11 @@
         "responses": {
           "200": {
             "description": "Benchmark statistics",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1318,6 +1403,11 @@
         "responses": {
           "200": {
             "description": "Basket price",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1407,6 +1497,11 @@
         "responses": {
           "200": {
             "description": "Paginated catalog page",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1472,6 +1567,11 @@
         "responses": {
           "201": {
             "description": "Webhook created",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1506,7 +1606,12 @@
         ],
         "responses": {
           "204": {
-            "description": "Webhook deleted (idempotent — a missing id also returns 204)"
+            "description": "Webhook deleted (idempotent — a missing id also returns 204)",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -1526,6 +1631,11 @@
         "responses": {
           "200": {
             "description": "Usage summary for the authenticated key",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1551,6 +1661,11 @@
         "responses": {
           "200": {
             "description": "Supported payment kinds and extensions",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1580,6 +1695,11 @@
         "responses": {
           "200": {
             "description": "Verification result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1590,6 +1710,11 @@
           },
           "400": {
             "description": "Malformed request or invalid payment",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1600,6 +1725,11 @@
           },
           "500": {
             "description": "Internal verification error",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1630,6 +1760,11 @@
         "responses": {
           "200": {
             "description": "Settlement result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1640,6 +1775,11 @@
           },
           "400": {
             "description": "Malformed payload",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1686,6 +1826,11 @@
         "responses": {
           "200": {
             "description": "GraphQL result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1731,6 +1876,11 @@
         "responses": {
           "200": {
             "description": "GraphQL result",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1747,6 +1897,14 @@
     }
   },
   "components": {
+    "headers": {
+      "XRequestId": {
+        "description": "Unique identifier for this request. Either the value supplied by the caller in the inbound `x-request-id` header, or a server-generated UUID v4. Quote this string when reporting a problem — it ties your report directly to the corresponding log lines.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
     "securitySchemes": {
       "x402": {
         "type": "apiKey",
@@ -1784,6 +1942,11 @@
     "responses": {
       "PaymentRequired": {
         "description": "Payment Required",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -1826,6 +1989,9 @@
       "TooManyRequests": {
         "description": "Rate limit exceeded",
         "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
           "Retry-After": {
             "schema": {
               "type": "integer"
