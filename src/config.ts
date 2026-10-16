@@ -39,6 +39,13 @@ const booleanEnvironmentKeys = [
   'SOROSWAP_ENABLED_TESTNET', 'SOROSWAP_ENABLED_MAINNET', 'AQUARIUS_ENABLED_TESTNET', 'AQUARIUS_ENABLED_MAINNET',
   'REFLECTOR_ENABLED_TESTNET', 'REFLECTOR_ENABLED_MAINNET',
 ] as const
+const urlEnvironmentKeys = [
+  'DATABASE_URL', 'DIRECT_DATABASE_URL', 'REDIS_URL',
+  'HORIZON_URL', 'HORIZON_URL_TESTNET', 'HORIZON_URL_MAINNET',
+  'RPC_URL', 'RPC_URL_TESTNET', 'RPC_URL_MAINNET',
+  'SOROSWAP_TOKEN_LIST_URL', 'SOROSWAP_TOKEN_LIST_URL_TESTNET', 'SOROSWAP_TOKEN_LIST_URL_MAINNET',
+  'AQUARIUS_API_URL', 'AQUARIUS_API_URL_TESTNET', 'AQUARIUS_API_URL_MAINNET', 'X402_FACILITATOR_URL',
+] as const
 const parsedEnvironmentSchema = envSchema.superRefine((env, ctx) => {
   for (const key of numericEnvironmentKeys) {
     const value = env[key]
@@ -51,6 +58,19 @@ const parsedEnvironmentSchema = envSchema.superRefine((env, ctx) => {
     if (value !== undefined && value !== '' && value !== 'true' && value !== 'false') {
       ctx.addIssue({ code: 'custom', path: [key], message: 'must be true or false' })
     }
+  }
+  for (const key of urlEnvironmentKeys) {
+    const value = env[key]
+    if (value?.trim()) {
+      try {
+        new URL(value)
+      } catch {
+        ctx.addIssue({ code: 'custom', path: [key], message: 'must be a valid URL' })
+      }
+    }
+  }
+  if (env.NODE_ENV && !['development', 'test', 'production'].includes(env.NODE_ENV)) {
+    ctx.addIssue({ code: 'custom', path: ['NODE_ENV'], message: 'must be development, test, or production' })
   }
   if (env.STELLAR_NETWORK && !['testnet', 'mainnet'].includes(env.STELLAR_NETWORK.toLowerCase())) {
     ctx.addIssue({ code: 'custom', path: ['STELLAR_NETWORK'], message: 'must be testnet or mainnet' })

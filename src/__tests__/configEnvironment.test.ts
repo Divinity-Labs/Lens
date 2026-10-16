@@ -7,6 +7,11 @@ describe('environment validation', () => {
       .toThrow('[config] Invalid environment: RATE_LIMIT_IP_MAX must be a safe integer')
   })
 
+  it('rejects malformed service URLs with the setting name', () => {
+    expect(() => parseEnvironment({ REDIS_URL: 'cache-address' }))
+      .toThrow('[config] Invalid environment: REDIS_URL must be a valid URL')
+  })
+
   it('requires runtime secrets and service URLs in production', () => {
     expect(() => parseEnvironment({ NODE_ENV: 'production' }))
       .toThrow(/DATABASE_URL is required in production.*REDIS_URL is required in production.*ADMIN_API_KEY is required in production.*ADMIN_TOKEN is required in production/)
