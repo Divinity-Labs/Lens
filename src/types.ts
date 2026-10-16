@@ -36,6 +36,58 @@ export interface AggregatedPrice {
   stale: boolean
 }
 
+export interface SplitVenueAllocation {
+  venue: 'SDEX' | 'AMM'
+  proportion: number
+  amount: number
+  estimatedOutput: number
+  effectivePrice: number
+}
+
+export interface SplitComparison {
+  singleVenueRoute: 'SDEX' | 'AMM'
+  singleVenueOutput: number
+  singleVenueEffectivePrice: number
+  singleVenueSlippagePct: number
+  outputImprovement: number
+  outputImprovementPct: number
+}
+
+export interface SplitProvenance {
+  venues: string[]
+  samples: number
+  asOf: string
+  freshnessSeconds: number | null
+}
+
+export interface SplitRecommendation {
+  splitRecommended: boolean
+  assetA: string
+  assetB: string
+  pairKey: string
+  network: string
+  amount: number
+  reason?: string
+  message: string
+  proportions?: {
+    SDEX: number
+    AMM: number
+  }
+  allocations?: SplitVenueAllocation[]
+  estimatedOutput?: number
+  effectivePrice?: number
+  slippagePct?: number
+  singleVenue?: {
+    route: 'SDEX' | 'AMM'
+    output: number
+    price: number
+    slippagePct: number
+  }
+  comparison?: SplitComparison
+  provenance: SplitProvenance
+  error?: string
+}
+
 export interface RouteInfo {
   route: 'SDEX' | 'AMM' | 'SPLIT' | 'UNKNOWN'
   sdexPrice: number
@@ -43,6 +95,7 @@ export interface RouteInfo {
   estimatedOutput: number
   slippagePct: number
   recommendation: string
+  split?: SplitRecommendation
 }
 
 export interface WatchedPair {
