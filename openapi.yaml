@@ -695,6 +695,105 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /snapshot:
+    get:
+      operationId: getMarketSnapshot
+      summary: Point-in-time snapshot of the market
+      description: >-
+        One timestamped object describing the state of the market Lens can see
+        for this network: venues (with sample counts and freshness), pairs
+        (price, 24h volume, venues), totals and provenance, all honouring a
+        single `asOf` instant.
+
+        Without `at`, the snapshot is assembled live for the current interval.
+        With `at`, the snapshot persisted for that interval is returned. If no
+        snapshot was captured for `at`'s interval, the moment falls in a gap and
+        the response is a 404 naming the nearest captured moments — the figure
+        is never interpolated from a neighbour.
+
+        Snapshots are captured every `MARKET_SNAPSHOT_INTERVAL_SECONDS`
+        (default 3600) and retained for `MARKET_SNAPSHOT_RETENTION_DAYS`
+        (default 400), independent of the ~30-day `price_snapshots` window.
+      security: []
+      parameters:
+        - name: at
+          in: query
+          required: false
+          description: >-
+            ISO 8601 instant to retrieve. Resolves to the snapshot captured for
+            the interval containing it.
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: The market snapshot for the requested moment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketSnapshotResponse'
+        '400':
+          description: Invalid `at` (unparseable, or in the future)
+        '404':
+          description: >-
+            No snapshot was captured for the requested moment; the body reports
+            the gap and its nearest neighbours.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketSnapshotGap'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /snapshot/diff:
+    get:
+      operationId: diffMarketSnapshots
+      summary: Diff two market snapshots
+      description: >-
+        Difference between the snapshots captured for the intervals containing
+        `from` and `to`, including per-figure deltas and percentage changes and
+        the pairs that were added, removed or moved.
+
+        Both endpoints must exist. If either moment falls in a gap the response
+        is a 404 naming the missing moment and its neighbours. If both exist but
+        the range between them has gaps, the response is `status: partial` and
+        lists those gaps rather than implying a continuous window.
+      security: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: The diff between the two moments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketSnapshotDiffResponse'
+        '400':
+          description: Invalid or missing `from`/`to`
+        '404':
+          description: >-
+            One or both moments fall in a gap; the body names which and reports
+            their nearest neighbours.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketSnapshotDiffGap'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /screener:
     get:
       operationId: screenPairs
@@ -1201,6 +1300,347 @@ components:
                 type: string
 
   schemas:
+    SnapshotVenue:
+      type: object
+      description: A venue that printed at least one price inside the snapshot window.
+      properties:
+        name:
+          type: string
+        samples:
+          type: integer
+          description: Price points this venue contributed to the window.
+        lastTs:
+          type: string
+          format: date-time
+          nullable: true
+
+    SnapshotPair:
+      type: object
+      description: A pair Lens has ever priced on this network as of the snapshot moment.
+      properties:
+        pairKey:
+          type: string
+        price:
+          type: number
+          nullable: true
+        volume24h:
+          type: number
+        venues:
+          type: array
+          items:
+            type: string
+        samples:
+          type: integer
+        lastTs:
+          type: string
+          format: date-time
+          nullable: true
+        stale:
+          type: boolean
+          description: True when the pair has not printed inside one snapshot interval.
+
+    MarketSnapshotDocument:
+      type: object
+      description: >-
+        One timestamped object describing the market. Every figure honours the
+        single `asOf` instant.
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        asOf:
+          type: string
+          format: date-time
+        generatedAt:
+          type: string
+          format: date-time
+        windowHours:
+          type: integer
+        totals:
+          type: object
+          properties:
+            venueCount:
+              type: integer
+            pairCount:
+              type: integer
+            volume24h:
+              type: number
+        venues:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotVenue'
+        pairs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotPair'
+        freshness:
+          type: object
+          properties:
+            newestSample:
+              type: string
+              format: date-time
+              nullable: true
+            oldestSample:
+              type: string
+              format: date-time
+              nullable: true
+            maxSampleAgeSeconds:
+              type: integer
+              nullable: true
+            stalePairs:
+              type: array
+              items:
+                type: string
+        provenance:
+          type: object
+          properties:
+            sources:
+              type: array
+              items:
+                type: string
+            sampleCount:
+              type: integer
+            windowSeconds:
+              type: integer
+
+    MarketSnapshotResponse:
+      type: object
+      required: [status, network, asOf, intervalSeconds, retentionDays, snapshot]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        requestedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null when the current moment was requested (no `at`).
+        asOf:
+          type: string
+          format: date-time
+        intervalSeconds:
+          type: integer
+        retentionDays:
+          type: integer
+        snapshot:
+          $ref: '#/components/schemas/MarketSnapshotDocument'
+
+    MarketSnapshotGap:
+      type: object
+      required: [status, network, requestedAt, asOf, intervalSeconds, retentionDays, message]
+      properties:
+        status:
+          type: string
+          enum: [gap]
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        requestedAt:
+          type: string
+          format: date-time
+        asOf:
+          type: string
+          format: date-time
+          description: The interval bucket the request resolved to, which was not captured.
+        intervalSeconds:
+          type: integer
+        retentionDays:
+          type: integer
+        message:
+          type: string
+        nearestBefore:
+          type: string
+          format: date-time
+          nullable: true
+        nearestAfter:
+          type: string
+          format: date-time
+          nullable: true
+
+    SnapshotMetricChange:
+      type: object
+      required: [from, to, delta]
+      properties:
+        from:
+          type: number
+        to:
+          type: number
+        delta:
+          type: number
+        pctChange:
+          type: number
+          nullable: true
+          description: Null when `from` is 0 and a percentage is undefined.
+
+    SnapshotGap:
+      type: object
+      required: [from, to, missing]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        missing:
+          type: integer
+
+    SnapshotCoverage:
+      type: object
+      required: [expectedBuckets, available, gaps]
+      properties:
+        expectedBuckets:
+          type: integer
+        available:
+          type: integer
+        gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotGap'
+
+    MarketSnapshotDiffResponse:
+      type: object
+      required: [status, network, intervalSeconds, retentionDays, from, to, coverage, diff]
+      properties:
+        status:
+          type: string
+          enum: [ok, partial]
+          description: >-
+            `partial` when both endpoints exist but the range between them has
+            gaps.
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        intervalSeconds:
+          type: integer
+        retentionDays:
+          type: integer
+        from:
+          type: object
+          properties:
+            requestedAt:
+              type: string
+              format: date-time
+            asOf:
+              type: string
+              format: date-time
+        to:
+          type: object
+          properties:
+            requestedAt:
+              type: string
+              format: date-time
+            asOf:
+              type: string
+              format: date-time
+        coverage:
+          $ref: '#/components/schemas/SnapshotCoverage'
+        diff:
+          type: object
+          properties:
+            elapsedSeconds:
+              type: integer
+            changes:
+              type: object
+              properties:
+                venueCount:
+                  $ref: '#/components/schemas/SnapshotMetricChange'
+                pairCount:
+                  $ref: '#/components/schemas/SnapshotMetricChange'
+                volume24h:
+                  $ref: '#/components/schemas/SnapshotMetricChange'
+            pairs:
+              type: object
+              properties:
+                changed:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      pairKey:
+                        type: string
+                      price:
+                        allOf:
+                          - $ref: '#/components/schemas/SnapshotMetricChange'
+                        nullable: true
+                      volume24h:
+                        $ref: '#/components/schemas/SnapshotMetricChange'
+                added:
+                  type: array
+                  items:
+                    type: string
+                removed:
+                  type: array
+                  items:
+                    type: string
+            provenance:
+              type: object
+              properties:
+                from:
+                  type: object
+                  properties:
+                    asOf:
+                      type: string
+                      format: date-time
+                    sampleCount:
+                      type: integer
+                    venueCount:
+                      type: integer
+                to:
+                  type: object
+                  properties:
+                    asOf:
+                      type: string
+                      format: date-time
+                    sampleCount:
+                      type: integer
+                    venueCount:
+                      type: integer
+
+    MarketSnapshotDiffGap:
+      type: object
+      required: [status, network, intervalSeconds, retentionDays, message, from, to]
+      properties:
+        status:
+          type: string
+          enum: [gap]
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        intervalSeconds:
+          type: integer
+        retentionDays:
+          type: integer
+        message:
+          type: string
+        from:
+          $ref: '#/components/schemas/SnapshotDiffGapSide'
+        to:
+          $ref: '#/components/schemas/SnapshotDiffGapSide'
+
+    SnapshotDiffGapSide:
+      type: object
+      properties:
+        requestedAt:
+          type: string
+          format: date-time
+        asOf:
+          type: string
+          format: date-time
+        available:
+          type: boolean
+        nearestBefore:
+          type: string
+          format: date-time
+          nullable: true
+        nearestAfter:
+          type: string
+          format: date-time
+          nullable: true
+
     Asset:
       type: object
       properties:
