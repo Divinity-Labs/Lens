@@ -11,9 +11,21 @@ vi.mock('../db', () => ({ pgPool: { query: vi.fn() } }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
 vi.mock('../config', () => ({ config: { pairs: [] } }))
+vi.mock('../api/auth', () => ({
+  extractBearer: (header?: string) => /^Bearer\s+(.+)$/i.exec(header?.trim() ?? '')?.[1]?.trim() ?? null,
+  lookupApiKey: vi.fn(async (token: string) => token === 'valid-test-key'
+    ? { id: 'subscription-test-key', label: 'test', ratePerMin: 60, ratePerDay: 1000 }
+    : null),
+}))
+vi.mock('../x402/metering', () => ({
+  checkQuota: vi.fn(async () => ({ allowed: true })),
+  parseCents: (price: string) => Math.round(Number(price.slice(1)) * 100),
+  recordUsage: vi.fn(async () => undefined),
+}))
 
 import { registerGraphQL } from '../api/graphql'
 import { publishPriceUpdate, priceEmitter } from '../events'
+import { checkQuota, recordUsage } from '../x402/metering'
 
 const SUBPROTOCOL = 'graphql-transport-ws'
 
@@ -26,11 +38,14 @@ async function buildServer(): Promise<{ app: FastifyInstance; url: string }> {
 }
 
 /** Open a graphql-transport-ws connection and complete the connection_init handshake. */
-function connect(url: string): Promise<WebSocket> {
+function connect(url: string, authorization: string | undefined = 'Bearer valid-test-key'): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, SUBPROTOCOL)
     ws.on('error', reject)
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'connection_init' })))
+    ws.on('open', () => ws.send(JSON.stringify({
+      type: 'connection_init',
+      payload: authorization ? { authorization } : undefined,
+    })))
     ws.on('message', function onAck(raw) {
       const msg = JSON.parse(raw.toString())
       if (msg.type === 'connection_ack') {
@@ -60,8 +75,8 @@ function waitFor(ws: WebSocket, type: string, timeoutMs = 2000): Promise<any> {
   })
 }
 
-const SUBSCRIBE = (pair: string, network?: string) => ({
-  id: '1',
+const SUBSCRIBE = (pair: string, network?: string, id = '1') => ({
+  id,
   type: 'subscribe',
   payload: {
     query: `subscription($pair: String!, $network: String) {
@@ -76,11 +91,13 @@ describe('GraphQL priceUpdated subscription', () => {
   let url: string
 
   beforeEach(async () => {
+    vi.clearAllMocks()
     ;({ app, url } = await buildServer())
   })
 
   afterEach(async () => {
     await app.close()
+    vi.unstubAllEnvs()
     // app.close() fires the onClose hook that detaches the bridge listener.
     expect(priceEmitter.listenerCount('price:published')).toBe(0)
   })
@@ -102,6 +119,68 @@ describe('GraphQL priceUpdated subscription', () => {
       network: 'testnet',
     })
 
+    ws.close()
+  })
+
+  it('refuses an unauthenticated connection during connection_init', async () => {
+    const ws = new WebSocket(url, SUBPROTOCOL)
+    const rejected = waitFor(ws, 'connection_error')
+    ws.on('error', () => undefined)
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'connection_init' })))
+
+    const error = await rejected
+    expect(error.payload.message).toBe('Forbidden')
+    ws.close()
+  })
+
+  it('refuses an invalid API key during connection_init', async () => {
+    const ws = new WebSocket(url, SUBPROTOCOL)
+    const rejected = waitFor(ws, 'connection_error')
+    ws.on('error', () => undefined)
+    ws.on('open', () => ws.send(JSON.stringify({
+      type: 'connection_init',
+      payload: { authorization: 'Bearer invalid-test-key' },
+    })))
+
+    const error = await rejected
+    expect(error.payload.message).toBe('Forbidden')
+    ws.close()
+  })
+
+  it('meters an active subscription at the GraphQL request price', async () => {
+    const ws = await connect(url)
+    ws.send(JSON.stringify(SUBSCRIBE('XLM/USDC')))
+    await new Promise(r => setTimeout(r, 100))
+
+    expect(checkQuota).toHaveBeenCalledWith('subscription-test-key')
+    expect(recordUsage).toHaveBeenCalledWith('subscription-test-key', 10)
+
+    ws.close()
+  })
+
+  it('caps active subscriptions per key and releases a slot on complete', async () => {
+    await app.close()
+    vi.stubEnv('GRAPHQL_MAX_SUBSCRIPTIONS_PER_KEY', '1')
+    ;({ app, url } = await buildServer())
+
+    const ws = await connect(url)
+    ws.send(JSON.stringify(SUBSCRIBE('XLM/USDC', undefined, '1')))
+    await new Promise(r => setTimeout(r, 100))
+
+    ws.send(JSON.stringify(SUBSCRIBE('BTC/USDC', undefined, '2')))
+    const rejected = await waitFor(ws, 'error')
+    expect(rejected.id).toBe('2')
+    expect(rejected.payload[0].message).toContain('Concurrent subscription limit exceeded')
+
+    ws.send(JSON.stringify({ id: '1', type: 'complete' }))
+    await new Promise(r => setTimeout(r, 100))
+    ws.send(JSON.stringify(SUBSCRIBE('BTC/USDC', undefined, '3')))
+    await new Promise(r => setTimeout(r, 100))
+    publishPriceUpdate({ pair: 'BTC/USDC', price: 99, ts: '2026-06-02T00:00:00.000Z', network: 'testnet' })
+
+    const next = await waitFor(ws, 'next')
+    expect(next.id).toBe('3')
+    expect(recordUsage).toHaveBeenCalledTimes(2)
     ws.close()
   })
 

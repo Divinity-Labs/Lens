@@ -1,0 +1,1 @@
+export const GRAPHQL_REQUEST_PRICE = '$0.10'
