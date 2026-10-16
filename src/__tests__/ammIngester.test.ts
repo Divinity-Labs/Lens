@@ -48,6 +48,8 @@ describe('AMM Ingester', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           spotPrice: 0.2,
+          assetAIssuer: null,
+          assetBIssuer: mockPair.assetB.issuer,
         }),
       })
     )
@@ -142,6 +144,33 @@ describe('AMM Ingester', () => {
       '277710193062797313-0',
       'mainnet',
       64659443
+    )
+  })
+
+  it('normalizes reverse-direction AMM trade volumes into the pair asset order', async () => {
+    ;(getIndexerState as any).mockResolvedValue({ cursor: '0', ledger: null })
+    global.fetch = vi.fn().mockResolvedValue({
+      json: async () => ({
+        _embedded: {
+          records: [{
+            id: '277710193062797313-0',
+            paging_token: '277710193062797313-0',
+            ledger_close_time: '2026-09-28T08:09:56Z',
+            base_amount: '20',
+            base_asset_type: 'credit_alphanum4',
+            base_asset_code: 'USD',
+            counter_amount: '100',
+            counter_asset_type: 'native',
+          }],
+        },
+      }),
+    })
+
+    await ingestPoolTrades({ id: 'pool-1' }, mockPair as any, 'mainnet')
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      [expect.objectContaining({ baseVolume: 100, counterVolume: 20, price: 0.2 })],
+      'mainnet',
     )
   })
 })

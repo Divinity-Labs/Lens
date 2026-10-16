@@ -27,6 +27,7 @@ model PricePoint {
   @@id([id, timestamp])
   @@index([network, pairKey, timestamp(sort: Desc)])
   @@index([network, pairKey, source, timestamp(sort: Desc)])
+  @@index([network, poolId, source, timestamp(sort: Desc)])
   @@map("price_points")
 }
 
@@ -35,7 +36,9 @@ model PoolSnapshot {
   network     String   @default("testnet")
   poolId      String   @map("pool_id")
   assetA      String   @map("asset_a")
+  assetAIssuer String? @map("asset_a_issuer")
   assetB      String   @map("asset_b")
+  assetBIssuer String? @map("asset_b_issuer")
   reserveA    Decimal  @map("reserve_a") @db.Decimal(36, 7)
   reserveB    Decimal  @map("reserve_b") @db.Decimal(36, 7)
   spotPrice   Decimal  @map("spot_price") @db.Decimal(36, 18)
@@ -46,6 +49,7 @@ model PoolSnapshot {
 
   @@id([id, timestamp])
   @@index([network, poolId, timestamp(sort: Desc)])
+  @@index([network, timestamp(sort: Desc), poolId])
   @@map("pool_snapshots")
 }
 
