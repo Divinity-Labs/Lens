@@ -107,6 +107,106 @@ export const routeResponseSchema = {
     estimatedOutput: { type: 'number' },
     slippagePct: { type: 'number' },
     recommendation: { type: 'string' },
+    split: {
+      type: 'object',
+      additionalProperties: true,
+    },
+  },
+} as const
+
+/** GET /price/:assetA/:assetB/split — matches SplitRecommendation */
+export const splitResponseSchema = {
+  type: 'object',
+  required: [
+    'splitRecommended',
+    'assetA',
+    'assetB',
+    'pairKey',
+    'network',
+    'amount',
+    'message',
+    'provenance',
+  ],
+  additionalProperties: false,
+  properties: {
+    splitRecommended: { type: 'boolean' },
+    assetA: { type: 'string' },
+    assetB: { type: 'string' },
+    pairKey: { type: 'string' },
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    amount: { type: 'number' },
+    reason: { type: 'string' },
+    message: { type: 'string' },
+    proportions: {
+      type: 'object',
+      required: ['SDEX', 'AMM'],
+      additionalProperties: false,
+      properties: {
+        SDEX: { type: 'number' },
+        AMM: { type: 'number' },
+      },
+    },
+    allocations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'proportion', 'amount', 'estimatedOutput', 'effectivePrice'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string', enum: ['SDEX', 'AMM'] },
+          proportion: { type: 'number' },
+          amount: { type: 'number' },
+          estimatedOutput: { type: 'number' },
+          effectivePrice: { type: 'number' },
+        },
+      },
+    },
+    estimatedOutput: { type: 'number' },
+    effectivePrice: { type: 'number' },
+    slippagePct: { type: 'number' },
+    singleVenue: {
+      type: 'object',
+      required: ['route', 'output', 'price', 'slippagePct'],
+      additionalProperties: false,
+      properties: {
+        route: { type: 'string', enum: ['SDEX', 'AMM'] },
+        output: { type: 'number' },
+        price: { type: 'number' },
+        slippagePct: { type: 'number' },
+      },
+    },
+    comparison: {
+      type: 'object',
+      required: [
+        'singleVenueRoute',
+        'singleVenueOutput',
+        'singleVenueEffectivePrice',
+        'singleVenueSlippagePct',
+        'outputImprovement',
+        'outputImprovementPct',
+      ],
+      additionalProperties: false,
+      properties: {
+        singleVenueRoute: { type: 'string', enum: ['SDEX', 'AMM'] },
+        singleVenueOutput: { type: 'number' },
+        singleVenueEffectivePrice: { type: 'number' },
+        singleVenueSlippagePct: { type: 'number' },
+        outputImprovement: { type: 'number' },
+        outputImprovementPct: { type: 'number' },
+      },
+    },
+    provenance: {
+      type: 'object',
+      required: ['venues', 'samples', 'asOf', 'freshnessSeconds'],
+      additionalProperties: false,
+      properties: {
+        venues: { type: 'array', items: { type: 'string' } },
+        samples: { type: 'integer' },
+        asOf: { type: 'string' },
+        freshnessSeconds: { type: ['integer', 'null'] },
+      },
+    },
+    error: { type: 'string' },
   },
 } as const
 

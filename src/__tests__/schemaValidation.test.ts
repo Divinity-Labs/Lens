@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import Ajv from 'ajv'
 
-const { mockQuery, mockGetCachedPrice, mockGetBestRoute, mockGetAggregatedPrice, mockGetDepth } = vi.hoisted(() => ({
+const { mockQuery, mockGetCachedPrice, mockGetBestRoute, mockGetAggregatedPrice, mockGetDepth, mockGetSplitRecommendation } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetCachedPrice: vi.fn(),
   mockGetBestRoute: vi.fn(),
   mockGetAggregatedPrice: vi.fn(),
   mockGetDepth: vi.fn(),
+  mockGetSplitRecommendation: vi.fn(),
 }))
 
 vi.mock('../db', () => ({
@@ -21,6 +22,10 @@ vi.mock('../redis', () => ({
 
 vi.mock('../aggregator/bestRoute', () => ({
   getBestRoute: mockGetBestRoute,
+}))
+
+vi.mock('../aggregator/splitRoute', () => ({
+  getSplitRecommendation: mockGetSplitRecommendation,
 }))
 
 vi.mock('../aggregator/vwap', () => ({
@@ -53,7 +58,7 @@ vi.mock('../config', () => ({
 }))
 
 import { registerRESTRoutes } from '../api/rest'
-import { priceResponseSchema } from '../api/schemas'
+import { priceResponseSchema, splitResponseSchema } from '../api/schemas'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
@@ -140,5 +145,58 @@ describe('REST response schema validation', () => {
     const res = await app.inject({ method: 'GET', url: '/price/XLM/USDC' })
 
     expect(res.statusCode).toBe(500)
+  })
+
+  it('returns 200 and a body that matches the declared /price/:assetA/:assetB/split schema', async () => {
+    mockGetSplitRecommendation.mockResolvedValue({
+      splitRecommended: true,
+      assetA: 'XLM',
+      assetB: 'USDC',
+      pairKey: 'USDC/XLM',
+      network: 'testnet',
+      amount: 1000,
+      message: 'Splitting across SDEX and AMM yields 2.50% better output than single-venue route (SDEX)',
+      proportions: {
+        SDEX: 0.4,
+        AMM: 0.6,
+      },
+      allocations: [
+        { venue: 'SDEX', proportion: 0.4, amount: 400, estimatedOutput: 390, effectivePrice: 0.975 },
+        { venue: 'AMM', proportion: 0.6, amount: 600, estimatedOutput: 580, effectivePrice: 0.9667 },
+      ],
+      estimatedOutput: 970,
+      effectivePrice: 0.97,
+      slippagePct: 1.5,
+      singleVenue: {
+        route: 'SDEX',
+        output: 950,
+        price: 0.95,
+        slippagePct: 2.0,
+      },
+      comparison: {
+        singleVenueRoute: 'SDEX',
+        singleVenueOutput: 950,
+        singleVenueEffectivePrice: 0.95,
+        singleVenueSlippagePct: 2.0,
+        outputImprovement: 20,
+        outputImprovementPct: 2.11,
+      },
+      provenance: {
+        venues: ['SDEX', 'AMM'],
+        samples: 20,
+        asOf: '2026-10-16T12:00:00.000Z',
+        freshnessSeconds: 15,
+      },
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/price/XLM/USDC/split' })
+
+    expect(res.statusCode).toBe(200)
+
+    const ajv = new Ajv({ allErrors: true })
+    const validate = ajv.compile(splitResponseSchema as object)
+    const ok = validate(res.json())
+    expect(ok, ajv.errorsText(validate.errors)).toBe(true)
   })
 })
