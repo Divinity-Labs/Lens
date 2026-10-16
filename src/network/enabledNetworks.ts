@@ -1,4 +1,4 @@
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, getEnvironment, type NetworkName } from '../config'
 
 const KNOWN_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
 
@@ -17,7 +17,7 @@ const KNOWN_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
  * `[activeNetwork]`.
  */
 export function getEnabledNetworks(): NetworkName[] {
-  const raw = process.env.ENABLED_NETWORKS
+  const raw = getEnvironment().ENABLED_NETWORKS
   if (raw && raw.trim()) {
     const parsed = raw
       .split(',')

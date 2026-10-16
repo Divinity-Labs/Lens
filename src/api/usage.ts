@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
+import { getEnvironment } from '../config'
 
 function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
+  const adminToken = getEnvironment().ADMIN_TOKEN
   if (!adminToken) return false
   const supplied =
     (req.headers['x-admin-token'] as string | undefined) ??

@@ -1,14 +1,14 @@
 import { PrismaClient } from '@prisma/client'
 import { Pool } from 'pg'
 import { db_query_duration_seconds } from './metrics'
-import { config, type NetworkName } from './config'
+import { config, getEnvironment, type NetworkName } from './config'
 
 // Prisma for schema management + simple queries
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+  log: getEnvironment().NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+if (getEnvironment().NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer

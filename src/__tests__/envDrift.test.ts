@@ -21,27 +21,6 @@ export const UNDOCUMENTED_ENV_ALLOW_LIST: Record<string, string> = {
   GITHUB_ACTIONS: 'Platform-injected environment variable present in GitHub Actions runners; not operator-configurable.',
   RENDER: 'Platform-injected environment variable set by the Render hosting platform; not operator-configurable.',
 
-  // Optional per-network venue overrides where the shared fallback is documented in .env.example
-  SOROSWAP_TOKEN_LIST_URL_TESTNET:
-    'Optional per-network override; shared fallback SOROSWAP_TOKEN_LIST_URL is documented in .env.example.',
-  SOROSWAP_TOKEN_LIST_URL_MAINNET:
-    'Optional per-network override; shared fallback SOROSWAP_TOKEN_LIST_URL is documented in .env.example.',
-  SOROSWAP_POLL_INTERVAL_MS_TESTNET:
-    'Optional per-network override for polling interval; shared fallback SOROSWAP_POLL_INTERVAL_MS is documented in .env.example.',
-  SOROSWAP_POLL_INTERVAL_MS_MAINNET:
-    'Optional per-network override for polling interval; shared fallback SOROSWAP_POLL_INTERVAL_MS is documented in .env.example.',
-  AQUARIUS_API_URL_TESTNET:
-    'Optional per-network venue override; shared fallback AQUARIUS_API_URL is documented in .env.example.',
-  AQUARIUS_API_URL_MAINNET:
-    'Optional per-network venue override; shared fallback AQUARIUS_API_URL is documented in .env.example.',
-  REFLECTOR_ENABLED_TESTNET:
-    'Optional per-network feature flag override; enabled by default on testnet if reflectorContractId is configured.',
-  REFLECTOR_ENABLED_MAINNET:
-    'Optional per-network feature flag override; enabled by default on mainnet if reflectorContractId is configured.',
-
-  // Legacy single-network fallbacks where paired network-specific variables are documented
-  FACILITATOR_FEE_STROOPS:
-    'Legacy unsuffixed fallback for testnet; FACILITATOR_FEE_STROOPS_TESTNET and FACILITATOR_FEE_STROOPS_MAINNET are documented in .env.example.',
 }
 
 /**
@@ -125,6 +104,9 @@ export function extractEnvReadsFromSource(sourceCode: string, fileName: string):
       if (isProcessEnv(node.expression)) {
         addRead(node.name.getText(sourceFile), node)
       }
+      if (node.expression.getText(sourceFile) === 'getEnvironment()') {
+        addRead(node.name.getText(sourceFile), node)
+      }
     }
 
     // 2. process.env['X'] or process.env[`X_${suffix}`]
@@ -139,6 +121,19 @@ export function extractEnvReadsFromSource(sourceCode: string, fileName: string):
             addRead(`${head}TESTNET`, node)
             addRead(`${head}MAINNET`, node)
           }
+        }
+      }
+    }
+
+    // Typed environment access through the shared validated config module.
+    if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === 'getEnvironmentValue') {
+      const arg = node.arguments[0]
+      if (arg && ts.isStringLiteral(arg)) addRead(arg.text, node)
+      else if (arg && ts.isTemplateExpression(arg)) {
+        const head = arg.head.text
+        if (head.endsWith('_')) {
+          addRead(`${head}TESTNET`, node)
+          addRead(`${head}MAINNET`, node)
         }
       }
     }

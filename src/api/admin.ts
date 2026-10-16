@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { prisma } from '../db'
 import { hashApiKey } from './auth'
+import { getEnvironment } from '../config'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -14,7 +15,7 @@ export function generateApiKey(): string {
  * Returns true if the caller is authorized.
  */
 function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
+  const adminToken = getEnvironment().ADMIN_TOKEN
   if (!adminToken) return false
   const supplied =
     (req.headers['x-admin-token'] as string | undefined) ??
