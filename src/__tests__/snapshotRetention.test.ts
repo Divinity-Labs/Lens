@@ -47,7 +47,7 @@ describe('pruneOldSnapshots', () => {
     const pruned = await pruneOldSnapshots(7)
 
     expect(pruned).toBe(0)
-    expect(mockQuery.mock.calls[0][1]).toEqual([activeNetwork, 7])
+    expect(mockQuery.mock.calls[0][1]).toEqual([activeNetwork, 7, SNAPSHOT_PRUNE_BATCH_SIZE])
   })
 
   it('returns 0 when rowCount is null', async () => {
@@ -135,7 +135,9 @@ describe('pruneAllNetworks', () => {
 
     expect(counts).toEqual({ testnet: 4, mainnet: 9 })
     expect(rows).toEqual({ testnet: 0, mainnet: 0 })
-    expect(mockQuery.mock.calls.map(c => c[1][0])).toEqual(['testnet', 'mainnet'])
+    // Each network drains until a batch comes back empty, so it is visited
+    // more than once; the order of networks is what this test is about.
+    expect([...new Set(mockQuery.mock.calls.map(c => c[1][0]))]).toEqual(['testnet', 'mainnet'])
   })
 
   it('prunes only the active network when ENABLED_NETWORKS is unset', async () => {
@@ -145,17 +147,21 @@ describe('pruneAllNetworks', () => {
     const counts = await pruneAllNetworks()
 
     expect(Object.keys(counts)).toEqual([activeNetwork])
-    expect(mockQuery).toHaveBeenCalledTimes(1)
+    expect([...new Set(mockQuery.mock.calls.map(c => c[1][0]))]).toEqual([activeNetwork])
   })
 
   it('still prunes the other network when one fails, then reports the failure', async () => {
     process.env.ENABLED_NETWORKS = 'testnet,mainnet'
+    let mainnetBatches = 0
     mockQuery.mockImplementation(async (_sql: string, params: unknown[]) => {
       if (params[0] === 'testnet') throw new Error('boom')
-      return { rowCount: 3 }
+      // One batch of rows, then empty: a mock that always reports rows would
+      // keep the drain loop going forever.
+      mainnetBatches += 1
+      return { rowCount: mainnetBatches === 1 ? 3 : 0 }
     })
 
     await expect(pruneAllNetworks()).rejects.toThrow(/testnet: boom/)
-    expect(mockQuery.mock.calls.map(c => c[1][0])).toEqual(['testnet', 'mainnet'])
+    expect([...new Set(mockQuery.mock.calls.map(c => c[1][0]))]).toEqual(['testnet', 'mainnet'])
   })
 })
