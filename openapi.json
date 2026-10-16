@@ -606,6 +606,33 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "network": {
+                      "type": "string",
+                      "enum": [
+                        "testnet",
+                        "mainnet"
+                      ]
+                    },
+                    "criteria": {
+                      "type": "object",
+                      "properties": {
+                        "volumeWindowHours": {
+                          "type": "integer"
+                        },
+                        "minVolume": {
+                          "type": "number"
+                        },
+                        "minVenues": {
+                          "type": "integer"
+                        },
+                        "referenceSize": {
+                          "type": "number"
+                        },
+                        "maxSlippagePct": {
+                          "type": "number"
+                        }
+                      }
+                    },
                     "pairs": {
                       "type": "array",
                       "items": {
@@ -628,6 +655,89 @@
                             "type": "string",
                             "format": "date-time",
                             "nullable": true
+                          },
+                          "tradeable": {
+                            "type": "boolean"
+                          },
+                          "reasons": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "criteriaPassed": {
+                            "type": "object",
+                            "properties": {
+                              "volume": {
+                                "type": "boolean"
+                              },
+                              "venues": {
+                                "type": "boolean"
+                              },
+                              "depth": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "metrics": {
+                            "type": "object",
+                            "properties": {
+                              "volume": {
+                                "type": "number"
+                              },
+                              "venueCount": {
+                                "type": "integer"
+                              },
+                              "depth": {
+                                "type": "object",
+                                "properties": {
+                                  "referenceSize": {
+                                    "type": "number"
+                                  },
+                                  "available": {
+                                    "type": "boolean"
+                                  },
+                                  "spotPrice": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "executionPrice": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "slippagePct": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "poolsEvaluated": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "provenance": {
+                            "type": "object",
+                            "properties": {
+                              "venues": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "sampleCount": {
+                                "type": "integer"
+                              },
+                              "freshnessSeconds": {
+                                "type": "integer",
+                                "nullable": true
+                              },
+                              "lastSeen": {
+                                "type": "string",
+                                "format": "date-time",
+                                "nullable": true
+                              }
+                            }
                           }
                         }
                       }

@@ -225,5 +225,70 @@ describe('GET /pairs', () => {
       expect(body.pairs[0]).toMatchObject({ pairKey: 'QUIET/X', latestPrice: 1.5, lastUpdated: old.toISOString() })
       expect(body.pairs[1]).toMatchObject({ pairKey: 'NEW/Y', latestPrice: null, lastUpdated: null })
     })
+
+    it('returns tradeable flag, reasons, criteria, and provenance per pair and echoes network', async () => {
+      mockGetActivePairs.mockReturnValue([pair('USDC/XLM')])
+      const now = new Date('2026-10-16T12:00:00Z')
+
+      mockQuery.mockImplementation(async (sql: string, params: any[]) => {
+        if (sql.includes('CROSS JOIN LATERAL')) {
+          return { rows: [{ pair_key: 'USDC/XLM', price: '0.12', timestamp: now }] }
+        }
+        if (sql.includes('SELECT pair_key') && sql.includes('COALESCE(SUM(base_volume::numeric), 0)')) {
+          return {
+            rows: [
+              {
+                pair_key: 'USDC/XLM',
+                volume: '500',
+                trade_count: '25',
+                venues: ['SDEX', 'AMM'],
+                last_timestamp: now,
+              },
+            ],
+          }
+        }
+        if (sql.includes('FROM pool_snapshots ps')) {
+          return {
+            rows: [
+              {
+                pair_key: 'USDC/XLM',
+                pool_id: 'pool-1',
+                reserve_a: '10000',
+                reserve_b: '10000',
+                fee_bp: 30,
+                timestamp: now,
+              },
+            ],
+          }
+        }
+        return { rows: [] }
+      })
+
+      const app = await buildApp()
+      const res = await app.inject({ method: 'GET', url: '/pairs?network=testnet' })
+      expect(res.statusCode).toBe(200)
+
+      const body = res.json()
+      expect(body.network).toBe('testnet')
+      expect(body.criteria).toBeDefined()
+      expect(body.criteria.minVolume).toBe(100)
+      expect(body.criteria.minVenues).toBe(2)
+
+      expect(body.pairs).toHaveLength(1)
+      const p = body.pairs[0]
+      expect(p.pairKey).toBe('USDC/XLM')
+      expect(p.tradeable).toBe(true)
+      expect(p.reasons).toEqual([])
+      expect(p.criteriaPassed).toEqual({
+        volume: true,
+        venues: true,
+        depth: true,
+      })
+      expect(p.provenance.venues).toEqual(['AMM', 'SDEX'])
+      expect(p.provenance.sampleCount).toBe(25)
+      expect(p.metrics.volume).toBe(500)
+      expect(p.metrics.venueCount).toBe(2)
+      expect(p.metrics.depth.available).toBe(true)
+    })
   })
 })
