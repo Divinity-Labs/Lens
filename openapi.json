@@ -941,6 +941,71 @@
         }
       }
     },
+    "/price/volatility/{assetA}/{assetB}": {
+      "get": {
+        "operationId": "getVolatility",
+        "summary": "Get realized volatility for a trading pair",
+        "description": "Realised volatility per pair over configurable windows, annualised, with the method named, sample count, observed venues, and freshness. Refuses with 422 if sample count is below the required threshold.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetA",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assetB",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "description": "Lookback window in minutes.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 43200,
+              "default": 60
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Realized volatility result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolatilityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "422": {
+            "description": "Insufficient samples to compute volatility"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "description": "Volatility computation failed"
+          }
+        }
+      }
+    },
     "/volumes/{asset}": {
       "get": {
         "operationId": "getVolumes",
@@ -2221,6 +2286,71 @@
               "iqr",
               "modified_zscore"
             ]
+          }
+        }
+      },
+      "VolatilityResponse": {
+        "type": "object",
+        "required": [
+          "assetA",
+          "assetB",
+          "pairKey",
+          "network",
+          "windowMinutes",
+          "annualizedVolatility",
+          "method",
+          "sampleCount",
+          "venues",
+          "freshnessSeconds",
+          "startTime",
+          "endTime"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "assetA": {
+            "type": "string"
+          },
+          "assetB": {
+            "type": "string"
+          },
+          "pairKey": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "windowMinutes": {
+            "type": "integer"
+          },
+          "annualizedVolatility": {
+            "type": "number"
+          },
+          "method": {
+            "type": "string"
+          },
+          "sampleCount": {
+            "type": "integer"
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshnessSeconds": {
+            "type": "integer"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
