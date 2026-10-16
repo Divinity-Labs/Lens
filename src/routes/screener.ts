@@ -192,10 +192,10 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
         latest_aggregates AS (
           SELECT DISTINCT ON (pair_key)
             pair_key,
-            COALESCE(volume::float, 0) AS volume,
-            COALESCE(close_price::float, 0) AS price,
+            COALESCE(volume, 0) AS volume,
+            COALESCE(close_price, 0) AS price,
             CASE 
-              WHEN open_price > 0 THEN ((close_price::float - open_price::float) / open_price::float) * 100 
+              WHEN open_price > 0 THEN ((close_price - open_price) / open_price) * 100
               ELSE 0 
             END AS change_24h
           FROM price_aggregates
@@ -208,7 +208,7 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
             la.volume,
             la.price,
             la.change_24h,
-            COALESCE(pl.liquidity::float, 0) AS liquidity
+            COALESCE(pl.liquidity, 0) AS liquidity
           FROM latest_aggregates la
           LEFT JOIN pair_liquidity pl ON pl.pair_key = la.pair_key
         )
@@ -230,12 +230,22 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       let nextCursor = null
       if (hasMore && data.length > 0) {
         const lastRecord = data[data.length - 1]
-        const cursorPayload = JSON.stringify([lastRecord[sortBy], lastRecord.pair_key])
+        const cursorValue = lastRecord[sortBy]
+        const cursorPayload = JSON.stringify([
+          typeof cursorValue === 'string' && Number.isFinite(Number(cursorValue)) ? Number(cursorValue) : cursorValue,
+          lastRecord.pair_key,
+        ])
         nextCursor = Buffer.from(cursorPayload).toString('base64')
       }
 
       return {
-        data,
+        data: data.map(row => ({
+          ...row,
+          volume: Number(row.volume),
+          price: Number(row.price),
+          change_24h: Number(row.change_24h),
+          liquidity: Number(row.liquidity),
+        })),
         nextCursor,
         hasMore,
         total: null,

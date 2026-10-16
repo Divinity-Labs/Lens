@@ -177,9 +177,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       }
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
+        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
+                volume, trade_count, open_price, close_price, high_price, low_price
          FROM price_aggregates
          WHERE pair_key = $1 AND window = $2 AND network = $3
          ORDER BY bucket DESC
@@ -193,15 +192,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         window,
         buckets: result.rows.map(r => ({
           bucket: r.bucket,
-          vwap: r.vwap,
-          sdexVwap: r.sdex_vwap,
-          ammVwap: r.amm_vwap,
-          volume: r.volume,
+          vwap: Number(r.vwap),
+          sdexVwap: r.sdex_vwap === null ? null : Number(r.sdex_vwap),
+          ammVwap: r.amm_vwap === null ? null : Number(r.amm_vwap),
+          volume: Number(r.volume),
           tradeCount: r.trade_count,
-          open: r.open_price,
-          close: r.close_price,
-          high: r.high_price,
-          low: r.low_price,
+          open: r.open_price === null ? null : Number(r.open_price),
+          close: r.close_price === null ? null : Number(r.close_price),
+          high: r.high_price === null ? null : Number(r.high_price),
+          low: r.low_price === null ? null : Number(r.low_price),
         })),
       }
     }
@@ -228,7 +227,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           WHERE ids.pool_id IS NOT NULL
        )
        SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
+              l.reserve_a, l.reserve_b, l.spot_price, l.fee_bp, l.timestamp
          FROM ids
         CROSS JOIN LATERAL (
               SELECT * FROM pool_snapshots s
@@ -239,7 +238,14 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         WHERE ids.pool_id IS NOT NULL`,
       [network]
     )
-    return { pools: result.rows }
+    return {
+      pools: result.rows.map(pool => ({
+        ...pool,
+        reserve_a: Number(pool.reserve_a),
+        reserve_b: Number(pool.reserve_b),
+        spot_price: Number(pool.spot_price),
+      })),
+    }
   })
 
   // GET /price/:assetA/:assetB/depth?amount=1000
