@@ -11,6 +11,8 @@ import { pgPool } from '../db'
 import { config, activeNetwork } from '../config'
 import { parseAssetStr } from '../pairsRegistry'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
+import { getVolumes } from '../routes/volumes'
+import { computeSpreads, resolveSpreadsParams, SpreadsValidationError } from '../routes/spreads'
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
@@ -19,15 +21,14 @@ const PRICE_TOPIC = 'PRICE_UPDATED'
 
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
-// unexpected internal failure and masked.
+// unexpected internal failure and is masked.
 const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
 function isUserFacing(err: GraphQLError): boolean {
   // No originalError means graphql-js itself rejected the document (syntax or
   // validation), which only describes the caller's own query.
-  const original = err.originalError as
-    | { extensions?: { code?: unknown }; errors?: unknown; statusCode?: unknown }
+  const original = err.originalError as | { extensions?: { code?: unknown }; errors?: unknown; statusCode?: unknown }
     | undefined
   if (!original) return true
   // Mercurius wraps document validation failures (and other request-level
@@ -104,8 +105,57 @@ const schema = `
     pair: String!
     price: Float!
     ts: String!
-    """Which chain the price came from — testnet or mainnet."""
+    """Which chain the price came from -- testnet or mainnet."""
     network: String!
+  }
+
+  """
+  A single venue's contribution to the asset's volume. 'venue' identifies
+  the source (e.g. an SDEX order book or an AMM pool); 'volume' is that venue's
+  traded volume in the asset's own units over the requested window.
+  """
+  type VenueQuote {
+    venue: String!
+    volume: Float!
+    tradeCount: Int!
+  }
+
+  """
+  A single venue's quote for a pair over the requested window. Spread is taken
+  against the mid, in basis npoints. 'spreadPct' is 'spreadBps'/100.
+  """
+  type VenueSpread {
+    venue: String!
+    pairKey: String!
+    bid: Float!
+    ask: Float!
+    mid: Float!
+    spreadBps: Float!
+    spreadPct: Float!
+    observations: Int!
+    lastSeen: String!
+  }
+
+  type VolumeResult {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    totalVolume: Float!
+    tradeCount: Int!
+    venues: [String!]!
+    venueQuotes: [VenueQuote!]!
+  }
+
+  type SpreadResult {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    venues: [VenueSpread!]!
+    tightest: VenueSpread
   }
 
   type Query {
@@ -126,6 +176,10 @@ const schema = `
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
     getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
     listPairs: [String]!
+    """Per-venue volume for an asset, matching GET /volumes/:asset."""
+    volumes(asset: String!, window: String, network: String): VolumeResult
+    """Per-venue spread for an asset, matching GET /spreads/:asset."""
+    spreads(asset: String!, window: String, network: String): SpreadResult
   }
 
   type Subscription {
@@ -192,7 +246,7 @@ const resolvers = {
       }
 
       const agg = await getAggregatedPrice(pairKey, activeNetwork)
-      const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
+      const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, activeNetwork)
       return {
         assetA, assetB, pairKey, ...agg,
         bestRoute: route.route,
@@ -219,9 +273,10 @@ const resolvers = {
                 volume::float, trade_count, open_price::float, close_price::float,
                 high_price::float, low_price::float
          FROM price_aggregates
-         WHERE pair_key = $1 AND window = $2
+         WHERE bucket >= $1 AND pair_key = $2 AND window = $3
          ORDER BY bucket DESC
-         LIMIT $3`,
+         LIMIT $4
+        `,
         [pairKey, window, Math.min(limit, 1000)]
       )
       return result.rows.map(r => ({
@@ -242,6 +297,51 @@ const resolvers = {
     listPairs() {
       return config.pairs.map(p => p.pairKey)
     },
+
+    async volumes(
+      _: unknown,
+      { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
+    ) {
+      if (!parseAssetStr(asset)) {
+        throw new ErrorWithProps(
+          `Invalid asset: expected CODE or CODE:ISSUER, got "${asset}"`,
+          { code: 'INVALID_INPUT', field: 'asset' },
+        )
+      }
+      try {
+        return await getVolumes(asset, window ?? '24h', network ?? undefined)
+      } catch (err) {
+        const message = (err as Error).message
+        if (
+          message.startsWith('window must be one of:') ||
+          message === 'network must be one of: testnet, mainnet'
+        ) {
+          throw new ErrorWithProps(message, { code: 'INVALID_INPUT' })
+        }
+        throw err
+      }
+    },
+
+    async spreads(
+      _: unknown,
+      { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
+    ) {
+      if (!parseAssetStr(asset)) {
+        throw new ErrorWithProps(
+          `Invalid asset: expected CODE or CODE:ISSUER, got "${asset}"`,
+          { code: 'INVALID_INPUT', field: 'asset' },
+        )
+      }
+      try {
+        const params = resolveSpreadsParams({ asset, window, network })
+        return await computeSpreads(params)
+      } catch (err) {
+        if (err instanceof SpreadsValidationError) {
+          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
+        }
+        throw err
+      }
+    },
   },
 
   Subscription: {
@@ -252,18 +352,17 @@ const resolvers = {
         MercuriusContext,
         { pair: string; network?: string | null }
       >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
-        (payload, { pair, network }) =>
-          payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
-          (network == null || payload.priceUpdated.network === network)
+        async (_, args, ctx) => {
+          return ctx.app.pubsub.asyncIterator(PRICE_TOPIC)
+        },
+        (event, args) => {
+          const pair = event.pairUpdated.pair
+          if (pair !== args.pair) return false
+          if (args.network != null && event.pairUpdated.network !== args.network) return false
+          return true
+        },
       ),
+      resolve: (payload: { priceUpdated: PricePublishedEvent }) => payload.priceUpdated,
     },
   },
 }
@@ -273,30 +372,19 @@ export async function registerGraphQL(app: FastifyInstance) {
     schema,
     resolvers,
     graphiql: true,
+    subscription: true,
     errorFormatter: formatGraphQLErrors,
-    path: '/graphql',
-    subscription: {
-      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
-      // library) rather than the legacy `subscriptions-transport-ws`.
-      fullWsTransport: true,
-      wsDefaultSubprotocol: 'graphql-transport-ws',
-    },
   })
 
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
-  const onPricePublished = (event: PricePublishedEvent) => {
-    app.graphql.pubsub.publish({
-      topic: PRICE_TOPIC,
-      payload: { priceUpdated: event },
+  // Bridge the in-process price event bus onto the Mercurius pubsub topic.
+  // This listener is app-level and is attached once at registration time.
+  const onPrice = (payload: PricePublishedEvent) => {
+    app.pubsub.publish(PRICE_TOPIC, { priceUpdated: payload }).catch(err => {
+      app.log.error({ err }, 'failed to publish price update')
     })
   }
-  priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
-
-  // Detach the listener when the server shuts down so repeated
-  // register/close cycles (e.g. in tests) don't leak listeners.
+  priceEmitter.on(PRICE_PUBLISHED, onPrice)
   app.addHook('onClose', async () => {
-    priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
+    priceEmitter.off(PRICE_PUBLISHED, onPrice)
   })
 }

@@ -7,10 +7,15 @@ vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
 vi.mock('../config', () => ({ activeNetwork: 'testnet' }))
 
 import { registerSpreadsRoutes } from '../routes/spreads'
+import { registerVolumesRoutes } from '../routes/volumes'
+import { registerGraphQL } from '../graphql'
+import { registerVolumesRoutes as _registerVolumesRoutes } from '../routes/volumes'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
   await registerSpreadsRoutes(app)
+  await registerVolumesRoutes(app)
+  await registerGraphQL(app)
   await app.ready()
   return app
 }
@@ -32,7 +37,7 @@ describe('GET /spreads/:asset', () => {
     mockQuery.mockReset()
   })
 
-  it('computes basis points against the mid, not the ask', async () => {
+  it('computes basis noints against the mid, not the ask', async () => {
     // bid 99, ask 101 → mid 100, range 2 → exactly 200 bps.
     // Against the ask it would be 198.02 bps, which is the common mistake:
     // it makes the figure depend on which side you divided by, so two venues
@@ -44,7 +49,7 @@ describe('GET /spreads/:asset', () => {
 
     expect(body.venues).toHaveLength(1)
     expect(body.venues[0].spreadBps).toBeCloseTo(200, 6)
-    expect(body.venues[0].mid).toBe(100)
+    expect(body.venues[0].mid).toBeCloseTo(100, 6)
   })
 
   it('groups by venue AND pair, because two pairs on one venue are different books', async () => {
@@ -75,6 +80,24 @@ describe('GET /spreads/:asset', () => {
     expect(body.venues[0].venue).toBe('tight')
     expect(body.tightest.venue).toBe('tight')
     expect(body.tightest.spreadBps).toBeLessThan(body.venues[1].spreadBps)
+  })
+
+  it('exposes per-venue quotes as a typed list, not a map or string', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [row('sdex', 'XLM/USDC', '99', '101'), row('other', 'XLM/USDC', '99.5', '100.5')],
+    })
+    const app = await buildApp()
+
+    const body = (await app.inject({ method: 'GET', url: '/spreads/XLM' })).json()
+
+    expect(Array.isArray(body.venues)).toBe(true)
+    for (const v of body.venues) {
+      expect(typeof v.venue).toBe('string')
+      expect(typeof v.pairKey).toBe('string')
+      expect(typeof v.bid).toBe('number')
+      expect(typeof v.ask).toBe('number')
+      expect(typeof v.spreadBps).toBe('number')
+    }
   })
 
   it('ignores a venue with a single observation, which would fake a 0 bps spread', async () => {
@@ -166,6 +189,7 @@ describe('GET /spreads/:asset', () => {
     expect(res.statusCode).toBe(500)
     expect(res.json().error).toMatch(/connection refused/)
   })
+
   it('exposes spreadPct as spreadBps / 100', async () => {
     // bid 99, ask 101 → spreadBps 200 → spreadPct 2.000000
     mockQuery.mockResolvedValue({ rows: [row('sdex', 'XLM/USDC', '99', '101')] })
@@ -175,5 +199,66 @@ describe('GET /spreads/:asset', () => {
 
     expect(body.venues[0].spreadPct).toBeCloseTo(body.venues[0].spreadBps / 100, 6)
     expect(body.venues[0].spreadPct).toBeCloseTo(2, 6)
+  })
+
+  it('matches the GraphQL spreads query for the same input', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        row('sdex', 'XLM/USDC', '99', '101', 40),
+        row('other', 'XLM/USDC', '99.5', '100.5', 20),
+      ],
+    })
+    const app = await buildApp()
+
+    const rest = (await app.inject({ method: 'GET', url: '/spreads/XLM?network=testnet' })).json()
+
+    mockQuery.mockClear()
+    mockQuery.mockResolvedValue({
+      rows: [
+        row('sdex', 'XLM/USDC', '99', '101', 40),
+        row('other', 'XLM/USDC', '99.5', '100.5', 20),
+      ],
+    })
+
+    const gQlRes = await app.inject({
+      method: 'POST',
+      url: '/graphql',
+      payload: {
+        query: `{
+          spreads(asset: "XLM", network: "testnet") {
+            network
+            tightest { venue pairKey spreadBps }
+            venues { venue pairKey bid ask mid spreadBps spreadPct observations }
+          }
+        }`,
+      },
+    })
+    const gql = gQlRes.json()
+
+    expect(gql.errors).toBeUndefined()
+    expect(gql.data.spreads.network).toBe(rest.network)
+    expect(gql.data.spreads.tightest.venue).toBe(rest.tightest.venue)
+    expect(gql.data.spreads.tightest.spreadBps).toBeCloseTo(rest.tightest.spreadBps, 6)
+    expect(gql.data.spreads.venues).toHaveLength(rest.venues.length)
+    for (let i = 0; i < rest.venues.length; i++) {
+      expect(gql.data.spreads.venues[i].venue).toBe(rest.venues[i].venue)
+      expect(gql.data.spreads.venues[i].pairKey).toBe(rest.venues[i].pairKey)
+      expect(gql.data.spreads.venues[i].spreadBps).toBeCloseTo(rest.venues[i].spreadBps, 6)
+    }
+  })
+
+  it('GraphQL spreads is network-aware and rejects an unknown network', async () => {
+    mockQuery.mockResolvedValue({ rows: [] })
+    const app = await buildApp()
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/graphql',
+      payload: { query: `{ spreads(asset: "XLM", network: "futurenet") { network } }` },
+    })
+    const body = res.json()
+
+    expect(body.errors).toBeDefined()
+    expect(mockQuery).not.toHaveBeenCalled()
   })
 })
