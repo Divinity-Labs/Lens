@@ -1,38 +1,55 @@
 import { pgPool } from '../db'
 
+export interface AggregateBreakdown {
+  source: string
+  price: number
+  volume: number
+  excluded: boolean
+  reason?: string
+}
+
+export interface AggregateResult {
+  composite: number
+  breakdown: AggregateBreakdown[]
+  /** The method used to produce the composite. */
+  method: string
+  /** The parameters the method was called with. */
+  parameters: Record<string, unknown>
+}
+
 /**
  * Aggregate price for a pair across sources (SDEX, AMM) weighted by volume.
  * Sources that deviate from the weighted average by more than the provided
  * threshold are excluded from the final composite price.
  *
+ * The `network` argument is required and always applied as a predicate,
+ * because the `network` column leads both `price_points` indexes — a query
+ * without it reads both chains and cannot use the index.
+ *
  * @param pairKey The pair identifier (e.g., "XLM/USDC").
+ * @param network The Stellar network ("testnet" | "mainnet").
  * @param deviationThreshold Fractional threshold (e.g., 0.05 for 5%).
- * @returns Composite price and per‑source breakdown.
+ * @returns Composite price, per-source breakdown, and the method + params.
  */
 export async function aggregatePrice(
   pairKey: string,
+  network: string,
   deviationThreshold: number = 0.05,
-): Promise<{
-  composite: number
-  breakdown: Array<{
-    source: string
-    price: number
-    volume: number
-    excluded: boolean
-    reason?: string
-  }>
-}> {
-  // Fetch VWAP and volume per source for the last hour.
+): Promise<AggregateResult> {
+  // Fetch VWAP and volume per source for the last hour. The network
+  // predicate is always applied so the query uses the
+  // (network, pair_key, timestamp) index and never reads the other chain.
   const result = await pgPool.query(
     `SELECT
        source,
        COALESCE(SUM(price::numeric * base_volume::numeric), 0) / NULLIF(SUM(base_volume::numeric), 0) AS vwap,
        SUM(base_volume::numeric) AS volume
      FROM price_points
-     WHERE pair_key = $1
+     WHERE network = $1
+       AND pair_key = $2
        AND timestamp > NOW() - INTERVAL '1 hour'
      GROUP BY source`,
-    [pairKey]
+    [network, pairKey]
   )
 
   const sources = result.rows.map((row: any) => ({
@@ -60,10 +77,15 @@ export async function aggregatePrice(
     }
   }
 
-  // Re‑calculate composite using only non‑excluded sources.
+  // Re‐calculate composite using only non-‐excluded sources.
   const included = sources.filter(s => !s.excluded)
   const includedVolume = included.reduce((sum, s) => sum + s.volume, 0)
   const composite = includedVolume === 0 ? 0 : included.reduce((sum, s) => sum + s.price * s.volume, 0) / includedVolume
 
-  return { composite, breakdown: sources }
+  return {
+    composite,
+    breakdown: sources,
+    method: 'deviation-weighted-vwap',
+    parameters: { deviationThreshold, windowMinutes: 60 },
+  }
 }

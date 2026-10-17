@@ -6,8 +6,8 @@
  *      which lets Fastify auto-generate a correct OpenAPI/Swagger spec and use
  *      fast, schema-aware serialization.
  *   2. In non-production environments they additionally *validate* the outgoing
- *      payload (see `installResponseValidation`), so an accidental change to a
- *      response shape fails loudly in tests instead of shipping silently.
+ *      payload (see `installResponseValidation`), so an accidental change to
+ *      a response shape fails loudly in tests instead of shipping silently.
  *
  * NOTE: response validation has no runtime impact in production — it is only
  * installed when NODE_ENV !== 'production'. In production Fastify falls back to
@@ -149,6 +149,90 @@ export const historyResponseSchema = {
           low: { type: ['number', 'null'] },
         },
       },
+    },
+  },
+} as const
+
+/**
+ * GET /price/:assetA/:assetB/audit
+ *
+ * The audit record for a past bucket, returned so a dispute can be
+ * settled from the stored inputs alone.
+ */
+export const priceAuditResponseSchema = {
+  type: 'object',
+  required: [
+    'network',
+    'pairKey',
+    'window',
+    'bucket',
+    'method',
+    'parameters',
+    'price',
+    'inputs',
+    'rejected',
+    'truncated',
+    'createdAt',
+  ],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    pairKey: { type: 'string' },
+    window: { type: 'string', enum: ['1m', '5m', '1h', '24h'] },
+    bucket: {},
+    method: { type: 'string' },
+    parameters: { type: 'object', additionalProperties: true },
+    price: { type: 'number' },
+    inputs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'price', 'volume'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          price: { type: 'number' },
+          volume: { type: 'number' },
+        },
+      },
+    },
+    rejected: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'price', 'volume', 'reason'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          price: { type: 'number' },
+          volume: { type: 'number' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+    truncated: { type: 'integer' },
+    createdAt: {},
+  },
+} as const
+
+/**
+ * GET /price/:assetA/:assetB/audit/reconstruct
+ *
+ * Reconstructs the price a past audit record produced.
+ */
+export const priceReconstructResponseSchema = {
+  type: 'object',
+  required: ['network', 'pairKey', 'window', 'bucket', 'price', 'record'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    pairKey: { type: 'string' },
+    window: { type: 'string', enum: ['1m', '5m', '1h', '24h'] },
+    bucket: {},
+    price: { type: ['number', 'null'] },
+    record: {
+      type: ['object', 'null'],
+      additionalProperties: true,
     },
   },
 } as const

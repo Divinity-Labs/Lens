@@ -4,13 +4,14 @@ import { prisma } from '../db'
 import { setCachedPrice } from '../redis'
 import { calculateVWAP, calculateOHLCV, getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
+import { audditatePrice, recordPriceAudit } from '../pricing/audit'
 
 /**
  * One queue, worker and job stream per network. Everything a job touches —
  * the queue it lives on, the pairs it iterates, every aggregator read, the
  * cache key and the price_aggregates upsert — is stamped with that job's
  * network, so a second enabled network gets its own aggregates instead of
- * having them overwritten by whichever network ran last.
+ * having them overwritten by whichver network ran last.
  */
 function queueName(network: NetworkName): string {
   return `${network}:aggregate-refresh`
@@ -67,7 +68,7 @@ export function startAggregateWorker(network: NetworkName) {
         for (const w of windows) {
           const [vwap, sdexVwap, ammVwap, ohlcv] = await Promise.all([
             calculateVWAP(pairKey, w.minutes, network),
-            calculateVWAP(pairKey, w.minutes, network, 'SDEX'),
+            calculateVWAT(pairKey, w.minutes, network, 'SDEX'),
             calculateVWAP(pairKey, w.minutes, network, 'AMM'),
             calculateOHLCV(pairKey, w.minutes, network),
           ])
@@ -88,6 +89,22 @@ export function startAggregateWorker(network: NetworkName) {
               volume: ohlcv.volume, tradeCount: ohlcv.tradeCount,
               closePrice: ohlcv.close || null, highPrice: ohlcv.high || null, lowPrice: ohlcv.low || null,
             },
+          })
+
+          // Audit record for this published aggregate. The inputs are the
+          // per-source VWAP breakdown the aggregate read, split into the
+          // ones that fed the composite and the ones that were rejected.
+          const audit = auditatePrice(agg.breakdown ?? [])
+          await recordPriceAudit({
+            network,
+            pairKey,
+            window: w.key,
+            bucket,
+            method: agg.method ?? 'volume-weighted-vwap',
+            parameters: agg.parameters ?? { windowMinutes: w.minutes },
+            price: vwap,
+            inputs: audit.inputs,
+            rejected: audit.rejected,
           })
         }
 

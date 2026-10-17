@@ -18,11 +18,11 @@ model PricePoint {
   source        String
   poolId        String?  @map("pool_id")
   price         Decimal  @db.Decimal(36, 18)
-  baseVolume    Decimal  @map("base_volume") @db.Decimal(36, 7)
+  baseVolume    Decimal  @map("base_volume")  @db.Decimal(36, 7)
   counterVolume Decimal  @map("counter_volume") @db.Decimal(36, 7)
   ledger        Int
   timestamp     DateTime
-  eventId       String?  @map("event_id")
+  eventId        String?  @map("event_id")
 
   @@id([id, timestamp])
   @@index([network, pairKey, timestamp(sort: Desc)])
@@ -36,13 +36,13 @@ model PoolSnapshot {
   poolId      String   @map("pool_id")
   assetA      String   @map("asset_a")
   assetB      String   @map("asset_b")
-  reserveA    Decimal  @map("reserve_a") @db.Decimal(36, 7)
-  reserveB    Decimal  @map("reserve_b") @db.Decimal(36, 7)
-  spotPrice   Decimal  @map("spot_price") @db.Decimal(36, 18)
+  reserveA    Decimal  @map("reserve_a")  @db.Decimal(36, 7)
+  reserveB    Decimal  @map("reserve_b")  @db.Decimal(36, 7)
+  spotPrice   Decimal  @map("spot_price")  @db.Decimal(36, 18)
   totalShares Decimal? @map("total_shares") @db.Decimal(36, 7)
-  feeBp       Int      @default(30) @map("fee_bp")
-  ledger      Int
-  timestamp   DateTime
+  feeBp       Int      @default(30)  @map("fee_bp")
+  ledger        Int
+  timestamp     DateTime
 
   @@id([id, timestamp])
   @@index([network, poolId, timestamp(sort: Desc)])
@@ -56,15 +56,15 @@ model PriceAggregate {
   bucket      DateTime
   vwap        Decimal  @db.Decimal(36, 18)
   sdexVwap    Decimal? @map("sdex_vwap") @db.Decimal(36, 18)
-  ammVwap     Decimal? @map("amm_vwap") @db.Decimal(36, 18)
+  ammVwap     Decimal? @map("amm_vwap")  @db.Decimal(36, 18)
   volume      Decimal  @default(0) @db.Decimal(36, 7)
-  sdexVolume  Decimal? @default(0) @map("sdex_volume") @db.Decimal(36, 7)
-  ammVolume   Decimal? @default(0) @map("amm_volume") @db.Decimal(36, 7)
+  sdexVolume  Decimal? @default(0) @map("sdex_volume")  @db.Decimal(36, 7)
+  ammVolume   Decimal? @default(0) @map("amm_volume")   @db.Decimal(36, 7)
   tradeCount  Int?     @default(0) @map("trade_count")
-  openPrice   Decimal? @map("open_price") @db.Decimal(36, 18)
+  openPrice   Decimal? @map("open_price")  @db.Decimal(36, 18)
   closePrice  Decimal? @map("close_price") @db.Decimal(36, 18)
-  highPrice   Decimal? @map("high_price") @db.Decimal(36, 18)
-  lowPrice    Decimal? @map("low_price") @db.Decimal(36, 18)
+  highPrice   Decimal? @map("high_price")  @db.Decimal(36, 18)
+  lowPrice    Decimal? @map("low_price")   @db.Decimal(36, 18)
 
   @@id([network, pairKey, window, bucket])
   @@map("price_aggregates")
@@ -95,13 +95,13 @@ model IndexerState {
 }
 
 model PairConfig {
-  pairKey   String   @map("pair_key")
-  network   String   @default("testnet")
-  assetACode   String   @map("asset_a_code")
-  assetAIssuer String?  @map("asset_a_issuer")
-  assetBCode   String   @map("asset_b_code")
-  assetBIssuer String?  @map("asset_b_issuer")
-  addedAt   DateTime @default(now()) @map("added_at")
+  pairKey       String   @map("pair_key")
+  network       String   @default("testnet")
+  assetACode     String   @map("asset_a_code")
+  assetAIssuer  String?  @map("asset_a_issuer")
+  assetBCode     String   @map("asset_b_code")
+  assetBIssuer  String?  @map("asset_b_issuer")
+  addedAt       DateTime @default(now()) @map("added_at")
 
   @@id([network, pairKey])
   @@map("pair_configs")
@@ -163,8 +163,8 @@ model BazaarResource {
   accepts Json
 
   /// The `payTo` address extracted from accepts[0] for indexed filtering.
-  /// Denormalized on write because Postgres cannot efficiently index into a
-  /// JSON array element without a functional/GIN index per accepted scheme,
+  /// Denormalized on write because Postgres cannot efficiently index into
+  /// a JSON array element without a functional/GIN index per accepted scheme,
   /// and payTo is the one field the spec calls out as a top-level filter.
   payTo String @map("pay_to")
 
@@ -180,7 +180,7 @@ model BazaarResource {
 
   /// Any other declared extension keys beyond "bazaar" (spec's `extensions`
   /// filter matches on presence of a key here, "bazaar" always included).
-  extensionKeys String[] @default(["bazaar"]) @map("extension_keys")
+  extensionKeys String[] @default(["bazaar"]) $map("extension_keys")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
@@ -242,15 +242,15 @@ model SettlementAttempt {
 }
 
 model Webhook {
-  id        String   @id @default(uuid())
-  network   String   @default("testnet")
+  id        String   @default(uuid())
+  network    String   @default("testnet")
   url       String
   assetA    String   @map("asset_a")
   assetB    String   @map("asset_b")
   threshold Float
   direction String
   secret    String
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) $map("created_at")
 
   @@index([network, assetA, assetB])
   @@map("webhooks")
@@ -265,8 +265,47 @@ model ApiKey {
   revokedAt        DateTime? @map("revoked_at")
   createdAt        DateTime  @default(now()) @map("created_at")
   monthlyQuotaCents Int?     @default(10000) @map("monthly_quota_cents")
-  dailyQuotaCents  Int?      @default(500) @map("daily_quota_cents")
-  overagePolicy    String    @default("block") @map("overage_policy")
+  dailyQuotaCents  Int?     @default(500) $map("daily_quota_cents")
+  overagePolicy    String   @default("block") $map("overage_policy")
 
   @@map("api_keys")
+}
+
+/// Audit record for a published aggregate price.
+///
+/// Written on every aggregation that publishes a price, so a dispute can be
+/// settled by reconstructing which inputs the aggregate used, which were
+/// rejected and why, and the method + parameters applied.
+///
+/// Size is bounded by `inputs` and `rejected` being capped at
+/// MAX_AUDIT_INPUTS (default 50) entries each at write time — see
+/// src/pricing/audit.ts. The cap is documented in docs/architecture.md.
+model PriceAuditRecord {
+  id       String   @id @default(uuid())
+  network   String   @default("testnet")
+  pairKey   String   @map("pair_key")
+  window     String
+  bucket     DateTime
+  method     String
+  /// Method parameters (e.g. deviationThreshold, weighting) as a JSON object.
+  parameters Json
+  /// The published composite price, stored as a string to preserve Decimal(36,18)
+  /// precision without a float round-trip.
+  price      String
+  /// Inputs the aggregate used: [{ source, price, volume }], capped.
+  inputs     Json
+  /// Rejected inputs with reason: [{ source, price, volume, reason }], capped.
+  rejected   Json
+  /// Number of inputs that were dropped because the cap was hit.
+  truncated  Int     @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  /// One record per (network, pair, window, bucket) — the same key as the
+  /// aggregate it audits, so a record is upserted alongside it and never
+  /// duplicated by a repeat job.
+  @@unique([network, pairKey, window, bucket], name: "price_audit_identity", map: "price_audit_identity")
+  /// Retrieval for a past timestamp leads with the network predicate, like
+  /// every other index in this schema.
+  @@index([network, pairKey, bucket(sort: Desc)])
+  @@map("price_audit_records")
 }

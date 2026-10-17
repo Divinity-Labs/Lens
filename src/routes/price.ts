@@ -3,6 +3,8 @@ import { computeTWAP, computeVWAP } from '../pricing/twap'
 import { z } from 'zod'
 import '../middleware/network'
 import { activeNetwork, type NetworkName } from '../config'
+import { getAuditRecord, reconstructFromAudit } from '../pricing/audit'
+import { prisma } from '../db'
 
 const TwapQuerySchema = z.object({
   window: z.coerce.number().int().min(1).max(1440).default(60),
@@ -15,6 +17,12 @@ const VwapQuerySchema = z.object({
   window: z.coerce.number().int().min(1).max(1440).default(60),
   source: z.enum(['SDEX', 'AMM']).optional(),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
+})
+
+const AuditQuerySchema = z.object({
+  pairKey: z.string().min(1),
+  timestamp: z.coerce.number().int().min(0),
+  network: z.enum(['testnet', 'mainnet']).optional(),
 })
 
 /**
@@ -120,6 +128,49 @@ export async function registerPriceRoutes(app: FastifyInstance) {
         // Same as TWAP above: the driver message can contain credentials.
         console.error('[price] VWAP computation failed:', (err as Error).message)
         return reply.status(500).send({ error: 'VWAP computation failed' })
+      }
+    }
+  )
+
+  // ─── AUDIT ───────────────────────────────────────────────────────────────────
+  // Reconstruct a past published aggregate from its audit record so a dispute
+  // can be settled. The record captures the inputs used, the inputs rejected
+  // with their reason, and the method and its parameters. Storage is bounded:
+  // one row per published aggregate, retained for AUDIT_RETENTION_DAYS (see
+  // src/pricing/audit.ts), after which rows are pruned by the retention job.
+  app.get<{
+    Querystring: { pairKey?: string; timestamp?: string; network?: string }
+  }>(
+    '/price/audit',
+    async (req, reply) => {
+      const parsed = AuditQuerySchema.safeParse(req.query)
+      if (!parsed.success) {
+        return reply.status(400).send({ error: parsed.error.issues[0].message || 'Invalid parameters' })
+      }
+      const { pairKey, timestamp } = parsed.data
+      const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
+
+      try {
+        const record = await getAuditRecord(prisma, pairKey, timestamp, network)
+        if (!record) {
+          return reply.status(404).send({ error: 'No audit record for that pair and timestamp' })
+        }
+        const reconstructed = reconstructFromAudit(record)
+        return {
+          pairKey,
+          network,
+          timestamp,
+          method: record.method,
+          parameters: record.parameters,
+          inputsUsed: record.inputsUsed,
+          inputsRejected: record.inputsRejected,
+          price: reconstructed.price,
+          volumeTotal: reconstructed.volumeTotal,
+          sampleCount: record.inputsUsed.length,
+        }
+      } catch (err) {
+        console.error('[price] audit lookup failed:', (err as Error).message)
+        return reply.status(500).send({ error: 'Audit lookup failed' })
       }
     }
   )
