@@ -33,8 +33,13 @@ async function main() {
     ]
   });
 
+  const allowedHosts = process.env.MCP_ALLOWED_HOSTS
+    ? process.env.MCP_ALLOWED_HOSTS.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+
   const server = new BazaarMcpServer({
-    fetchWithPayment
+    fetchWithPayment,
+    allowedHosts,
   });
 
   console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
