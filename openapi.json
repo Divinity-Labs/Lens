@@ -1259,6 +1259,7 @@
             "name": "liquidity",
             "in": "query",
             "required": false,
+            "description": "Filter for pairs with total AMM pool liquidity greater than or equal to this value. Liquidity is defined as the sum across all active AMM pools for the pair of (reserve_a * spot_price + reserve_b), valued in the quote asset (asset_b) at the latest snapshot spot price.",
             "schema": {
               "type": "number"
             }
@@ -1382,6 +1383,39 @@
           },
           "500": {
             "description": "Benchmark computation failed"
+          }
+        }
+      }
+    },
+    "/pegs": {
+      "get": {
+        "operationId": "getPegs",
+        "summary": "Get peg deviation and window statistics for all configured pegged assets",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of configured pegged assets and their peg deviations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PegsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid network parameter"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -2783,7 +2817,12 @@
             "type": "number"
           },
           "liquidity": {
-            "type": "number"
+            "type": "number",
+            "description": "Total liquidity across all active AMM pools for this pair on the network, computed as sum(reserve_a * spot_price + reserve_b), valued in the quote asset (asset_b) at each pool's latest snapshot spot price."
+          },
+          "liquidity_unit": {
+            "type": "string",
+            "description": "The asset symbol/identifier that liquidity is denominated in, corresponding to the counter/quote asset (asset_b) of the pair (the asset after the slash in pair_key)."
           }
         }
       },
@@ -2797,6 +2836,14 @@
         ],
         "additionalProperties": false,
         "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ],
+            "description": "The network answered for."
+          },
           "data": {
             "type": "array",
             "items": {
@@ -2875,6 +2922,113 @@
               "sampleCount": {
                 "type": "integer"
               }
+            }
+          }
+        }
+      },
+      "PegReport": {
+        "type": "object",
+        "required": [
+          "asset",
+          "code",
+          "issuer",
+          "target",
+          "targetPrice",
+          "pairKey",
+          "currentPrice",
+          "currentDeviationBps",
+          "worstDeviationBps",
+          "window",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string",
+            "nullable": true
+          },
+          "target": {
+            "type": "string"
+          },
+          "targetPrice": {
+            "type": "number"
+          },
+          "pairKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "currentPrice": {
+            "type": "number",
+            "nullable": true
+          },
+          "currentDeviationBps": {
+            "type": "number",
+            "nullable": true
+          },
+          "worstDeviationBps": {
+            "type": "number",
+            "nullable": true
+          },
+          "window": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "venues",
+              "sampleCount",
+              "freshnessSeconds",
+              "lastSampleTimestamp"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sampleCount": {
+                "type": "integer"
+              },
+              "freshnessSeconds": {
+                "type": "integer",
+                "nullable": true
+              },
+              "lastSampleTimestamp": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "PegsResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "pegs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "pegs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PegReport"
             }
           }
         }
