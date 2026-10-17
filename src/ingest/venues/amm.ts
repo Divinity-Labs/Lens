@@ -23,36 +23,37 @@ export function _getLastPrice(network: NetworkName, pairKey: string): number | u
 }
 
 export async function fetchPools(pair: WatchedPair, network: NetworkName = activeNetwork): Promise<any[]> {
-  try {
-    const assetAStr = pair.assetA.issuer
-      ? `${pair.assetA.code}:${pair.assetA.issuer}`
-      : 'native'
-    const assetBStr = pair.assetB.issuer
-      ? `${pair.assetB.code}:${pair.assetB.issuer}`
-      : 'native'
+  const assetAStr = pair.assetA.issuer
+    ? `${pair.assetA.code}:${pair.assetA.issuer}`
+    : 'native'
+  const assetBStr = pair.assetB.issuer
+    ? `${pair.assetB.code}:${pair.assetB.issuer}`
+    : 'native'
 
-    const params = new URLSearchParams()
-    params.append('reserves[]', assetAStr)
-    params.append('reserves[]', assetBStr)
-    params.set('limit', '10')
+  const params = new URLSearchParams()
+  params.append('reserves[]', assetAStr)
+  params.append('reserves[]', assetBStr)
+  params.set('limit', '10')
 
-    const response = await fetchWithTimeout(
-      `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`
+  // Let fetch failures propagate: an unreachable venue is distinct from an empty one.
+  const response = await fetchWithTimeout(
+    `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`
+  )
+  if (!response.ok) {
+    throw new Error(
+      `[amm] Fetch pools for ${pair.pairKey} failed: ${response.status} ${response.statusText}`
     )
-    const data = (await response.json()) as any
-    if (!data._embedded?.records) return []
-    return data._embedded.records
-  } catch (err) {
-    console.error(`[amm] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
-    return []
   }
+  const data = (await response.json()) as any
+  if (!data._embedded?.records) return []
+  return data._embedded.records
 }
 
 export async function snapshotPool(
   pool: any,
   pair: WatchedPair,
   network: NetworkName = activeNetwork
-): Promise<void> {
+ ): Promise<void> {
   try {
     const r0 = pool.reserves[0]
     const r1 = pool.reserves[1]
@@ -140,6 +141,11 @@ export async function ingestPoolTrades(
     const response = await fetchWithTimeout(
       `${getNetworkConfig(network).horizon.url}/liquidity_pools/${pool.id}/trades?cursor=${cursor}&limit=${config.indexer.ammPageSize}&order=asc`
     )
+    if (!response.ok) {
+      throw new Error(
+        `[amm] Trade fetch for pool ${pool.id} failed: ${response.status} ${response.statusText}`
+      )
+    }
     const data = (await response.json()) as any
     const records = data._embedded?.records ?? []
 
@@ -219,6 +225,8 @@ export async function ingestPoolTrades(
 }
 
 export async function ingestPair(pair: WatchedPair, network: NetworkName = activeNetwork): Promise<void> {
+  // A failed fetch throws and propagates to the caller instead of being reported
+  // as an empty venue.
   const pools = await fetchPools(pair, network)
   console.log(`[amm] ${pair.pairKey}: found ${pools.length} AMM pools`)
 
@@ -232,7 +240,7 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 
 export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
-  source: 'AMM',
+  source: 'AMM' ,
 
   isEnabled(_network: NetworkName): boolean {
     return true

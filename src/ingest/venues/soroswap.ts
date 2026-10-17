@@ -66,6 +66,20 @@ export interface PoolEntry {
   tokenB: SoroswapToken
 }
 
+// ── Failure signalling ────────────────────────────────────────────────────────
+
+/**
+ * Thrown when a venue fetch fails (RPC unreachable, HTTP error, etc.).
+ * Distinguishes a failed fetch from a genuinely empty result so callers can
+ * exclude the venue from aggregates rather than treating it as contributing zero.
+ */
+export class VenueFetchError extends Error {
+  constructor(public readonly venue: string, public readonly cause?: unknown) {
+    super(`[${venue}] fetch failed: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'VenueFetchError'
+  }
+}
+
 // ── Token-list helpers ────────────────────────────────────────────────────────
 
 /**
@@ -82,7 +96,7 @@ export async function fetchSoroswapTokenList(
     return Array.isArray(data.tokens) ? data.tokens : []
   } catch (err) {
     console.error('[soroswap] Failed to fetch token list:', (err as Error).message)
-    return []
+    throw new VenueFetchError('Soroswap', err)
   }
 }
 
@@ -122,11 +136,11 @@ export async function fetchPoolsFromFactory(
     const sim = await rpc.simulateTransaction(tx)
 
     if (SorobanRpc.Api.isSimulationError(sim)) {
-      console.debug(
+      console.error(
         `[soroswap] get_pools simulation error for ${tokenA}/${tokenB}:`,
         sim.error
       )
-      return []
+      throw new VenueFetchError('Soroswap', new Error(sim.error))
     }
 
     if (!sim.result?.retval) return []
@@ -134,11 +148,12 @@ export async function fetchPoolsFromFactory(
     const pools = scValToNative(sim.result.retval) as string[]
     return Array.isArray(pools) ? pools : []
   } catch (err) {
-    console.debug(
+    if (err instanceof VenueFetchError) throw err
+    console.error(
       '[soroswap] fetchPoolsFromFactory error:',
       (err as Error).message
     )
-    return []
+    throw new VenueFetchError('Soroswap', err)
   }
 }
 
@@ -171,11 +186,11 @@ export async function fetchPoolReserves(
     const sim = await rpc.simulateTransaction(tx)
 
     if (SorobanRpc.Api.isSimulationError(sim)) {
-      console.debug(
+      console.error(
         `[soroswap] get_reserves simulation error for pool ${poolAddress}:`,
         sim.error
       )
-      return null
+      throw new VenueFetchError('Soroswap', new Error(sim.error))
     }
 
     if (!sim.result?.retval) return null
@@ -185,11 +200,12 @@ export async function fetchPoolReserves(
 
     return [BigInt(reserves[0]), BigInt(reserves[1])]
   } catch (err) {
-    console.debug(
+    if (err instanceof VenueFetchError) throw err
+    console.error(
       `[soroswap] fetchPoolReserves error for ${poolAddress}:`,
       (err as Error).message
     )
-    return null
+    throw new VenueFetchError('Soroswap', err)
   }
 }
 
@@ -277,10 +293,12 @@ export async function ingestPool(
       `[soroswap] Pool ${poolEntry.poolAddress.slice(0, 8)}: price=${spotPrice.toFixed(8)} for ${pair.pairKey}`
     )
   } catch (err) {
+    if (err instanceof VenueFetchError) throw err
     console.error(
       `[soroswap] ingestPool error for ${poolEntry.poolAddress}:`,
       (err as Error).message
     )
+    throw new VenueFetchError('Soroswap', err)
   }
 }
 

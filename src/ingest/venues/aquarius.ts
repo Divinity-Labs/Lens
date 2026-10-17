@@ -37,6 +37,14 @@ export interface AquariusListResponse {
   results?: AquariusPool[]
 }
 
+/**
+ * Fetch Aquarius pools for a pair.
+ *
+ * Throws on any failure (HFTP error, network error, malrormed
+ * response) so the caller can distinguish a failed fetch from an
+ * empty result. An empty array means the venue responded with no
+ * pools; a thrown error means the venue could not be read.
+ */
 export async function fetchAquariusPools(
   pair: WatchedPair,
   apiUrl: string = config.aquarius.apiUrl
@@ -54,12 +62,16 @@ export async function fetchAquariusPools(
     params.append('assets[]', assetBStr)
 
     const res = await fetchWithTimeout(`${apiUrl}?${params.toString()}`)
-    if (!res.ok) return []
+    if (!res.ok) {
+      throw new Error(
+        `[aquarius] Failed to fetch pools for ${pair.pairKey}: HTTP ${res.status}`
+      )
+    }
     const data = (await res.json()) as AquariusListResponse
     return data.results ?? []
   } catch (err) {
     console.error(`[aquarius] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
-    return []
+    throw err
   }
 }
 
@@ -97,7 +109,9 @@ export async function ingestAquariusPair(
   network: NetworkName = activeNetwork
 ): Promise<void> {
   const pools = await fetchAquariusPools(pair, getNetworkConfig(network).aquarius.apiUrl)
-  if (pools.length === 0) return
+  if (pools.length === 0) {
+    return
+  }
 
   const points = deriveAquariusPricePoints(pools, pair)
   if (points.length === 0) return
@@ -118,6 +132,11 @@ export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
   },
 
   async discover(pair: WatchedPair, network: NetworkName): Promise<AquariusPool[][]> {
+    const pools = await fetchAquariusPools(pair, getNetworkConfig(network).aquarius.apiUrl)
+    return pools.length > 0 ? [pools] : []
+  },
+
+  async discoverOrThrow(pair: WatchedPair, network: NetworkName): Promise<AquariusPool[][]> {
     const pools = await fetchAquariusPools(pair, getNetworkConfig(network).aquarius.apiUrl)
     return pools.length > 0 ? [pools] : []
   },

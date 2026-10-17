@@ -16,6 +16,24 @@ export interface VenuePricePoint {
 }
 
 /**
+ * Distinguishes a venue that failed to respond from one that responded
+ * with genuinely empty data. A failure carries the error so the caller
+ * can exclude the venue from any aggregate rather than counting it as
+ * contributing zero.
+ */
+export interface VenueFetchFailure {
+  ok: false
+  error: Error
+}
+
+export interface VenueFetchSuccess<T> {
+  ok: true
+  data: T
+}
+
+export type VenueResult<T> = VenueFetchSuccess<T> | VenueFetchFailure
+
+/**
  * Universal interface for all venue adapters (SDEX, Stellar AMM, Soroswap, Aquarius, etc.).
  *
  * Covers:
@@ -41,17 +59,17 @@ export interface VenueAdapter<TTarget = any, TRaw = any> {
   /**
    * Discovers targets (e.g. pools, market pairs) for a given watched pair.
    */
-  discover(pair: WatchedPair, network: NetworkName): Promise<TTarget[]>
+  discover(pair: WatchedPair, network: NetworkName): Promise<VenueResult<TTarget[]>>
 
   /**
    * Reads raw state (reserves, trades, etc.) for a discovered target.
    */
-  read(target: TTarget, pair: WatchedPair, network: NetworkName): Promise<TRaw | null>
+  read(target: TTarget, pair: WatchedPair, network: NetworkName): Promise<VenueResult<TRaw | null>>
 
   /**
    * Derives price points from raw data.
    */
-  derive(raw: TRaw, target: TTarget, pair: WatchedPair, network: NetworkName): Promise<VenuePricePoint[]> | VenuePricePoint[]
+  derive(raw: TRaw, target: TTarget, pair: WatchedPair, network: NetworkName): Promise<VenueResult<VenuePricePoint[]>> | VenueResult<VenuePricePoint[]>
 
   /**
    * Persists derived price points, updates cursors/metrics, and dispatches updates.
@@ -61,7 +79,7 @@ export interface VenueAdapter<TTarget = any, TRaw = any> {
   /**
    * Optional full cycle override for a pair, if the adapter handles compound execution.
    */
-  ingestPair(pair: WatchedPair, network: NetworkName): Promise<void>
+  ingestPair?(pair: WatchedPair, network: NetworkName): Promise<void>
 
   /**
    * Resets internal in-memory state (such as last-price cache) for testing.
