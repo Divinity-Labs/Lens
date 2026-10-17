@@ -40,6 +40,8 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | POST | `/webhooks` | Subscribe to a price-threshold webhook |
 | DELETE | `/webhooks/:id` | Delete a webhook subscription |
 | GET/POST | `/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md)) |
+| stdio | MCP Server | Model Context Protocol server for AI agents (`bazaar_search`, `paid_call`, `lens_list_pairs`, `lens_get_pools`, `lens_screen_pairs`, docs: [`examples/mcp-server/README.md`](examples/mcp-server/README.md)) |
+
 
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
