@@ -1,8 +1,46 @@
 import type { FastifyInstance } from 'fastify'
 import { getActivePairs, parseAssetStr, makePairKey, registerPair, persistPair, hasPair } from '../pairsRegistry'
 import { pgPool } from '../db'
-import { activeNetwork } from '../config'
+import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+
+export async function getPairsData(network: NetworkName = activeNetwork) {
+  const activePairs = getActivePairs()
+  if (activePairs.length === 0) return []
+
+  const result = await pgPool.query(
+    `SELECT p.pair_key, l.price, l.timestamp
+       FROM unnest($2::text[]) AS p(pair_key)
+      CROSS JOIN LATERAL (
+            SELECT price, timestamp
+              FROM price_points
+             WHERE network = $1
+               AND pair_key = p.pair_key
+             ORDER BY timestamp DESC
+             LIMIT 1
+           ) l`,
+    [network, activePairs.map(p => p.pairKey)]
+  )
+
+  const latestPrices = new Map<string, { price: number; timestamp: Date }>()
+  result.rows.forEach(row => {
+    latestPrices.set(row.pair_key, {
+      price: parseFloat(row.price),
+      timestamp: row.timestamp,
+    })
+  })
+
+  return activePairs.map(p => {
+    const latest = latestPrices.get(p.pairKey)
+    return {
+      pairKey: p.pairKey,
+      assetA: p.assetA,
+      assetB: p.assetB,
+      latestPrice: latest?.price ?? null,
+      lastUpdated: latest?.timestamp ?? null,
+    }
+  })
+}
 
 export async function registerPairsRoutes(app: FastifyInstance) {
   // GET /pairs — list all active pairs with latest price metadata
@@ -17,44 +55,11 @@ export async function registerPairsRoutes(app: FastifyInstance) {
   // real `lastUpdated`, so a caller can see it is old. A pair with no rows on
   // this network at all comes back with null price and timestamp.
   app.get('/pairs', async (req) => {
-    const activePairs = getActivePairs()
     const network = req.network ?? activeNetwork
-
-    const result = await pgPool.query(
-      `SELECT p.pair_key, l.price, l.timestamp
-         FROM unnest($2::text[]) AS p(pair_key)
-        CROSS JOIN LATERAL (
-              SELECT price, timestamp
-                FROM price_points
-               WHERE network = $1
-                 AND pair_key = p.pair_key
-               ORDER BY timestamp DESC
-               LIMIT 1
-             ) l`,
-      [network, activePairs.map(p => p.pairKey)]
-    )
-
-    const latestPrices = new Map<string, { price: number; timestamp: Date }>()
-    result.rows.forEach(row => {
-      latestPrices.set(row.pair_key, {
-        price: parseFloat(row.price),
-        timestamp: row.timestamp,
-      })
-    })
-
-    return {
-      pairs: activePairs.map(p => {
-        const latest = latestPrices.get(p.pairKey)
-        return {
-          pairKey: p.pairKey,
-          assetA: p.assetA,
-          assetB: p.assetB,
-          latestPrice: latest?.price ?? null,
-          lastUpdated: latest?.timestamp ?? null,
-        }
-      })
-    }
+    const pairs = await getPairsData(network)
+    return { pairs }
   })
+
 
   // POST /pairs — add a new trading pair at runtime
   app.post<{

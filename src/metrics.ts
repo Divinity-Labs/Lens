@@ -59,6 +59,14 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+export const mcp_rate_limit_rejections_total = new Counter({
+  name: 'mcp_rate_limit_rejections_total',
+  help: 'Total number of MCP tool calls rejected due to rate limits or concurrency limits',
+  labelNames: ['tool', 'reason'],
+  registers: [register]
+})
+
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
