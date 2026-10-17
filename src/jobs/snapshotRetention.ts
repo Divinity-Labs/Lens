@@ -2,6 +2,7 @@ import { Queue, Worker } from 'bullmq'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
+import { retention_path_mode } from '../metrics'
 
 const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
 
@@ -134,4 +135,109 @@ export async function scheduleSnapshotRetention(queue: Queue) {
     { repeat: { every: 60 * 60 * 1000 }, jobId: 'snapshot-retention:prune' }
   )
   await queue.add('prune', {})
+}
+
+// ── Retention Supervisor & Safe In-Process Concurrency Guard (#345) ───────────
+
+export type RetentionMode = 'queue' | 'in_process'
+
+let currentRetentionMode: RetentionMode = 'queue'
+let inProcessIntervalTimer: NodeJS.Timeout | null = null
+let activeRetentionQueue: Queue | null = null
+let activeRetentionWorker: Worker | null = null
+
+export function getRetentionPathMode(): RetentionMode {
+  return currentRetentionMode
+}
+
+export function setRetentionPathMode(mode: RetentionMode): void {
+  const prev = currentRetentionMode
+  currentRetentionMode = mode
+  retention_path_mode.set({ mode: 'queue' }, mode === 'queue' ? 1 : 0)
+  retention_path_mode.set({ mode: 'in_process' }, mode === 'in_process' ? 1 : 0)
+  if (prev !== mode) {
+    console.info(`[snapshot-retention] Transitioned retention mode from ${prev} to ${mode}`)
+  }
+}
+
+/**
+ * Concurrency guard preventing multiple instances from executing duplicate
+ * or colliding in-process snapshot prunes at the same time (#345).
+ */
+export async function safePruneWithAdvisoryLock(
+  retentionDays: number = SNAPSHOT_RETENTION_DAYS
+): Promise<Partial<Record<NetworkName, number>> | null> {
+  let lockAcquired = false
+  try {
+    const res = await pgPool.query('SELECT pg_try_advisory_lock(8392104) AS acquired')
+    lockAcquired = res.rows[0]?.acquired === true
+    if (!lockAcquired) {
+      console.log('[snapshot-retention] Advisory lock not acquired; another instance is actively pruning.')
+      return null
+    }
+    return await pruneAllNetworks(retentionDays)
+  } catch (err) {
+    console.error('[snapshot-retention] Prune failed:', (err as Error).message)
+    throw err
+  } finally {
+    if (lockAcquired) {
+      try {
+        await pgPool.query('SELECT pg_advisory_unlock(8392104)')
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+}
+
+export async function switchToInProcessRetention(): Promise<void> {
+  setRetentionPathMode('in_process')
+  if (activeRetentionQueue || activeRetentionWorker) {
+    await Promise.allSettled([
+      activeRetentionQueue?.close(),
+      activeRetentionWorker?.close(),
+    ])
+    activeRetentionQueue = null
+    activeRetentionWorker = null
+  }
+  if (!inProcessIntervalTimer) {
+    inProcessIntervalTimer = setInterval(() => {
+      void safePruneWithAdvisoryLock()
+    }, 60 * 60 * 1000)
+    inProcessIntervalTimer.unref()
+  }
+}
+
+export async function switchToQueueRetention(): Promise<boolean> {
+  try {
+    const queue = createSnapshotRetentionQueue()
+    const worker = startSnapshotRetentionWorker()
+    await scheduleSnapshotRetention(queue)
+
+    if (inProcessIntervalTimer) {
+      clearInterval(inProcessIntervalTimer)
+      inProcessIntervalTimer = null
+    }
+
+    activeRetentionQueue = queue
+    activeRetentionWorker = worker
+    setRetentionPathMode('queue')
+    return true
+  } catch (err) {
+    console.warn('[snapshot-retention] Failed to switch to queue retention (Redis unavailable):', (err as Error).message)
+    await switchToInProcessRetention()
+    return false
+  }
+}
+
+export function resetRetentionSupervisorForTesting(): void {
+  if (inProcessIntervalTimer) {
+    clearInterval(inProcessIntervalTimer)
+    inProcessIntervalTimer = null
+  }
+  activeRetentionQueue = null
+  activeRetentionWorker = null
+  currentRetentionMode = 'queue'
+  retention_path_mode.set({ mode: 'queue' }, 1)
+  retention_path_mode.set({ mode: 'in_process' }, 0)
 }

@@ -25,6 +25,7 @@ import { upsertPricePoints } from '../../db'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { fetchWithTimeout } from '../../fetch'
+import { VenueFetchError, recordVenueFailure, recordVenueSuccess } from './errors'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -77,12 +78,18 @@ export async function fetchSoroswapTokenList(
 ): Promise<SoroswapToken[]> {
   try {
     const res = await fetchWithTimeout(tokenListUrl)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      recordVenueFailure('Soroswap', `Token list HTTP ${res.status}`)
+      throw new VenueFetchError('Soroswap', `Token list HTTP ${res.status}`, res.status)
+    }
     const data = (await res.json()) as SoroswapTokenList
+    recordVenueSuccess('Soroswap')
     return Array.isArray(data.tokens) ? data.tokens : []
   } catch (err) {
+    if (err instanceof VenueFetchError) throw err
     console.error('[soroswap] Failed to fetch token list:', (err as Error).message)
-    return []
+    recordVenueFailure('Soroswap', (err as Error).message)
+    throw new VenueFetchError('Soroswap', (err as Error).message)
   }
 }
 
@@ -90,7 +97,7 @@ export async function fetchSoroswapTokenList(
 
 /**
  * Query the Soroswap factory contract's get_pools() to enumerate pool addresses
- * for a specific token pair. Returns an empty array on RPC failure.
+ * for a specific token pair. Throws VenueFetchError on RPC failure.
  */
 export async function fetchPoolsFromFactory(
   factoryAddress: string,
@@ -132,13 +139,15 @@ export async function fetchPoolsFromFactory(
     if (!sim.result?.retval) return []
 
     const pools = scValToNative(sim.result.retval) as string[]
+    recordVenueSuccess('Soroswap')
     return Array.isArray(pools) ? pools : []
   } catch (err) {
     console.debug(
       '[soroswap] fetchPoolsFromFactory error:',
       (err as Error).message
     )
-    return []
+    recordVenueFailure('Soroswap', (err as Error).message)
+    throw new VenueFetchError('Soroswap', (err as Error).message)
   }
 }
 

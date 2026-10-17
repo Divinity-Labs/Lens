@@ -14,10 +14,14 @@ import { fanOutManager } from './ws/fanout'
 import { venueAdapters, startVenueAdapter } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
-import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS, safePruneWithAdvisoryLock, switchToQueueRetention, switchToInProcessRetention, getRetentionPathMode } from './jobs/snapshotRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+import { installProcessErrorGuard } from './errors/processGuard'
+import { recordIngesterCrash, recordIngesterHealthyRun, HEALTHY_RESET_THRESHOLD_MS } from './ingest/supervisor'
+import { setBootComplete } from './bootState'
 
 async function main() {
+  installProcessErrorGuard()
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
   console.log('[lens] Running database migrations…')
   execSync('node node_modules/prisma/build/index.js db push --accept-data-loss', { stdio: 'inherit' })
@@ -95,56 +99,56 @@ async function main() {
     }
   }
 
-  // ── Snapshot retention ────────────────────────────────────────────────────
+  // ── Snapshot retention (#345) ──────────────────────────────────────────
   // price_snapshots is append-only and unbounded, so pruning it is a data
   // lifecycle concern, not a caching one. BullMQ is only how the prune gets
-  // scheduled — losing Redis must not mean losing retention, because the
-  // failure is silent and the bill arrives as a full disk weeks later.
+  // scheduled — losing Redis must not mean losing retention.
   //
-  // So: prune once here, unconditionally, then try to install the hourly
-  // schedule. If Redis is away, fall back to a plain timer that does the same
-  // work in-process.
-  const safePrune = async () => {
-    try {
-      const counts = await pruneAllNetworks()
-      for (const [network, pruned] of Object.entries(counts)) {
-        if (pruned > 0) {
-          console.log(`[lens] Pruned ${pruned} ${network} snapshot(s) older than ${SNAPSHOT_RETENTION_DAYS}d`)
-        }
+  // Use advisory-locked safePrune, try queue retention first, and fall back to
+  // in-process prune if Redis is down. Periodically check Redis to auto-recover.
+  try {
+    await safePruneWithAdvisoryLock()
+  } catch (err) {
+    console.error('[lens] Initial snapshot prune failed:', (err as Error).message)
+  }
+
+  await switchToQueueRetention()
+
+  // Periodically probe Redis to restore queue retention if currently degraded
+  setInterval(async () => {
+    if (getRetentionPathMode() === 'in_process') {
+      try {
+        await redis.ping()
+        console.info('[lens] Redis returned; restoring retention worker to queue mode')
+        await switchToQueueRetention()
+      } catch {
+        // still offline
       }
-    } catch (err) {
-      console.error('[lens] Snapshot prune failed:', (err as Error).message)
     }
-  }
+  }, 30_000).unref()
 
-  await safePrune()
-
-  {
-    let retentionQueue: ReturnType<typeof createSnapshotRetentionQueue> | undefined
-    let retentionWorker: ReturnType<typeof startSnapshotRetentionWorker> | undefined
-    try {
-      retentionQueue = createSnapshotRetentionQueue()
-      retentionWorker = startSnapshotRetentionWorker()
-      await scheduleSnapshotRetention(retentionQueue)
-      console.log('[lens] Snapshot retention worker started')
-    } catch (err) {
-      console.warn('[lens] Snapshot retention worker skipped (Redis unavailable):', (err as Error).message)
-      console.warn('[lens] Falling back to an in-process hourly prune')
-      await Promise.allSettled([retentionQueue?.close(), retentionWorker?.close()])
-      setInterval(() => { void safePrune() }, 60 * 60 * 1000).unref()
-    }
-  }
-
-  // ── Ingesters (run in background — infinite loops) ────────────────────────
+  // ── Ingesters (run in background — infinite loops) (#331) ─────────────────
   // Each ingester is independently fault-isolated via restartIngester, keyed by
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
-  // mainnet only restarts that one instance and cannot affect SDEX/AMM or the
-  // ingesters running on testnet.
+  // mainnet only restarts that one instance with exponential backoff up to 60s.
+  // Backoff resets after a sustained healthy run of 60s.
   const restartIngester = (name: string, network: NetworkName, fn: () => Promise<void>) => {
-    fn().catch(err => {
-      console.error(`[lens] ${name}/${network} ingester crashed, restarting in 10s:`, err.message)
-      setTimeout(() => restartIngester(name, network, fn), 10_000)
-    })
+    let healthyTimer: NodeJS.Timeout | null = null
+    healthyTimer = setTimeout(() => {
+      recordIngesterHealthyRun(name, network)
+    }, HEALTHY_RESET_THRESHOLD_MS)
+    healthyTimer.unref()
+
+    fn()
+      .then(() => {
+        if (healthyTimer) clearTimeout(healthyTimer)
+      })
+      .catch(err => {
+        if (healthyTimer) clearTimeout(healthyTimer)
+        const delayMs = recordIngesterCrash(name, network, err as Error)
+        console.error(`[lens] ${name}/${network} ingester crashed, restarting in ${delayMs}ms:`, (err as Error).message)
+        setTimeout(() => restartIngester(name, network, fn), delayMs)
+      })
   }
 
   const enabledNetworks = getEnabledNetworks()
@@ -157,6 +161,9 @@ async function main() {
   }
 
   console.log(`[lens] Watching ${getActivePairs().length} pairs: ${getActivePairs().map(p => p.pairKey).join(', ')}`)
+
+  // ── Mark boot complete for readiness probe (#334) ─────────────────────────
+  setBootComplete(true)
 }
 
 main().catch(err => {

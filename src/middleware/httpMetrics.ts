@@ -14,7 +14,7 @@ interface TimedRequest extends FastifyRequest {
  * so counting it would have the scraper continuously inflate the very numbers
  * it is reading — request rate would never fall to zero on an idle service.
  */
-const EXCLUDED_ROUTES = new Set(['/metrics'])
+const EXCLUDED_ROUTES = new Set(['/metrics', '/live', '/ready'])
 
 /**
  * Bucket a status code into a class label. Keeping 2xx/4xx/5xx rather than the

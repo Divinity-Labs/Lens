@@ -1,4 +1,10 @@
-import { amm_snapshots_total, trades_ingested_total, last_trade_timestamp } from '../../metrics'
+import {
+  amm_snapshots_total,
+  trades_ingested_total,
+  last_trade_timestamp,
+  horizon_rate_limit_remaining,
+  horizon_rate_limited_total,
+} from '../../metrics'
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '../../db'
 import { resolvePageLedgers } from '../../ingesters/toid'
@@ -13,6 +19,7 @@ import {
   startVenueAdapter,
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
+import { VenueFetchError, HorizonRateLimitError, recordVenueFailure, recordVenueSuccess } from './errors'
 
 export function _resetLastPrice(): void {
   resetLastPrice('AMM')
@@ -36,15 +43,44 @@ export async function fetchPools(pair: WatchedPair, network: NetworkName = activ
     params.append('reserves[]', assetBStr)
     params.set('limit', '10')
 
-    const response = await fetchWithTimeout(
-      `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`
-    )
+    const url = `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`
+    const response = await fetchWithTimeout(url)
+
+    // Export remaining quota header gauge (#348)
+    const remaining = response.headers.get('x-ratelimit-remaining')
+    if (remaining !== null) {
+      const val = parseInt(remaining, 10)
+      if (!isNaN(val)) horizon_rate_limit_remaining.set({ network }, val)
+    }
+
+    // Explicitly handle Horizon 429 Rate Limiting (#348)
+    if (response.status === 429) {
+      horizon_rate_limited_total.inc({ network })
+      const retryAfterStr = response.headers.get('retry-after')
+      const retryAfterSec = retryAfterStr ? parseInt(retryAfterStr, 10) || undefined : undefined
+      console.warn(`[amm] Horizon rate limit (429) encountered on ${network} for ${pair.pairKey}; Retry-After: ${retryAfterStr ?? 'none'}`)
+      throw new HorizonRateLimitError(network, retryAfterSec)
+    }
+
+    // Detect non-2xx responses before parsing body (#348, #329)
+    if (!response.ok) {
+      console.error(`[amm] Horizon returned error ${response.status} for ${pair.pairKey}`)
+      recordVenueFailure('AMM', `HTTP ${response.status}`)
+      throw new VenueFetchError('AMM', `HTTP ${response.status}`, response.status)
+    }
+
+    recordVenueSuccess('AMM')
     const data = (await response.json()) as any
     if (!data._embedded?.records) return []
     return data._embedded.records
   } catch (err) {
+    if (err instanceof VenueFetchError) {
+      recordVenueFailure('AMM', err.message)
+      throw err
+    }
     console.error(`[amm] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
-    return []
+    recordVenueFailure('AMM', (err as Error).message)
+    throw new VenueFetchError('AMM', (err as Error).message)
   }
 }
 
