@@ -507,7 +507,41 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 | `ORACLE_PAYMENT_ADDRESS_TESTNET` / `ORACLE_PAYMENT_ADDRESS_MAINNET` | Per-network override for the address above | - | No |
 | `X402_FACILITATOR_URL` | x402 facilitator service URL | - | No |
 
-*\*Required if enabling x402 payment gating.*
+## MCP Server (Model Context Protocol)
+
+Lens provides a Model Context Protocol (MCP) server exposing tools for Stellar resource discovery and automated paid calls (`bazaar_search`, `paid_call`).
+
+### Running via Stdio (Default)
+
+For locally-launched agent processes (e.g. Claude Desktop, local coding agents, or CLI child processes):
+
+```bash
+npm run mcp:server
+```
+
+Stdio is the default transport (`MCP_TRANSPORT=stdio`). It communicates over standard input/output streams.
+
+### Running via Streamable HTTP Transport
+
+For hosted Lens instances serving remote agents over the network, configure the HTTP transport and specify a mandatory authentication key:
+
+```bash
+MCP_TRANSPORT=http MCP_PORT=3000 MCP_API_KEY=your-secret-key npm run mcp:server
+```
+
+> **Authentication Requirement**: Remote HTTP exposure strictly requires authentication via `Authorization: Bearer <key>` or `x-api-key: <key>`. Unauthenticated requests are immediately refused with `401 Unauthorized` to protect funds and resources.
+
+### MCP Configuration
+
+| Variable | Description | Default |
+|---|---|---|
+| `MCP_TRANSPORT` | Transport protocol (`stdio` or `http`) | `stdio` |
+| `MCP_PORT` | Port for HTTP transport | `3000` |
+| `MCP_HOST` | Host address for HTTP transport | `127.0.0.1` |
+| `MCP_API_KEY` | Mandatory API authentication key for HTTP transport | - |
+| `MCP_MAX_RESULT_BYTES` | Maximum byte length per tool result before explicit truncation | `65536` (64 KB) |
+| `MCP_MAX_UPSTREAM_BYTES` | Maximum upstream response stream buffering limit before stream cancel | `131072` (128 KB) |
+| `MCP_MAX_PAYMENT_PRICE` | Maximum allowed price per single `paid_call` execution | `$1.00` |
 
 ## Stack
 - **Runtime:** Node.js 20 + TypeScript
