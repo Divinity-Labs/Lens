@@ -4,7 +4,15 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance, RouteOptions } from 'fastify'
 import YAML from 'js-yaml'
 import { buildApp } from '../src/app'
-import { INTERNAL_ROUTES, isInternalRoute, toOpenApiPath } from '../src/openapi/coverage'
+import {
+  INTERNAL_ROUTES,
+  isInternalRoute,
+  isVersionedPath,
+  toBarePath,
+  toOpenApiPath,
+  toVersionedPath,
+} from '../src/openapi/coverage'
+import { rewriteVersionedApiUrl } from '../src/api/versioning'
 import { renderOpenApiJson } from '../scripts/generate-openapi'
 
 const specPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
@@ -21,7 +29,13 @@ interface Spec {
 
 let app: FastifyInstance
 let registered: RegisteredRoute[]
+let registeredPaths: Set<string>
 let spec: Spec
+
+/** The versioned path a registered route is documented under. */
+function documentedPath(route: RegisteredRoute): string {
+  return toVersionedPath(route.path)
+}
 
 beforeAll(async () => {
   registered = []
@@ -39,6 +53,7 @@ beforeAll(async () => {
     },
   })
   await app.ready()
+  registeredPaths = new Set(registered.map(r => r.path))
   spec = YAML.load(readFileSync(specPath, 'utf8')) as Spec
 })
 
@@ -52,26 +67,31 @@ describe('OpenAPI route coverage', () => {
   })
 
   it('documents every non-internal route in openapi.yaml', () => {
-    const missing = registered.filter(r => !isInternalRoute(r.path) && !(r.path in spec.paths))
-    expect(missing, `Undocumented routes: ${JSON.stringify(missing)}`).toEqual([])
+    const missing = registered.filter(
+      r => !isInternalRoute(r.path) && !(documentedPath(r) in spec.paths),
+    )
+    expect(missing, `Undocumented routes: ${JSON.stringify(missing.map(documentedPath))}`).toEqual([])
   })
 
   it('documents the HTTP method for every documented route', () => {
     const missing = registered.filter(
-      r => !isInternalRoute(r.path) && !(r.method.toLowerCase() in (spec.paths[r.path] ?? {})),
+      r =>
+        !isInternalRoute(r.path) &&
+        !(r.method.toLowerCase() in (spec.paths[documentedPath(r)] ?? {})),
     )
     expect(missing, `Undocumented operations: ${JSON.stringify(missing)}`).toEqual([])
   })
 
-  it('documents only paths that are actually registered', () => {
-    const registeredPaths = new Set(registered.map(r => r.path))
-    const phantom = Object.keys(spec.paths).filter(p => !registeredPaths.has(p))
+  it('documents only versioned paths that map back to a registered route', () => {
+    const phantom = Object.keys(spec.paths).filter(
+      p => !isVersionedPath(p) || !registeredPaths.has(toBarePath(p)),
+    )
     expect(phantom, `Documented but unregistered: ${JSON.stringify(phantom)}`).toEqual([])
   })
 
   it('documents only operations that are actually registered', () => {
     const registeredOperations = new Set(
-      registered.map(r => `${r.method.toLowerCase()} ${r.path}`),
+      registered.map(r => `${r.method.toLowerCase()} ${documentedPath(r)}`),
     )
     const phantom: string[] = []
     for (const [path, operations] of Object.entries(spec.paths)) {
@@ -85,9 +105,38 @@ describe('OpenAPI route coverage', () => {
   })
 
   it('allow-lists only routes that are actually registered', () => {
-    const registeredPaths = new Set(registered.map(r => r.path))
     const stale = INTERNAL_ROUTES.filter(p => !registeredPaths.has(p))
     expect(stale, `Stale internal routes: ${JSON.stringify(stale)}`).toEqual([])
+  })
+})
+
+describe('API versioning', () => {
+  it('resolves every documented versioned path onto a registered bare alias', () => {
+    const unrouted = Object.keys(spec.paths).filter(
+      p => !registeredPaths.has(rewriteVersionedApiUrl({ url: p })),
+    )
+    expect(unrouted, `Versioned paths with no route: ${JSON.stringify(unrouted)}`).toEqual([])
+  })
+
+  it('keeps the unversioned alias registered for every versioned path', () => {
+    const missing = Object.keys(spec.paths).filter(p => !registeredPaths.has(toBarePath(p)))
+    expect(missing, `Missing aliases: ${JSON.stringify(missing)}`).toEqual([])
+  })
+
+  it('answers the unversioned alias identically and warns the caller', async () => {
+    const versioned = await app.inject({ method: 'POST', url: '/v1/verify' })
+    const alias = await app.inject({ method: 'POST', url: '/verify' })
+
+    expect(alias.statusCode).toBe(versioned.statusCode)
+    expect(alias.body).toBe(versioned.body)
+
+    // The versioned request is not deprecated...
+    expect(versioned.headers.deprecation).toBeUndefined()
+
+    // ...the alias is, and it points at the successor path.
+    expect(alias.headers.deprecation).toBe('true')
+    expect(alias.headers.link).toContain('</v1/verify>')
+    expect(alias.headers.link).toContain('rel="successor-version"')
   })
 })
 

@@ -1,7 +1,14 @@
 openapi: 3.0.0
 info:
   title: Lens API
-  description: Unified Stellar price API aggregating SDEX + AMM prices.
+  description: >-
+    Unified Stellar price API aggregating SDEX + AMM prices.
+
+    Every route is served under the `/v1` version segment; the versioned path is
+    the canonical one documented here. The same routes also answer at their
+    unversioned paths as deprecated aliases so pre-`/v1` integrations keep
+    working — those responses carry `Deprecation` and `Link` headers pointing at
+    the successor. See `docs/api-versioning.md` for the retirement policy.
   version: 0.1.0
   license:
     name: MIT
@@ -12,7 +19,7 @@ servers:
     description: Local development server
 
 paths:
-  /status:
+  /v1/status:
     get:
       operationId: getStatus
       summary: Get API status and indexer state
@@ -49,7 +56,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}:
+  /v1/price/{assetA}/{assetB}:
     get:
       operationId: getPrice
       summary: Get aggregated price for a pair
@@ -83,7 +90,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/route:
+  /v1/price/{assetA}/{assetB}/route:
     get:
       operationId: getBestRoute
       summary: Get best swap route for a pair and amount
@@ -119,7 +126,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/history:
+  /v1/price/{assetA}/{assetB}/history:
     get:
       operationId: getPriceHistory
       summary: Get price history buckets
@@ -174,7 +181,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pools:
+  /v1/pools:
     get:
       operationId: getPools
       summary: Get AMM liquidity pool reserves and spot prices
@@ -217,7 +224,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /candles/{assetA}/{assetB}:
+  /v1/candles/{assetA}/{assetB}:
     get:
       operationId: getCandles
       summary: Get OHLCV candle data
@@ -294,7 +301,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /prices/history:
+  /v1/prices/history:
     get:
       operationId: getPriceSnapshots
       summary: Get historical 1-minute price snapshots
@@ -388,7 +395,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pairs:
+  /v1/pairs:
     get:
       operationId: listPairs
       summary: List all active trading pairs
@@ -453,7 +460,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/depth:
+  /v1/price/{assetA}/{assetB}/depth:
     get:
       operationId: getDepth
       summary: Get order-book depth and execution slippage for a pair
@@ -498,7 +505,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/twap/{assetA}/{assetB}:
+  /v1/price/twap/{assetA}/{assetB}:
     get:
       operationId: getTwap
       summary: Get a manipulation-resistant time-weighted average price
@@ -557,7 +564,7 @@ paths:
         '500':
           description: TWAP computation failed
 
-  /price/vwap/{assetA}/{assetB}:
+  /v1/price/vwap/{assetA}/{assetB}:
     get:
       operationId: getVwap
       summary: Get a volume-weighted average price
@@ -613,7 +620,7 @@ paths:
         '500':
           description: VWAP computation failed
 
-  /volumes/{asset}:
+  /v1/volumes/{asset}:
     get:
       operationId: getVolumes
       summary: Get cross-venue traded volume for an asset
@@ -650,7 +657,7 @@ paths:
         '500':
           description: Volume aggregation failed
 
-  /spreads/{asset}:
+  /v1/spreads/{asset}:
     get:
       operationId: getSpreads
       summary: Get the tightest per-venue bid/ask spread for an asset
@@ -689,7 +696,7 @@ paths:
         '500':
           description: Spread aggregation failed
 
-  /compare/{asset}:
+  /v1/compare/{asset}:
     get:
       operationId: compareAsset
       summary: Compare Lens prices with every configured external oracle
@@ -714,7 +721,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /screener:
+  /v1/screener:
     get:
       operationId: screenPairs
       summary: Screen pairs by volume, change, liquidity and price
@@ -793,7 +800,7 @@ paths:
         '500':
           description: Internal server error
 
-  /benchmark/{asset}:
+  /v1/benchmark/{asset}:
     get:
       operationId: getBenchmark
       summary: Get peg-deviation statistics for an asset against a target
@@ -825,7 +832,7 @@ paths:
         '500':
           description: Benchmark computation failed
 
-  /basket:
+  /v1/basket:
     get:
       operationId: getBasket
       summary: Compute the weighted price of a basket of assets
@@ -867,7 +874,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /discovery/resources:
+  /v1/discovery/resources:
     get:
       operationId: listDiscoveryResources
       summary: Browse the x402 Bazaar catalog of discoverable resources
@@ -924,7 +931,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /webhooks:
+  /v1/webhooks:
     post:
       operationId: createWebhook
       summary: Subscribe to a price-threshold webhook
@@ -968,7 +975,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /webhooks/{id}:
+  /v1/webhooks/{id}:
     delete:
       operationId: deleteWebhook
       summary: Delete a webhook subscription
@@ -985,7 +992,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /usage/me:
+  /v1/usage/me:
     get:
       operationId: getMyUsage
       summary: Get usage and quota for the calling API key
@@ -1003,7 +1010,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /supported:
+  /v1/supported:
     get:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
@@ -1016,7 +1023,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SupportedResponse'
 
-  /verify:
+  /v1/verify:
     post:
       operationId: verifyPayment
       summary: Verify an x402 payment payload
@@ -1047,7 +1054,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/VerifyResponse'
 
-  /settle:
+  /v1/settle:
     post:
       operationId: settlePayment
       summary: Settle an x402 payment (idempotent)
@@ -1076,7 +1083,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SettleResponse'
 
-  /graphql:
+  /v1/graphql:
     get:
       operationId: graphqlGet
       summary: Execute a GraphQL query over HTTP GET

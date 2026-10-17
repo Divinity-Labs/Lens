@@ -61,6 +61,16 @@ export const INTERNAL_ROUTE_PREFIXES: readonly string[] = [
 const INTERNAL_ROUTE_SET = new Set<string>(INTERNAL_ROUTES)
 
 /**
+ * The version segment every public route is served under.
+ *
+ * Fastify registers each route once at its bare path (see `src/api/versioning.ts`
+ * for the `rewriteUrl` that makes `/v1` resolve to it), so callers can use
+ * either form. `openapi.yaml` documents the versioned form only — it is the
+ * canonical one — and the bare form is a deprecated alias.
+ */
+export const API_VERSION_PREFIX = '/v1'
+
+/**
  * Rewrites a Fastify route template into its OpenAPI path equivalent:
  * `/price/:assetA/:assetB` → `/price/{assetA}/{assetB}`.
  *
@@ -69,6 +79,35 @@ const INTERNAL_ROUTE_SET = new Set<string>(INTERNAL_ROUTES)
  */
 export function toOpenApiPath(fastifyUrl: string): string {
   return fastifyUrl.replace(/:([A-Za-z0-9_]+)/g, '{$1}')
+}
+
+/** Whether a path (bare or fully-formed URL path) already carries the version prefix. */
+export function isVersionedPath(path: string): boolean {
+  return path === API_VERSION_PREFIX || path.startsWith(`${API_VERSION_PREFIX}/`)
+}
+
+/**
+ * Prefixes a bare route path with the API version segment:
+ * `/price/{assetA}/{assetB}` → `/v1/price/{assetA}/{assetB}`.
+ *
+ * This is the path as it appears in `openapi.yaml`, and the successor a caller
+ * is pointed at by the deprecation headers on the unversioned alias.
+ */
+export function toVersionedPath(barePath: string): string {
+  if (barePath === '/') return API_VERSION_PREFIX
+  return `${API_VERSION_PREFIX}${barePath}`
+}
+
+/**
+ * Strips the version prefix from a path, yielding the canonical bare route:
+ * `/v1/price/{assetA}/{assetB}` → `/price/{assetA}/{assetB}`.
+ *
+ * A path without the prefix is returned unchanged, so this is safe to call on
+ * a mix of versioned and bare paths.
+ */
+export function toBarePath(path: string): string {
+  if (path === API_VERSION_PREFIX) return '/'
+  return isVersionedPath(path) ? path.slice(API_VERSION_PREFIX.length) : path
 }
 
 /** Whether a route (in OpenAPI path form) is on the internal allow-list. */

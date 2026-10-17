@@ -14,35 +14,47 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 ### REST
 | Method | Path | Description |
 |---|---|---|
-| GET | `/price/:assetA/:assetB` | Current VWAP, 24h volume, best route |
-| GET | `/price/:assetA/:assetB/route?amount=1000` | Best execution route for a given amount |
-| GET | `/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
-| GET | `/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`) |
-| GET | `/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
-| GET | `/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
-| GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
-| GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; `?format=csv` serves the points as `text/csv` (`ts,price,volume`); ~30-day retention |
-| GET | `/pools` | Active AMM pools being watched |
-| GET | `/pairs` | Watched trading pairs |
-| GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
-| GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
-| GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
-| GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
-| GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
-| GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
-| GET | `/status` | Indexer health |
-| GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
-| GET | `/usage/me` | Usage and quota for the calling API key (requires `Authorization: Bearer <key>`) |
-| GET | `/supported` | Payment kinds and extensions this facilitator supports |
-| POST | `/verify` | Verify an x402 payment payload |
-| POST | `/settle` | Settle an x402 payment (idempotent — retries replay the stored result) |
-| POST | `/webhooks` | Subscribe to a price-threshold webhook |
-| DELETE | `/webhooks/:id` | Delete a webhook subscription |
-| GET/POST | `/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md)) |
+| GET | `/v1/price/:assetA/:assetB` | Current VWAP, 24h volume, best route |
+| GET | `/v1/price/:assetA/:assetB/route?amount=1000` | Best execution route for a given amount |
+| GET | `/v1/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
+| GET | `/v1/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`) |
+| GET | `/v1/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
+| GET | `/v1/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
+| GET | `/v1/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
+| GET | `/v1/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; `?format=csv` serves the points as `text/csv` (`ts,price,volume`); ~30-day retention |
+| GET | `/v1/pools` | Active AMM pools being watched |
+| GET | `/v1/pairs` | Watched trading pairs |
+| GET | `/v1/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
+| GET | `/v1/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
+| GET | `/v1/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
+| GET | `/v1/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
+| GET | `/v1/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
+| GET | `/v1/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
+| GET | `/v1/status` | Indexer health |
+| GET | `/v1/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
+| GET | `/v1/usage/me` | Usage and quota for the calling API key (requires `Authorization: Bearer <key>`) |
+| GET | `/v1/supported` | Payment kinds and extensions this facilitator supports |
+| POST | `/v1/verify` | Verify an x402 payment payload |
+| POST | `/v1/settle` | Settle an x402 payment (idempotent — retries replay the stored result) |
+| POST | `/v1/webhooks` | Subscribe to a price-threshold webhook |
+| DELETE | `/v1/webhooks/:id` | Delete a webhook subscription |
+| GET/POST | `/v1/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`) |
+
+### Versioning
+
+Every public route is served under `/v1`; that is the canonical path and the one
+[`openapi.yaml`](openapi.yaml) documents. The same routes also answer at their
+**unversioned** paths as deprecated aliases, so callers integrated before `/v1`
+keep working. An alias response carries `Deprecation: true` and a
+`Link: </v1/...>; rel="successor-version"` header pointing at the versioned
+path; the versioned response does not. See
+[`docs/api-versioning.md`](docs/api-versioning.md) for the warning contract and
+the retirement window (at least two minor releases, no more than twelve months).
 
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
-missing from the spec. Operator-only and non-HTTP routes (`/admin/keys*`,
+missing from the spec, if a documented versioned path has no alias, or if the
+two forms answer differently. Operator-only and non-HTTP routes (`/admin/keys*`,
 `/admin/usage*`, `/metrics`, `/ws`, `/graphiql*`) are deliberately excluded via
 the commented allow-list in [`src/openapi/coverage.ts`](src/openapi/coverage.ts).
 
@@ -63,12 +75,13 @@ Still reading across both networks, and ignoring the parameter:
 `/candles/:assetA/:assetB`, `/price/twap/*`, and `/price/vwap/*`.
 
 ```bash
-curl "https://api.example.com/price/XLM/USDC?network=mainnet"
+curl "https://api.example.com/v1/price/XLM/USDC?network=mainnet"
 ```
 
 ### GraphQL
-Available at `/graphql` with GraphiQL IDE at `/graphiql`. Real-time price
-streaming is available via the `priceUpdated` [subscription](#graphql-subscriptions-live-prices).
+Available at `/v1/graphql` (the unversioned `/graphql` alias still works) with
+GraphiQL IDE at `/graphiql`. Real-time price streaming is available via the
+`priceUpdated` [subscription](#graphql-subscriptions-live-prices).
 
 For complete GraphQL schema documentation, all queries with runnable `curl` examples, WebSocket `graphql-transport-ws` handshake specifications, and an explicit comparison against the REST surface, see [`docs/graphql.md`](docs/graphql.md).
 
@@ -324,6 +337,7 @@ Or interactively at [http://localhost:3002/graphiql](http://localhost:3002/graph
 ## Documentation
 Detailed system design and data flow diagrams can be found in the [Architecture Overview](docs/architecture.md).
 The API specification is available in [OpenAPI 3.0 format](openapi.yaml) and is auto-published to GitHub Pages at https://miracle656.github.io/lens/openapi.json.
+The versioning and alias-retirement policy is in [API versioning & deprecation policy](docs/api-versioning.md).
 
 ## Examples
 

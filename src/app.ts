@@ -25,6 +25,7 @@ import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerApiVersioning, rewriteVersionedApiUrl } from './api/versioning'
 import { getMetrics } from './metrics'
 
 export interface BuildAppOptions {
@@ -50,7 +51,13 @@ export interface BuildAppOptions {
  * The returned app is NOT listening; the caller calls `app.listen(...)`.
  */
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: 'warn' } })
+  const app = Fastify({
+    logger: { level: 'warn' },
+    // Resolves `/v1/<path>` onto the single bare route that is registered, so
+    // every route answers at both `/v1/...` and its unversioned alias without
+    // being mounted twice. See src/api/versioning.ts.
+    rewriteUrl: rewriteVersionedApiUrl,
+  })
 
   // Capture route registrations first, so it observes every route below
   // (including the ones registered by encapsulated plugins such as Mercurius).
@@ -58,8 +65,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.addHook('onRoute', options.onRoute)
   }
 
-  await app.register(cors, { origin: true })
+  await app.register(cors, {
+    origin: true,
+    // Let browser clients read the deprecation warning on unversioned aliases
+    // (see src/api/versioning.ts); custom response headers are hidden by
+    // default cross-origin.
+    exposedHeaders: ['Deprecation', 'Link'],
+  })
   await app.register(compress)
+
+  // Warn callers who use the deprecated unversioned aliases (Deprecation /
+  // Link headers). Registered before the routes so the hook is in place, and
+  // it only reads what rewriteUrl recorded — it never blocks a request.
+  registerApiVersioning(app)
 
   // HTTP request/latency metrics. Registered FIRST, ahead of the network
   // selector, API-key auth, the rate limiter and x402, so that requests those
