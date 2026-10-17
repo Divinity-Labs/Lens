@@ -8,6 +8,7 @@ import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../co
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
   statusResponseSchema,
+  readyResponseSchema,
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
@@ -16,6 +17,8 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getVenueHealth } from '../ingest/venues/runner'
+import { verifyDatabaseSchema } from '../db/schemaVerify'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -68,7 +71,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // up the validating serializer.
   installResponseValidation(app)
 
-  // GET /status — public health/monitoring endpoint (no API key required)
+  // GET /status — public health/monitoring endpoint (no API key required) (#333)
   app.get('/status', { config: { public: true }, schema: { response: { 200: statusResponseSchema } } }, async (req) => {
     const network = req.network ?? activeNetwork
     const result = await pgPool.query(
@@ -80,6 +83,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       [network]
     )
     const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
+    const venues = getVenueHealth(network)
+    const venueStatuses = Object.values(venues).map(v => v.status)
+    const ingestionHealth: 'healthy' | 'degraded' | 'unhealthy' =
+      venueStatuses.length === 0 || venueStatuses.every(s => s === 'healthy')
+        ? 'healthy'
+        : venueStatuses.some(s => s === 'healthy')
+          ? 'degraded'
+          : 'unhealthy'
+
     return {
       ok: true,
       network,
@@ -92,7 +104,37 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       ingestLagSeconds: lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
         : null,
+      ingestionHealth,
+      venues,
     }
+  })
+
+  // GET /ready — Kubernetes / service readiness probe (#352)
+  app.get('/ready', { config: { public: true }, schema: { response: { 200: readyResponseSchema, 503: readyResponseSchema } } }, async (req, reply) => {
+    const verification = await verifyDatabaseSchema()
+    if (!verification.valid) {
+      return reply.status(503).send({
+        ready: false,
+        status: 'not_ready',
+        schema: {
+          status: 'mismatch',
+          missingTables: verification.missingTables,
+          missingColumns: verification.missingColumns,
+          checkedAt: verification.checkedAt,
+        },
+      })
+    }
+
+    return reply.status(200).send({
+      ready: true,
+      status: 'ready',
+      schema: {
+        status: 'valid',
+        missingTables: [],
+        missingColumns: [],
+        checkedAt: verification.checkedAt,
+      },
+    })
   })
 
 
