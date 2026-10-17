@@ -46,6 +46,20 @@ export const price_requests_total = new Counter({
   registers: [register]
 })
 
+export const active_subscriptions = new Gauge({
+  name: 'active_subscriptions',
+  help: 'Currently active GraphQL priceUpdated subscriptions, by pair',
+  // Deliberately the only label. `pair` is what the subscriber asked for, so
+  // the distribution across pairs is visible; `network` stays out because the
+  // gauge would double the series for the same routing decision (#373).
+  // Unlike the ws_* metrics in ws/fanout.ts this label is subscriber-supplied
+  // and theoretically unbounded — a client can mint one series per distinct
+  // pair string. Guarded in practice: only registered deployments accept
+  // subscriptions, and a pair that is not watched never receives data.
+  labelNames: ['pair'],
+  registers: [register]
+})
+
 export const x402_payments_received_total = new Counter({
   name: 'x402_payments_received_total',
   help: 'Total number of valid x402 payments received',
