@@ -33,11 +33,20 @@ async function main() {
     ]
   });
 
+  const transport = process.env.MCP_TRANSPORT === 'http' ? 'http' : 'stdio';
   const server = new BazaarMcpServer({
-    fetchWithPayment
+    fetchWithPayment,
+    transport,
+    port: process.env.MCP_PORT ? Number(process.env.MCP_PORT) : 3000,
+    host: process.env.MCP_HOST || '127.0.0.1',
+    apiKey: process.env.MCP_API_KEY,
   });
 
-  console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
+  if (transport === 'http') {
+    console.error(`[mcp-server] Starting Bazaar MCP server on HTTP (port ${process.env.MCP_PORT || 3000})...`);
+  } else {
+    console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
+  }
   console.error('[mcp-server] Agent configured for stellar:testnet and stellar:pubnet');
   
   await server.run();
