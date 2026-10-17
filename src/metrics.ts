@@ -98,6 +98,33 @@ export const db_query_duration_seconds = new Histogram({
   registers: [register]
 })
 
+// ─── MCP Server Metrics ───────────────────────────────────────────────────────
+// Metrics covering the agent tool surface. All label sets are closed and bounded:
+//   tool:    'bazaar_search' | 'paid_call' | 'unknown'
+//   outcome: 'success' | 'error'
+//   code:    MCP_ERROR_CODES
+export const mcp_tool_calls_total = new Counter({
+  name: 'mcp_tool_calls_total',
+  help: 'Total number of MCP tool calls by tool name and outcome',
+  labelNames: ['tool', 'outcome'],
+  registers: [register]
+})
+
+export const mcp_tool_call_duration_seconds = new Histogram({
+  name: 'mcp_tool_call_duration_seconds',
+  help: 'Duration of MCP tool calls in seconds by tool name',
+  labelNames: ['tool'],
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [register]
+})
+
+export const mcp_tool_errors_total = new Counter({
+  name: 'mcp_tool_errors_total',
+  help: 'Total number of MCP tool errors by tool name and error code',
+  labelNames: ['tool', 'code'],
+  registers: [register]
+})
+
 export async function getMetrics() {
   return await register.metrics()
 }
