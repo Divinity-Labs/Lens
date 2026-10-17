@@ -11,6 +11,10 @@ import { pgPool } from '../db'
 import { config, activeNetwork } from '../config'
 import { parseAssetStr } from '../pairsRegistry'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
+import { getOracleComparison } from '../routes/oracle'
+import { getVolumesData } from '../routes/volumes'
+import { getSpreadsData } from '../routes/spreads'
+import { queryScreener, MARKET_CAP_UNSUPPORTED } from '../routes/screener'
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
@@ -20,7 +24,7 @@ const PRICE_TOPIC = 'PRICE_UPDATED'
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked.
-const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
+const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'NOT_FOUND', 'UNAUTHORIZED'])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
 function isUserFacing(err: GraphQLError): boolean {
@@ -108,6 +112,112 @@ const schema = `
     network: String!
   }
 
+  enum OracleStatus {
+    AVAILABLE
+    UNREACHABLE
+    EMPTY
+    NOT_CONFIGURED
+  }
+
+  type OracleSource {
+    name: String!
+    price: Float
+    value: Float
+    timestamp: String
+    deviationPct: Float
+    status: OracleStatus!
+    ageSeconds: Int
+    age: Int
+  }
+
+  type OracleComparison {
+    asset: String!
+    network: String!
+    lens: Float
+    reflector: Float
+    deviationPct: Float
+    status: String!
+    fetchedAt: String!
+    oracles: [OracleSource!]!
+    sources: [OracleSource!]!
+  }
+
+  type VenueVolume {
+    venue: String!
+    volume: Float!
+    tradeCount: Int!
+  }
+
+  type VolumeReport {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    totalVolume: Float!
+    tradeCount: Int!
+    venues: [VenueVolume!]!
+  }
+
+  type VenueQuote {
+    venue: String!
+    pairKey: String!
+    bid: Float!
+    ask: Float!
+    mid: Float!
+    spreadBps: Float!
+    spreadPct: Float!
+    observations: Int!
+    lastSeen: String!
+  }
+
+  type SpreadReport {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    venues: [VenueQuote!]!
+    tightest: VenueQuote
+  }
+
+  input ScreenerFilterInput {
+    volume: Float
+    change24hMin: Float
+    change24hMax: Float
+    priceMin: Float
+    priceMax: Float
+    liquidity: Float
+    marketCap: Float
+  }
+
+  input ScreenerSortInput {
+    field: String
+    order: String
+  }
+
+  input ScreenerPaginationInput {
+    cursor: String
+    limit: Int
+  }
+
+  type ScreenerItem {
+    pairKey: String!
+    pair_key: String!
+    volume: Float!
+    price: Float!
+    change24h: Float!
+    change_24h: Float!
+    liquidity: Float!
+  }
+
+  type ScreenerResult {
+    data: [ScreenerItem!]!
+    nextCursor: String
+    hasMore: Boolean!
+    total: Int
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -124,8 +234,46 @@ const schema = `
     """
     getPrice(assetA: String!, assetB: String!): AggregatedPrice
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-    getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
+
+    """
+    Historical price buckets for a pair.
+    The range is inclusive at both ends ([from, to]).
+    """
+    getPriceHistory(
+      assetA: String!
+      assetB: String!
+      window: String!
+      limit: Int
+      from: String
+      to: String
+    ): [PriceBucket]
+
     listPairs: [String]!
+
+    """
+    Oracle price comparison for an asset across Lens aggregate and external sources.
+    """
+    oracle(asset: String!, network: String): OracleComparison
+
+    """
+    Volume report for an asset across all trading venues.
+    """
+    volumes(asset: String!, window: String, network: String): VolumeReport
+
+    """
+    Bid/ask spread and price dispersion report for an asset across venues and pairs.
+    """
+    spreads(asset: String!, window: String, network: String): SpreadReport
+
+    """
+    Market screener filtering, sorting, and cursor pagination across tracked pairs.
+    """
+    screener(
+      filter: ScreenerFilterInput
+      sort: ScreenerSortInput
+      pagination: ScreenerPaginationInput
+      network: String
+    ): ScreenerResult
   }
 
   type Subscription {
@@ -178,13 +326,6 @@ const resolvers = {
       }
       const pairKey = pair.pairKey
 
-      // These queries carry no network argument, so they resolve against the
-      // active network's pair list (findPair above) and read that same
-      // network's price data — scoped, not pooled across both chains.
-      // Per-request network selection on the GraphQL surface is separate work.
-      // The cache key is network-prefixed to match the REST route and the
-      // refresh worker, so no deployment can serve another network's cached
-      // payload under a network-less key.
       const cacheKey = `${activeNetwork}:${pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
@@ -211,18 +352,84 @@ const resolvers = {
 
     async getPriceHistory(
       _: unknown,
-      { assetA, assetB, window, limit = 100 }: { assetA: string; assetB: string; window: string; limit?: number }
+      {
+        assetA,
+        assetB,
+        window,
+        limit = 100,
+        from,
+        to,
+      }: {
+        assetA: string
+        assetB: string
+        window: string
+        limit?: number
+        from?: string
+        to?: string
+      }
     ) {
+      let fromDate: Date | undefined
+      let toDate: Date | undefined
+
+      if (from !== undefined) {
+        fromDate = new Date(from)
+        if (isNaN(fromDate.getTime())) {
+          throw new ErrorWithProps('from must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+        }
+      }
+
+      if (to !== undefined) {
+        toDate = new Date(to)
+        if (isNaN(toDate.getTime())) {
+          throw new ErrorWithProps('to must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+        }
+      }
+
+      if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+        throw new ErrorWithProps('from must be before to', { code: 'INVALID_INPUT' })
+      }
+
+      const WINDOW_SECONDS: Record<string, number> = {
+        '1m': 60,
+        '5m': 300,
+        '15m': 900,
+        '1h': 3600,
+        '24h': 86400,
+      }
+      const intervalSecs = WINDOW_SECONDS[window] ?? 60
+      if (fromDate && toDate) {
+        const spanSecs = (toDate.getTime() - fromDate.getTime()) / 1000
+        if (spanSecs / intervalSecs > 10_000) {
+          throw new ErrorWithProps(
+            `requested window is too large for window=${window} (max 10000 points); narrow the range or use a coarser window`,
+            { code: 'INVALID_INPUT' }
+          )
+        }
+      }
+
       const pairKey = makePairKey(assetA, assetB)
+      const conditions = ['pair_key = $1', 'window = $2']
+      const params: any[] = [pairKey, window]
+
+      if (fromDate) {
+        params.push(fromDate)
+        conditions.push(`bucket >= $${params.length}`)
+      }
+      if (toDate) {
+        params.push(toDate)
+        conditions.push(`bucket <= $${params.length}`)
+      }
+      params.push(Math.min(limit ?? 100, 1000))
+
       const result = await pgPool.query(
         `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
                 volume::float, trade_count, open_price::float, close_price::float,
                 high_price::float, low_price::float
          FROM price_aggregates
-         WHERE pair_key = $1 AND window = $2
+         WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
-         LIMIT $3`,
-        [pairKey, window, Math.min(limit, 1000)]
+         LIMIT $${params.length}`,
+        params
       )
       return result.rows.map(r => ({
         bucket: r.bucket.toISOString(),
@@ -242,6 +449,147 @@ const resolvers = {
     listPairs() {
       return config.pairs.map(p => p.pairKey)
     },
+
+    async oracle(_: unknown, { asset, network }: { asset: string; network?: string }) {
+      try {
+        const comp = await getOracleComparison(asset, network)
+        const sources = comp.oracles.map(o => ({
+          name: o.name,
+          price: o.price,
+          value: o.price,
+          timestamp: o.timestamp,
+          deviationPct: o.deviationPct,
+          status: o.status.toUpperCase(),
+          ageSeconds: o.ageSeconds,
+          age: o.ageSeconds,
+        }))
+        return {
+          asset: comp.asset,
+          network: comp.network,
+          lens: comp.lens,
+          reflector: comp.reflector,
+          deviationPct: comp.deviationPct,
+          status: comp.status,
+          fetchedAt: comp.fetchedAt,
+          oracles: sources,
+          sources,
+        }
+      } catch (err: any) {
+        if (err.message === 'network must be one of: testnet, mainnet') {
+          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
+        }
+        if (err.statusCode === 404 || err.message?.startsWith('No price data found')) {
+          throw new ErrorWithProps(err.message, { code: 'NOT_FOUND' })
+        }
+        throw err
+      }
+    },
+
+    async volumes(_: unknown, { asset, window, network }: { asset: string; window?: string; network?: string }) {
+      try {
+        const data = await getVolumesData(asset, window, network)
+        return {
+          asset: data.asset,
+          network: data.network,
+          window: data.window,
+          startTime: data.startTime,
+          endTime: data.endTime,
+          totalVolume: data.totalVolume,
+          tradeCount: data.tradeCount,
+          venues: data.venueList,
+        }
+      } catch (err: any) {
+        if (err.message?.includes('must be one of')) {
+          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
+        }
+        throw err
+      }
+    },
+
+    async spreads(_: unknown, { asset, window, network }: { asset: string; window?: string; network?: string }) {
+      try {
+        const data = await getSpreadsData(asset, window, network)
+        return data
+      } catch (err: any) {
+        if (err.message?.includes('must be one of') || err.message?.includes('parameter is required')) {
+          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
+        }
+        throw err
+      }
+    },
+
+    async screener(
+      _: unknown,
+      {
+        filter,
+        sort,
+        pagination,
+        network,
+      }: {
+        filter?: {
+          volume?: number
+          change24hMin?: number
+          change24hMax?: number
+          priceMin?: number
+          priceMax?: number
+          liquidity?: number
+          marketCap?: number
+        }
+        sort?: {
+          field?: string
+          order?: string
+        }
+        pagination?: {
+          cursor?: string
+          limit?: number
+        }
+        network?: string
+      }
+    ) {
+      if (filter?.marketCap !== undefined || sort?.field === 'market_cap' || sort?.field === 'marketCap') {
+        throw new ErrorWithProps(MARKET_CAP_UNSUPPORTED, { code: 'INVALID_INPUT' })
+      }
+      try {
+        const result = await queryScreener({
+          volume: filter?.volume,
+          change_24h_min: filter?.change24hMin,
+          change_24h_max: filter?.change24hMax,
+          price_min: filter?.priceMin,
+          price_max: filter?.priceMax,
+          liquidity: filter?.liquidity,
+          sortBy: sort?.field,
+          order: sort?.order,
+          cursor: pagination?.cursor,
+          limit: pagination?.limit,
+          network: network as any,
+        })
+        return {
+          data: result.data.map(r => ({
+            pairKey: r.pair_key,
+            pair_key: r.pair_key,
+            volume: r.volume,
+            price: r.price,
+            change24h: r.change_24h,
+            change_24h: r.change_24h,
+            liquidity: r.liquidity,
+          })),
+          nextCursor: result.nextCursor,
+          hasMore: result.hasMore,
+          total: result.total,
+        }
+      } catch (err: any) {
+        if (
+          err.message === MARKET_CAP_UNSUPPORTED ||
+          err.message?.includes('must be one of') ||
+          err.message?.includes('must be a valid') ||
+          err.message?.includes('order must be') ||
+          err.message === 'Invalid cursor format'
+        ) {
+          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
+        }
+        throw err
+      }
+    },
   },
 
   Subscription: {
@@ -253,15 +601,8 @@ const resolvers = {
         { pair: string; network?: string | null }
       >(
         (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
         (payload, { pair, network }) =>
           payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
           (network == null || payload.priceUpdated.network === network)
       ),
     },
@@ -276,16 +617,11 @@ export async function registerGraphQL(app: FastifyInstance) {
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
-      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
-      // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
     },
   })
 
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
     app.graphql.pubsub.publish({
       topic: PRICE_TOPIC,
@@ -294,8 +630,6 @@ export async function registerGraphQL(app: FastifyInstance) {
   }
   priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
 
-  // Detach the listener when the server shuts down so repeated
-  // register/close cycles (e.g. in tests) don't leak listeners.
   app.addHook('onClose', async () => {
     priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
   })
