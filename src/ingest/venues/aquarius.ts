@@ -9,6 +9,7 @@
  */
 
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
+import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -17,6 +18,8 @@ import {
   writeVenuePricePoints,
   startVenueAdapter,
 } from './runner'
+
+const log = createLogger('ingester:aquarius')
 
 export function _resetLastPrice(): void {
   resetLastPrice('Aquarius')
@@ -57,7 +60,7 @@ export async function fetchAquariusPools(
     const data = (await res.json()) as AquariusListResponse
     return data.results ?? []
   } catch (err) {
-    console.error(`[aquarius] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
+    log.error({ pair: pair.pairKey, err }, 'failed to fetch pools')
     return []
   }
 }

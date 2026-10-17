@@ -1,4 +1,7 @@
 import { createHmac } from 'crypto'
+import { createLogger } from '../logger'
+
+const log = createLogger('webhook')
 
 function retryDelayMs(attempt: number): number {
   return Math.pow(2, attempt - 1) * 1000
@@ -34,14 +37,14 @@ export async function deliverJsonWithRetries(
       return deliverJsonWithRetries(url, body, secret, attempt + 1)
     }
 
-    console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}:`, (err as Error).message)
+    log.warn({ url, attempt, err }, 'webhook delivery failed after retries')
     return
   }
 
   if (res.ok) return
 
   if (res.status >= 400 && res.status < 500) {
-    console.warn(`[webhook] client error ${res.status} from ${url} — not retrying`)
+    log.warn({ url, status: res.status }, 'webhook client error; not retrying')
     return
   }
 
@@ -50,5 +53,5 @@ export async function deliverJsonWithRetries(
     return deliverJsonWithRetries(url, body, secret, attempt + 1)
   }
 
-  console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}: HTTP ${res.status}`)
+  log.warn({ url, attempt, status: res.status }, 'webhook delivery failed after retries')
 }
