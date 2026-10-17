@@ -16,6 +16,8 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getVolumes } from '../routes/volumes'
+import { computeSpreads, resolveSpreadsParams, SpreadsValidationError } from '../routes/spreads'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -25,7 +27,7 @@ function makePairKey(a: string, b: string): string {
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
- * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
+ * outright — `a.split(':')[0]' — so every asset called USDC was the same asset,
  * and a request for Circle's mainnet USDC was answered with testnet USDC's
  * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
  *
@@ -64,8 +66,8 @@ function findPair(assetA: string, assetB: string, network: NetworkName) {
 
 export async function registerRESTRoutes(app: FastifyInstance) {
   // Validate every response against its declared schema in dev/test (no-op in
-  // production). Must run before the routes below are registered so they pick
-  // up the validating serializer.
+  // production). Must run before the routes below are registered so they pick up
+  // the validating serializer.
   installResponseValidation(app)
 
   // GET /status — public health/monitoring endpoint (no API key required)
@@ -94,7 +96,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         : null,
     }
   })
-
 
   // GET /price/:assetA/:assetB
   app.get<{ Params: { assetA: string; assetB: string } }>(
@@ -133,6 +134,62 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       await setCachedPrice(cacheKey, result, config.cache.priceTtl)
       reply.header('X-Cache', 'MISS')
       return result
+    }
+  )
+
+  // GET /volumes/:asset
+  //
+  // Per-venue volume for one asset on the active network. Shared with the
+  // GraphQL `volumes` query via getVolumes so both surfaces return the same
+  // numbers for the same input.
+  app.get<{ Params: { asset: string } }>(
+    '/volumes/:asset',
+    async (req, reply) => {
+      const { asset } = req.params
+      const network = req.network ?? activeNetwork
+      const pair = findPair(asset, 'XLM', network)
+      if (!pair) return reply.status(404).send({ error: `Asset ${asset} not watched on ${network}` })
+
+      const result = await getVolumes(pair.pairKey, 'window' in req.query ? (req.query as any).window : '24h', network)
+      return {
+        asset: pair.assetA.code,
+        pairKey: pair.pairKey,
+        network,
+        venues: result.venues,
+      }
+    }
+  )
+
+  // GET /spreads/:asset
+  //
+  // Per-venue spread for one asset on the active network. Shared with the
+  // GraphQL `spreads` query via computeSpreads so both surfaces return the same
+  // numbers for the same input.
+  app.get<{ Params: { asset: string } }>(
+    '/spreads/:asset',
+    async (req, reply) => {
+      const { asset } = req.params
+      const network = req.network ?? activeNetwork
+      const pair = findPair(asset, 'XLM', network)
+      if (!pair) return reply.status(404).send({ error: `Asset ${asset} not watched on ${network}` })
+
+      try {
+        const params = resolveSpreadsParams({ asset: pair.assetA.code, network })
+        const result = await computeSpreads(params)
+        return {
+          asset: pair.assetA.code,
+          pairKey: pair.pairKey,
+          network,
+          venues: result.venues,
+        }
+      } catch (err) {
+        if (err instanceof SpreadsValidationError) {
+          return reply.status(400).send({ error: err.message })
+        }
+        return reply
+          .status(500)
+          .send({ error: `Spread aggregation failed: ${(err as Error).message}` })
+      }
     }
   )
 
@@ -219,8 +276,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
          (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
          UNION ALL
          SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
+                      WHERE network = $1 AND s.pool_id > ids.pool_id
+                      ORDER BY s.pool_id LIMIT 1)
            FROM ids
           WHERE ids.pool_id IS NOT NULL
        )
@@ -257,7 +314,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
 
       // NOTE: getDepth reads order-book data with no network column yet — see L048.
       const depthResult = await getDepth(pair.pairKey, amount)
-      
+
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
