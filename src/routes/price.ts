@@ -36,6 +36,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
   }>(
     '/price/twap/:assetA/:assetB',
     async (req, reply) => {
+      const log = req.log.child({ component: 'route:price' })
       const { assetA, assetB } = req.params
       const parsed = TwapQuerySchema.safeParse(req.query)
       if (!parsed.success) {
@@ -70,7 +71,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       } catch (err) {
         // A driver error message can carry the connection string, and so the
         // Postgres credentials. Log it; never put it in the response body.
-        console.error('[price] TWAP computation failed:', (err as Error).message)
+        log.error({ err }, 'TWAP computation failed')
         return reply.status(500).send({ error: 'TWAP computation failed' })
       }
     }
@@ -87,6 +88,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
   }>(
     '/price/vwap/:assetA/:assetB',
     async (req, reply) => {
+      const log = req.log.child({ component: 'route:price' })
       const { assetA, assetB } = req.params
       const parsed = VwapQuerySchema.safeParse(req.query)
       if (!parsed.success) {
@@ -118,7 +120,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
         }
       } catch (err) {
         // Same as TWAP above: the driver message can contain credentials.
-        console.error('[price] VWAP computation failed:', (err as Error).message)
+        log.error({ err }, 'VWAP computation failed')
         return reply.status(500).send({ error: 'VWAP computation failed' })
       }
     }

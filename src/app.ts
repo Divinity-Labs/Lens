@@ -26,6 +26,7 @@ import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
 import { getMetrics } from './metrics'
+import { loggerOptions, createDestination } from './logger'
 
 export interface BuildAppOptions {
   /**
@@ -50,7 +51,11 @@ export interface BuildAppOptions {
  * The returned app is NOT listening; the caller calls `app.listen(...)`.
  */
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: 'warn' } })
+  // Share the structured logger configuration (level, redaction, dev pretty
+  // printing) with Fastify so `req.log` is scrubbed the same way.
+  const app = Fastify({
+    logger: { ...loggerOptions(), stream: createDestination() },
+  })
 
   // Capture route registrations first, so it observes every route below
   // (including the ones registered by encapsulated plugins such as Mercurius).
