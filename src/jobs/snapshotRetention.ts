@@ -1,6 +1,6 @@
 import { Queue, Worker } from 'bullmq'
 import { pgPool } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, type NetworkName, config } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
 
 const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
@@ -8,7 +8,7 @@ const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
 /** Snapshots older than this many days are pruned by the retention job. */
 export const SNAPSHOT_RETENTION_DAYS = 30
 /** Maximum rows removed by one database statement during a retention run. */
-export const SNAPSHOT_PRUNE_BATCH_SIZE = Number(process.env.SNAPSHOT_PRUNE_BATCH_SIZE ?? 1_000)
+export const SNAPSHOT_PRUNE_BATCH_SIZE = config.snapshotPruneBatchSize
 
 export interface SnapshotPruneProgress {
   network: NetworkName
@@ -18,7 +18,7 @@ export interface SnapshotPruneProgress {
 }
 
 function redisConnection() {
-  const url = process.env.REDIS_URL
+  const url = config.redis.url
   if (url) return { url }
   return { host: 'localhost', port: 6379 }
 }

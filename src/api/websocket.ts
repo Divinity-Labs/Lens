@@ -1,13 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import websocket from '@fastify/websocket'
 import { priceEmitter, PRICE_UPDATE, PriceUpdateEvent } from '../events'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, type NetworkName, config } from '../config'
 import { X402_NETWORK_LABEL, paymentAddressFor, getX402ResourceServer } from '../x402/network'
 import { resolveNetworkName } from '../middleware/network'
 import { fanOutManager } from '../ws/fanout'
 import { v4 as uuid } from 'uuid'
 
-const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
+const FACILITATOR_URL = config.x402FacilitatorUrl
 
 export async function registerWebSocket(app: FastifyInstance) {
   await app.register(websocket)

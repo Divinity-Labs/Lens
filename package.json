@@ -19,8 +19,13 @@
     "key:issue": "tsx scripts/issue-api-key.ts",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "client:gen": "tsx scripts/generate-client.ts",
+    "snippets:gen": "tsx scripts/generate-snippets.ts",
+    "spec:validate": "tsx scripts/validate-live-spec.ts",
+    "smoke": "tsx scripts/smoke-check.ts"
   },
+
   "dependencies": {
     "@fastify/compress": "^8.3.1",
     "@fastify/cors": "^11.2.0",

@@ -9,7 +9,58 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 
 **What Horizon doesn't do:** Horizon's `/trade_aggregations` only covers SDEX. AMM pool prices (derived from reserve ratios) are not aggregated anywhere. Lens fills this gap.
 
+## Sixty-Second Quickstart
+
+Get a live price in one command:
+
+### 1. REST API
+```bash
+curl -s "https://lens.divinitylabs.com/v1/price/XLM/USDC?network=testnet"
+```
+**Response:**
+```json
+{
+  "pair": "XLM/USDC",
+  "price": 0.12543,
+  "sources": {
+    "sdex": 0.1254,
+    "amm": 0.12545
+  },
+  "network": "testnet",
+  "timestamp": "2026-03-30T12:00:00.000Z"
+}
+```
+*The response returns the volume-weighted spot price (`0.12543`), individual venue quotes across SDEX and Soroswap AMM, and ISO timestamp.*
+
+### 2. GraphQL API
+```bash
+curl -s -X POST https://lens.divinitylabs.com/v1/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ getPrice(assetA: \"XLM\", assetB: \"USDC\") { pair priceDecimal network } }"}'
+```
+**Response:**
+```json
+{
+  "data": {
+    "getPrice": {
+      "pair": "XLM/USDC",
+      "priceDecimal": "0.125430000000000000",
+      "network": "testnet"
+    }
+  }
+}
+```
+*Returns exact 18-decimal fixed-point precision `Decimal` scalar without floating-point IEEE-754 rounding.*
+
+### 3. Model Context Protocol (MCP) Server
+Run the local MCP tool server directly:
+```bash
+npx -y @divinity-labs/lens-mcp --network=testnet
+```
+*Exposes `get_price`, `get_candles`, `get_screener`, and `get_venues` as native AI agent tools.*
+
 ## Endpoints
+
 
 ### REST
 | Method | Path | Description |
@@ -484,7 +535,25 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 *(Note: timestamp values above reflect the dynamic hourly anchor at seed execution time and request time).*
 
 
+## Deployment Smoke Check
+
+Lens includes an automated synthetic smoke check (`scripts/smoke-check.ts`) that verifies an active deployment end-to-end within seconds:
+
+```bash
+# Run against local, staging, or production
+npm run smoke -- http://localhost:3002
+npm run smoke -- https://lens.divinitylabs.com
+```
+
+### What it checks:
+1. **Health & Readiness:** Probes `/status` to confirm database connectivity and indexer responsiveness within 10 seconds.
+2. **Price & Freshness:** Queries `/v1/price/XLM/USDC?network=testnet` and asserts not only presence, but that the price timestamp is within the freshness threshold.
+3. **WebSocket Lifecycle:** Connects to `/ws`, registers a pair subscription, and asserts receipt of a real streaming price update before closing cleanly.
+
+Exits `0` on total health, or `1` with explicit failure logs on any degraded component.
+
 ## Environment Variables
+
 
 | Variable | Description | Default | Required |
 |---|---|---|---|

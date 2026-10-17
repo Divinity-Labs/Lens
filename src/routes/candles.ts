@@ -1,5 +1,9 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { pgPool } from '../db'
+import { activeNetwork, type NetworkName } from '../config'
+import { formatZodError } from '../validation/formatter'
+import '../middleware/network'
 
 const INTERVAL_SECONDS: Record<string, number> = {
   '1m': 60,
@@ -10,34 +14,60 @@ const INTERVAL_SECONDS: Record<string, number> = {
   '1d': 86_400,
 }
 
+const CandleParamsSchema = z.object({
+  assetA: z.string().min(1, 'assetA is required'),
+  assetB: z.string().min(1, 'assetB is required'),
+})
+
+const CandleQuerySchema = z.object({
+  interval: z
+    .string()
+    .optional()
+    .default('1h')
+    .refine(val => ['1m', '5m', '15m', '1h', '4h', '1d'].includes(val), {
+      message: 'interval must be one of 1m, 5m, 15m, 1h, 4h, 1d',
+    }),
+
+  from: z.string().optional().refine(val => {
+    if (!val) return true
+    return !isNaN(new Date(val).getTime())
+  }, { message: 'from must be a valid ISO 8601 date' }),
+  to: z.string().optional().refine(val => {
+    if (!val) return true
+    return !isNaN(new Date(val).getTime())
+  }, { message: 'to must be a valid ISO 8601 date' }),
+  network: z.enum(['testnet', 'mainnet'], {
+    errorMap: () => ({ message: 'network must be testnet or mainnet' })
+  }).optional(),
+})
+
 export async function registerCandleRoutes(app: FastifyInstance) {
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { interval?: string; from?: string; to?: string }
+    Querystring: { interval?: string; from?: string; to?: string; network?: string }
   }>('/candles/:assetA/:assetB', async (req, reply) => {
-    const { assetA, assetB } = req.params
-    const interval = req.query.interval ?? '1h'
+    const paramsParsed = CandleParamsSchema.safeParse(req.params)
+    if (!paramsParsed.success) {
+      return reply.status(400).send(formatZodError(paramsParsed.error))
+    }
+
+    const queryParsed = CandleQuerySchema.safeParse(req.query)
+    if (!queryParsed.success) {
+      return reply.status(400).send(formatZodError(queryParsed.error))
+    }
+
+    const { assetA, assetB } = paramsParsed.data
+    const { interval } = queryParsed.data
     const intervalSecs = INTERVAL_SECONDS[interval]
 
-    if (!intervalSecs) {
-      return reply.status(400).send({
-        error: `interval must be one of: ${Object.keys(INTERVAL_SECONDS).join(', ')}`,
-      })
-    }
+    const network: NetworkName = req.network ?? queryParsed.data.network ?? activeNetwork
 
     const pairKey = [assetA, assetB].sort().join('/')
 
-    const fromRaw = req.query.from
-    const toRaw = req.query.to
+    const fromRaw = queryParsed.data.from
+    const toRaw = queryParsed.data.to
     const from = fromRaw ? new Date(fromRaw) : new Date(Date.now() - 24 * 60 * 60 * 1000)
     const to = toRaw ? new Date(toRaw) : new Date()
-
-    if (isNaN(from.getTime())) {
-      return reply.status(400).send({ error: 'from must be a valid ISO 8601 date' })
-    }
-    if (isNaN(to.getTime())) {
-      return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
-    }
 
     const result = await pgPool.query(
       `SELECT
@@ -51,13 +81,15 @@ export async function registerCandleRoutes(app: FastifyInstance) {
        WHERE pair_key = $2
          AND timestamp >= $3
          AND timestamp <= $4
+         AND network = $5
        GROUP BY floor(EXTRACT(EPOCH FROM timestamp) / $1)
        ORDER BY time ASC`,
-      [intervalSecs, pairKey, from, to]
+      [intervalSecs, pairKey, from, to, network]
     )
 
     return {
       pairKey,
+      network,
       interval,
       from: from.toISOString(),
       to: to.toISOString(),

@@ -2,8 +2,8 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Lens API",
-    "description": "Unified Stellar price API aggregating SDEX + AMM prices.",
-    "version": "0.1.0",
+    "description": "Unified Stellar price API aggregating SDEX + AMM prices with canonical /v1 versioning.",
+    "version": "0.2.0",
     "license": {
       "name": "MIT",
       "url": "https://opensource.org/licenses/MIT"
@@ -16,7 +16,7 @@
     }
   ],
   "paths": {
-    "/status": {
+    "/v1/status": {
       "get": {
         "operationId": "getStatus",
         "summary": "Get API status and indexer state",
@@ -64,17 +64,28 @@
                       "nullable": true
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/price/{assetA}/{assetB}": {
+    "/v1/price/{assetA}/{assetB}": {
       "get": {
         "operationId": "getPrice",
         "summary": "Get aggregated price for a pair",
@@ -113,9 +124,17 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AggregatedPrice"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
@@ -125,11 +144,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/price/{assetA}/{assetB}/route": {
+    "/v1/price/{assetA}/{assetB}/route": {
       "get": {
         "operationId": "getBestRoute",
         "summary": "Get best swap route for a pair and amount",
@@ -175,20 +197,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RouteInfo"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/price/{assetA}/{assetB}/history": {
+    "/v1/price/{assetA}/{assetB}/history": {
       "get": {
         "operationId": "getPriceHistory",
         "summary": "Get price history buckets",
@@ -267,6 +303,11 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -274,13 +315,19 @@
           "400": {
             "description": "Invalid parameters"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/pools": {
+    "/v1/pools": {
       "get": {
         "operationId": "getPools",
         "summary": "Get AMM liquidity pool reserves and spot prices",
@@ -336,20 +383,31 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/candles/{assetA}/{assetB}": {
+    "/v1/candles/{assetA}/{assetB}": {
       "get": {
         "operationId": "getCandles",
         "summary": "Get OHLCV candle data",
@@ -409,6 +467,9 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
           }
         ],
         "responses": {
@@ -459,6 +520,11 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -469,13 +535,19 @@
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/prices/history": {
+    "/v1/prices/history": {
       "get": {
         "operationId": "getPriceSnapshots",
         "summary": "Get historical 1-minute price snapshots",
@@ -602,6 +674,11 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -614,11 +691,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/pairs": {
+    "/v1/pairs": {
       "get": {
         "operationId": "listPairs",
         "summary": "List all active trading pairs",
@@ -663,12 +743,23 @@
                       }
                     }
                   }
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       },
@@ -715,11 +806,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/price/{assetA}/{assetB}/depth": {
+    "/v1/price/{assetA}/{assetB}/depth": {
       "get": {
         "operationId": "getDepth",
         "summary": "Get order-book depth and execution slippage for a pair",
@@ -768,6 +862,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DepthResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -783,11 +882,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/book/{assetA}/{assetB}": {
+    "/v1/book/{assetA}/{assetB}": {
       "get": {
         "operationId": "getBook",
         "summary": "Get the aggregated SDEX and AMM price ladder for a pair",
@@ -848,6 +950,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BookResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -855,8 +962,14 @@
           "400": {
             "description": "Invalid asset, depth, or step parameter"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           },
           "503": {
             "description": "No source could be read; response provenance identifies failed venues.",
@@ -871,7 +984,7 @@
         }
       }
     },
-    "/price/twap/{assetA}/{assetB}": {
+    "/v1/price/twap/{assetA}/{assetB}": {
       "get": {
         "operationId": "getTwap",
         "summary": "Get a manipulation-resistant time-weighted average price",
@@ -945,6 +1058,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TwapResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -955,6 +1073,9 @@
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -964,7 +1085,7 @@
         }
       }
     },
-    "/price/vwap/{assetA}/{assetB}": {
+    "/v1/price/vwap/{assetA}/{assetB}": {
       "get": {
         "operationId": "getVwap",
         "summary": "Get a volume-weighted average price",
@@ -1036,6 +1157,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VwapResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -1046,6 +1172,9 @@
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -1055,7 +1184,7 @@
         }
       }
     },
-    "/volumes/{asset}": {
+    "/v1/volumes/{asset}": {
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
@@ -1096,12 +1225,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VolumeResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
           "400": {
             "description": "Invalid window"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -1112,7 +1249,7 @@
         }
       }
     },
-    "/spreads/{asset}": {
+    "/v1/spreads/{asset}": {
       "get": {
         "operationId": "getSpreads",
         "summary": "Get the tightest per-venue bid/ask spread for an asset",
@@ -1154,12 +1291,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SpreadResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
           "400": {
             "description": "Invalid window or network"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -1170,7 +1315,7 @@
         }
       }
     },
-    "/compare/{asset}": {
+    "/v1/compare/{asset}": {
       "get": {
         "operationId": "compareAsset",
         "summary": "Compare Lens prices with every configured external oracle",
@@ -1196,20 +1341,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CompareResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "404": {
             "description": "No price data found for the asset"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/screener": {
+    "/v1/screener": {
       "get": {
         "operationId": "screenPairs",
         "summary": "Screen pairs by volume, change, liquidity and price",
@@ -1322,6 +1478,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ScreenerResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -1338,7 +1499,7 @@
         }
       }
     },
-    "/benchmark/{asset}": {
+    "/v1/benchmark/{asset}": {
       "get": {
         "operationId": "getBenchmark",
         "summary": "Get peg-deviation statistics for an asset against a target",
@@ -1370,9 +1531,17 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BenchmarkResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "404": {
             "description": "Pair not watched"
@@ -1386,7 +1555,7 @@
         }
       }
     },
-    "/basket": {
+    "/v1/basket": {
       "get": {
         "operationId": "getBasket",
         "summary": "Compute the weighted price of a basket of assets",
@@ -1436,6 +1605,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BasketResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -1448,11 +1622,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/discovery/resources": {
+    "/v1/discovery/resources": {
       "get": {
         "operationId": "listDiscoveryResources",
         "summary": "Browse the x402 Bazaar catalog of discoverable resources",
@@ -1525,17 +1702,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DiscoveryResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/webhooks": {
+    "/v1/webhooks": {
       "post": {
         "operationId": "createWebhook",
         "summary": "Subscribe to a price-threshold webhook",
@@ -1599,11 +1787,14 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/webhooks/{id}": {
+    "/v1/webhooks/{id}": {
       "delete": {
         "operationId": "deleteWebhook",
         "summary": "Delete a webhook subscription",
@@ -1622,13 +1813,22 @@
           "204": {
             "description": "Webhook deleted (idempotent — a missing id also returns 204)"
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/usage/me": {
+    "/v1/usage/me": {
       "get": {
         "operationId": "getMyUsage",
         "summary": "Get usage and quota for the calling API key",
@@ -1644,20 +1844,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UsageResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "description": "Missing or invalid API key"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/supported": {
+    "/v1/supported": {
       "get": {
         "operationId": "getSupported",
         "summary": "List the payment kinds and extensions this facilitator supports",
@@ -1669,14 +1880,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SupportedResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/verify": {
+    "/v1/verify": {
       "post": {
         "operationId": "verifyPayment",
         "summary": "Verify an x402 payment payload",
@@ -1698,6 +1920,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VerifyResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -1725,7 +1952,7 @@
         }
       }
     },
-    "/settle": {
+    "/v1/settle": {
       "post": {
         "operationId": "settlePayment",
         "summary": "Settle an x402 payment (idempotent)",
@@ -1748,6 +1975,11 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SettleResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
@@ -1761,11 +1993,14 @@
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
     },
-    "/graphql": {
+    "/v1/graphql": {
       "get": {
         "operationId": "graphqlGet",
         "summary": "Execute a GraphQL query over HTTP GET",
@@ -1804,9 +2039,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GraphQlResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       },
@@ -1849,12 +2095,271 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GraphQlResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "status": "healthy"
                 }
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/venues/registry": {
+      "get": {
+        "operationId": "getVenuesRegistry",
+        "summary": "List all registered trading and liquidity venues with kinds and heartbeats",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Venue registry list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuesRegistryResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "count": 4,
+                  "venues": [
+                    {
+                      "name": "Stellar DEX",
+                      "source": "SDEX",
+                      "kind": "orderbook",
+                      "isOnChain": true,
+                      "networks": [
+                        "testnet",
+                        "mainnet"
+                      ],
+                      "isEnabled": true,
+                      "pollIntervalMs": 5000,
+                      "liveness": "active",
+                      "description": "Stellar classic on-chain decentralized limit order book"
+                    },
+                    {
+                      "name": "Stellar AMM",
+                      "source": "AMM",
+                      "kind": "amm",
+                      "isOnChain": true,
+                      "networks": [
+                        "testnet",
+                        "mainnet"
+                      ],
+                      "isEnabled": true,
+                      "pollIntervalMs": 5000,
+                      "liveness": "active",
+                      "description": "Protocol 18 native constant-product AMM liquidity pools"
+                    },
+                    {
+                      "name": "Soroswap",
+                      "source": "SOROSWAP",
+                      "kind": "amm",
+                      "isOnChain": true,
+                      "networks": [
+                        "testnet",
+                        "mainnet"
+                      ],
+                      "isEnabled": true,
+                      "pollIntervalMs": 60000,
+                      "liveness": "active",
+                      "description": "Uniswap v2-style smart contract automated market maker on Soroban"
+                    },
+                    {
+                      "name": "Aquarius",
+                      "source": "AQUARIUS",
+                      "kind": "amm",
+                      "isOnChain": true,
+                      "networks": [
+                        "mainnet"
+                      ],
+                      "isEnabled": false,
+                      "pollIntervalMs": 60000,
+                      "liveness": "offline",
+                      "description": "Stellar Classic liquidity protocol and automated market maker"
+                    }
+                  ],
+                  "timestamp": "2026-10-17T00:00:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/snapshot": {
+      "get": {
+        "operationId": "getMarketSnapshot",
+        "summary": "Get unified, citable snapshot of Stellar markets at a single moment",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "description": "Historical snapshot timestamp in ISO 8601 format",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Market snapshot",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Caching policy (15s max-age, 30s stale-while-revalidate)"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketSnapshot"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "timestamp": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "totalTvl": 1250000.5,
+                  "volume24h": 450200.12,
+                  "venues": [
+                    {
+                      "name": "Stellar DEX",
+                      "source": "SDEX",
+                      "kind": "orderbook",
+                      "liveness": "active"
+                    }
+                  ],
+                  "topPairs": [
+                    {
+                      "pairKey": "USDC:GA5.../XLM",
+                      "price": 0.1852,
+                      "volume24h": 230100.5
+                    }
+                  ],
+                  "pegs": [
+                    {
+                      "asset": "USDC",
+                      "price": 1,
+                      "target": 1,
+                      "deviationBps": 0,
+                      "status": "pegged"
+                    }
+                  ],
+                  "freshnessSeconds": 12
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/snapshot/compare": {
+      "get": {
+        "operationId": "compareMarketSnapshots",
+        "summary": "Diff between two historical market snapshots",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "Starting ISO 8601 timestamp",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Ending ISO 8601 timestamp",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Snapshot diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotCompareResponse"
+                },
+                "example": {
+                  "capturedAt": "2026-10-17T00:00:00Z",
+                  "network": "testnet",
+                  "from": "2026-10-16T00:00:00Z",
+                  "to": "2026-10-17T00:00:00Z",
+                  "tvlDelta": 50000.25,
+                  "tvlDeltaPct": 4.16,
+                  "volumeDelta": -12000,
+                  "volumeDeltaPct": -2.59,
+                  "pairDeltas": [
+                    {
+                      "pairKey": "USDC/XLM",
+                      "oldPrice": 0.182,
+                      "newPrice": 0.185,
+                      "priceDelta": 0.003,
+                      "priceDeltaPct": 1.64
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         }
       }
@@ -1971,6 +2476,49 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid request parameters or payload",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Invalid parameter \"interval\": interval must be one of: 1m, 5m, 15m, 1h, 4h, 1d",
+              "code": "INVALID_PARAMETERS",
+              "field": "interval"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Requested asset pair or resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Pair XLM/FAKE is not tracked on testnet",
+              "code": "PAIR_NOT_FOUND"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal server error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Internal server error",
+              "code": "INTERNAL_SERVER_ERROR"
             }
           }
         }
@@ -2784,6 +3332,11 @@
           },
           "liquidity": {
             "type": "number"
+          },
+          "liquidity_unit": {
+            "type": "string",
+            "description": "Unit of liquidity calculation (quote asset units)",
+            "example": "quote"
           }
         }
       },
@@ -3213,6 +3766,296 @@
               "properties": {
                 "message": {
                   "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error description"
+          },
+          "code": {
+            "type": "string",
+            "description": "Standardized machine-readable error code"
+          },
+          "field": {
+            "type": "string",
+            "nullable": true,
+            "description": "Name of offending query or path parameter if applicable"
+          },
+          "details": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "VenueRegistryItem": {
+        "type": "object",
+        "required": [
+          "name",
+          "source",
+          "kind",
+          "isOnChain",
+          "networks",
+          "isEnabled",
+          "pollIntervalMs",
+          "liveness",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "orderbook",
+              "amm",
+              "vault",
+              "oracle",
+              "dex"
+            ]
+          },
+          "isOnChain": {
+            "type": "boolean"
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "testnet",
+                "mainnet"
+              ]
+            }
+          },
+          "isEnabled": {
+            "type": "boolean"
+          },
+          "pollIntervalMs": {
+            "type": "integer"
+          },
+          "liveness": {
+            "type": "string",
+            "enum": [
+              "active",
+              "degraded",
+              "offline"
+            ]
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "VenuesRegistryResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "count",
+          "venues",
+          "timestamp"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VenueRegistryItem"
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MarketSnapshot": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "network",
+          "totalTvl",
+          "volume24h",
+          "venues",
+          "topPairs",
+          "pegs",
+          "freshnessSeconds"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "totalTvl": {
+            "type": "number"
+          },
+          "volume24h": {
+            "type": "number"
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "liveness": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "topPairs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pairKey": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "volume24h": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "pegs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "asset": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "target": {
+                  "type": "number"
+                },
+                "deviationBps": {
+                  "type": "number"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pegged",
+                    "depegged"
+                  ]
+                }
+              }
+            }
+          },
+          "freshnessSeconds": {
+            "type": "integer"
+          }
+        }
+      },
+      "SnapshotCompareResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "from",
+          "to",
+          "tvlDelta",
+          "tvlDeltaPct",
+          "volumeDelta",
+          "volumeDeltaPct",
+          "pairDeltas"
+        ],
+        "properties": {
+          "network": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tvlDelta": {
+            "type": "number"
+          },
+          "tvlDeltaPct": {
+            "type": "number"
+          },
+          "volumeDelta": {
+            "type": "number"
+          },
+          "volumeDeltaPct": {
+            "type": "number"
+          },
+          "pairDeltas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pairKey": {
+                  "type": "string"
+                },
+                "oldPrice": {
+                  "type": "number"
+                },
+                "newPrice": {
+                  "type": "number"
+                },
+                "priceDelta": {
+                  "type": "number"
+                },
+                "priceDeltaPct": {
+                  "type": "number"
                 }
               }
             }

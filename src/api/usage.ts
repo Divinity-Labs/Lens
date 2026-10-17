@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
+import { config } from '../config'
 
 function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
+  const adminToken = config.adminToken
   if (!adminToken) return false
   const supplied =
     (req.headers['x-admin-token'] as string | undefined) ??
@@ -15,7 +16,7 @@ function isAdminAuthorized(req: FastifyRequest): boolean {
   return a.length === b.length && require('crypto').timingSafeEqual(a, b)
 }
 
-export async function registerUsageRoutes(app: FastifyInstance) {
+export async function registerAdminUsageRoutes(app: FastifyInstance) {
   app.get<{ Params: { keyId: string } }>(
     '/admin/usage/:keyId',
     { config: { public: true } },
@@ -46,8 +47,10 @@ export async function registerUsageRoutes(app: FastifyInstance) {
       return reply.send({ keys: summaries })
     }
   )
+}
 
-  app.get(
+export async function registerUsageMeRoute(instance: FastifyInstance) {
+  instance.get(
     '/usage/me',
     async (req, reply) => {
       const apiKey = (req as any).apiKey as { id: string } | undefined
@@ -62,3 +65,9 @@ export async function registerUsageRoutes(app: FastifyInstance) {
     }
   )
 }
+
+export async function registerUsageRoutes(app: FastifyInstance) {
+  await registerAdminUsageRoutes(app)
+  await registerUsageMeRoute(app)
+}
+

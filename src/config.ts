@@ -1,6 +1,78 @@
 import 'dotenv/config'
+import { z } from 'zod'
 import { Networks, StrKey } from '@stellar/stellar-sdk'
 import type { WatchedPair, AssetId } from './types'
+
+// ── Environment Schema & Validation (#338) ────────────────────────────────────
+
+const positiveIntRegex = /^\d+$/
+
+const positiveIntString = (defaultVal: number) =>
+  z
+    .string()
+    .optional()
+    .refine(
+      val => val === undefined || (positiveIntRegex.test(val) && !isNaN(parseInt(val, 10)) && parseInt(val, 10) >= 0),
+      { message: 'Must be a valid positive integer string' }
+    )
+    .transform(val => (val !== undefined ? parseInt(val, 10) : defaultVal))
+
+export const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: positiveIntString(3002),
+    HOST: z.string().default('0.0.0.0'),
+    DATABASE_URL: z.string().default('postgresql://lens:lens@localhost:5432/lens'),
+    DIRECT_DATABASE_URL: z.string().optional(),
+    REDIS_URL: z.string().default('redis://localhost:6379'),
+    PRICE_CACHE_TTL: positiveIntString(10),
+    HTTP_TIMEOUT_MS: positiveIntString(10000),
+    STELLAR_NETWORK: z.enum(['testnet', 'mainnet']).default('testnet'),
+    ENABLED_NETWORKS: z.string().optional(),
+    POLL_INTERVAL_MS: positiveIntString(5000),
+    SDEX_PAGE_SIZE: positiveIntString(200),
+    AMM_PAGE_SIZE: positiveIntString(200),
+    SOROSWAP_POLL_INTERVAL_MS: positiveIntString(60000),
+    ADMIN_TOKEN: z.string().optional(),
+    ADMIN_API_KEY: z.string().optional(),
+    REQUIRE_API_KEY: z.string().default('true'),
+    RATE_LIMIT_IP_MAX: positiveIntString(100),
+    ORACLE_PAYMENT_ADDRESS: z.string().optional(),
+    ORACLE_PAYMENT_ADDRESS_TESTNET: z.string().optional(),
+    ORACLE_PAYMENT_ADDRESS_MAINNET: z.string().optional(),
+    X402_FACILITATOR_URL: z.string().default('https://x402.org/facilitator'),
+    SNAPSHOT_PRUNE_BATCH_SIZE: positiveIntString(1000),
+    ENABLE_GRAPHIQL: z.string().optional(),
+    ENABLE_INTROSPECTION: z.string().optional(),
+    MAX_WS_SUBSCRIPTIONS_PER_KEY: positiveIntString(10),
+    FACILITATOR_FEE_STROOPS: positiveIntString(50000),
+  })
+  .passthrough()
+
+export type ParsedEnv = z.infer<typeof envSchema>
+
+/**
+ * Validates the environment variables against the schema.
+ * Rejects invalid types or missing required values in production.
+ */
+export function validateEnv(rawEnv: Record<string, string | undefined> = process.env): ParsedEnv {
+  const result = envSchema.safeParse(rawEnv)
+  if (!result.success) {
+    const errorDetails = result.error.errors
+      .map(e => `${e.path.join('.')}: ${e.message}`)
+      .join(', ')
+    throw new Error(`Configuration validation failed: ${errorDetails}`)
+  }
+
+  // Required in production checks
+  if (result.data.NODE_ENV === 'production' && !rawEnv.DATABASE_URL) {
+    throw new Error('Configuration validation failed: DATABASE_URL is required in production')
+  }
+
+  return result.data
+}
+
+export const validatedEnv = validateEnv()
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -234,25 +306,26 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
 const globalConfig = {
   db: {
-    url: process.env.DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
+    url: validatedEnv.DATABASE_URL,
+    directUrl: validatedEnv.DIRECT_DATABASE_URL ?? validatedEnv.DATABASE_URL,
   },
   redis: {
-    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    url: validatedEnv.REDIS_URL,
   },
   api: {
-    port: parseInt(process.env.PORT ?? '3002', 10),
-    host: process.env.HOST ?? '0.0.0.0',
+    port: validatedEnv.PORT,
+    host: validatedEnv.HOST,
   },
   indexer: {
-    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
-    sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
-    ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    pollIntervalMs: validatedEnv.POLL_INTERVAL_MS,
+    sdexPageSize: validatedEnv.SDEX_PAGE_SIZE,
+    ammPageSize: validatedEnv.AMM_PAGE_SIZE,
   },
   cache: {
-    priceTtl: parseInt(process.env.PRICE_CACHE_TTL ?? '10', 10),
+    priceTtl: validatedEnv.PRICE_CACHE_TTL,
   },
   http: {
-    timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
+    timeoutMs: validatedEnv.HTTP_TIMEOUT_MS,
   },
 } as const
 
@@ -290,7 +363,7 @@ export function getNetworkConfig(network: NetworkName): NetworkConfig {
  * Falls back to `'testnet'` when unset so local dev always works.
  */
 export const activeNetwork: NetworkName =
-  (process.env.STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
+  (validatedEnv.STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
     ? 'mainnet'
     : 'testnet'
 
@@ -334,4 +407,27 @@ export const config = {
   indexer: globalConfig.indexer,
   cache:   globalConfig.cache,
   http:    globalConfig.http,
+
+  // ── Auth, Security, Facilitator & Feature flags (#338) ──────────────────────
+  get adminToken() { return process.env.ADMIN_TOKEN },
+  get adminApiKey() { return process.env.ADMIN_API_KEY },
+  get requireApiKey() { return process.env.REQUIRE_API_KEY !== 'false' },
+  get rateLimitIpMax() {
+    return process.env.RATE_LIMIT_IP_MAX ? parseInt(process.env.RATE_LIMIT_IP_MAX, 10) : validatedEnv.RATE_LIMIT_IP_MAX
+  },
+  get nodeEnv() { return process.env.NODE_ENV || validatedEnv.NODE_ENV },
+  get x402FacilitatorUrl() { return process.env.X402_FACILITATOR_URL || validatedEnv.X402_FACILITATOR_URL },
+  get oraclePaymentAddress() { return process.env.ORACLE_PAYMENT_ADDRESS },
+  get oraclePaymentAddressTestnet() { return process.env.ORACLE_PAYMENT_ADDRESS_TESTNET },
+  get oraclePaymentAddressMainnet() { return process.env.ORACLE_PAYMENT_ADDRESS_MAINNET },
+  get snapshotPruneBatchSize() {
+    return process.env.SNAPSHOT_PRUNE_BATCH_SIZE ? parseInt(process.env.SNAPSHOT_PRUNE_BATCH_SIZE, 10) : validatedEnv.SNAPSHOT_PRUNE_BATCH_SIZE
+  },
+  get enabledNetworks() { return process.env.ENABLED_NETWORKS },
+  get enableGraphiql() { return process.env.ENABLE_GRAPHIQL },
+  get enableIntrospection() { return process.env.ENABLE_INTROSPECTION },
+  get maxWsSubscriptionsPerKey() {
+    return process.env.MAX_WS_SUBSCRIPTIONS_PER_KEY ? parseInt(process.env.MAX_WS_SUBSCRIPTIONS_PER_KEY, 10) : validatedEnv.MAX_WS_SUBSCRIPTIONS_PER_KEY
+  },
 }
+

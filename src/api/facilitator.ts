@@ -116,4 +116,4 @@ async function facilitatorPlugin(app: FastifyInstance) {
   // this spot was replaced by it (#149).
 }
 
-export const registerFacilitatorRoutes = fp(facilitatorPlugin, { name: 'facilitator' })
+export const registerFacilitatorRoutes = facilitatorPlugin
