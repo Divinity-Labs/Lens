@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { execSync } from 'child_process'
+import type { Server } from 'http'
 
 if (!process.env.DIRECT_DATABASE_URL && process.env.DATABASE_URL) {
   process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL
@@ -16,6 +17,102 @@ import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────
+// Lens runs infinite background loops (venue ingesters, snapshot ingester,
+// BullMQ workers) plus a Fastify HTTP listener. On every deploy the platform
+// sends SIGTERM; Node's default handler exits immediately, dropping in-flight
+// work mid-write. This handler stops accepting new work, drains within a
+// bounded grace period, then closes Prisma and Redis explicitly.
+//
+// Order matters: stop ingesters and the HTTP listener first (no new work),
+// drain in-flight work, then close dependencies. A hard deadline guarantees a
+// stuck drain cannot hang the deploy forever, and it is logged loudly.
+const SHUTDOWN_GRACE_MS = (() => {
+  const raw = process.env.SHUTDOWN_GRACE_MS
+  if (raw === undefined || raw === '') return 25_000
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[lens] Invalid SHUTDOWN_GRACE_MS=${raw}, falling back to 25000ms`)
+    return 25_000
+  }
+  return parsed
+})()
+
+let shuttingDown = false
+let shutdownPromise: Promise<void> | undefined
+
+function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    console.log(`[lens] Received ${signal} during shutdown — ignoring (drain already in progress)`)
+    return shutdownPromise ?? Promise.resolve()
+  }
+  shuttingDown = true
+  console.log(`[lens] Received ${signal}, starting graceful shutdown (grace ${SHUTDOWN_GRACE_MS}ms)`)
+
+  shutdownPromise = (async () => {
+    const deadline = setTimeout(() => {
+      console.error(
+        `[lens] Shutdown deadline of ${SHUTDOWN_GRACE_MS}ms exceeded — forcing exit. In-flight work may be lost.`,
+      )
+      process.exit(1)
+    }, SHUTDOWN_GRACE_MS)
+    deadline.unref()
+
+    try {
+      // 1. Stop accepting new work: ingester loops and HTTP listener.
+      for (const stop of ingesterStops) {
+        try { stop() } catch (err) {
+          console.error('[lens] Error stopping ingester:', (err as Error).message)
+        }
+      }
+      if (httpServer) {
+        await new Promise<void>(resolve => {
+          httpServer!.close(err => {
+            if (err) console.error('[lens] Error closing HTTP server:', err.message)
+            resolve()
+          })
+        })
+        console.log('[lens] HTTP server closed')
+      }
+
+      // 2. Drain in-flight work: let the event loop settle briefly so any
+      //    in-progress handler can finish before dependencies close.
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      // 3. Close dependencies explicitly.
+      try {
+        await pgPool.end()
+        console.log('[lens] PostgreSQL pool closed')
+      } catch (err) {
+        console.error('[lens] Error closing PostgreSQL pool:', (err as Error).message)
+      }
+      try {
+        await redis.quit()
+        console.log('[lens] Redis closed')
+      } catch (err) {
+        console.error('[lens] Error closing Redis:', (err as Error).message)
+      }
+
+      clearTimeout(deadline)
+      console.log('[lens] Graceful shutdown complete')
+      process.exit(0)
+    } catch (err) {
+      console.error('[lens] Error during shutdown:', (err as Error).message)
+      clearTimeout(deadline)
+      process.exit(1)
+    }
+  })()
+
+  return shutdownPromise
+}
+
+// Registered at module load so a signal arriving during startup is still
+// caught. The stops array and httpServer are populated as main() progresses.
+const ingesterStops: Array<() => void> = []
+let httpServer: Server | undefined
+process.on('SIGTERM', () => { void shutdown('SIGTERM') })
+process.on('SIGINT', () => { void shutdown('SIGINT') })
 
 async function main() {
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
@@ -55,6 +152,7 @@ async function main() {
   const app = await buildApp()
 
   await app.listen({ port: config.api.port, host: config.api.host })
+  httpServer = app.server
   console.log(`[lens] API listening on http://${config.api.host}:${config.api.port}`)
   console.log(`[lens] GraphiQL at http://localhost:${config.api.port}/graphiql`)
 
@@ -140,11 +238,26 @@ async function main() {
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
   // mainnet only restarts that one instance and cannot affect SDEX/AMM or the
   // ingesters running on testnet.
+  //
+  // Each restartIngester call registers a stop function in ingesterStops so
+  // graceful shutdown can halt the loop and cancel any pending restart timer.
   const restartIngester = (name: string, network: NetworkName, fn: () => Promise<void>) => {
-    fn().catch(err => {
-      console.error(`[lens] ${name}/${network} ingester crashed, restarting in 10s:`, err.message)
-      setTimeout(() => restartIngester(name, network, fn), 10_000)
+    let stopped = false
+    let restartTimer: NodeJS.Timeout | undefined
+    const run = () => {
+      if (stopped) return
+      fn().catch(err => {
+        if (stopped) return
+        console.error(`[lens] ${name}/${network} ingester crashed, restarting in 10s:`, err.message)
+        restartTimer = setTimeout(run, 10_000)
+        restartTimer.unref()
+      })
+    }
+    ingesterStops.push(() => {
+      stopped = true
+      if (restartTimer) clearTimeout(restartTimer)
     })
+    run()
   }
 
   const enabledNetworks = getEnabledNetworks()

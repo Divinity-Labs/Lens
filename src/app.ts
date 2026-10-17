@@ -45,8 +45,7 @@ export interface BuildAppOptions {
  *
  * Split out from `main()` so tests can boot the real route surface (all
  * plugins, hooks and routes, in the same order) without connecting to
- * Postgres/Redis or starting the ingesters. `index.ts` owns those side
- * effects.
+ * Postgres/Redis or starting the ingesters. `index.ts` owns those side effects.
  *
  * The returned app is NOT listening; the caller calls `app.listen(...)`.
  */

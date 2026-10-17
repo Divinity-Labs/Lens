@@ -46,6 +46,33 @@ redis.on('error', (err) => {
   suppressedRedisErrors = 0
 })
 
+// Explicit close for the graceful shutdown handler. ioredis's quit() waits for
+// pending replies before closing; disconnect() drops the socket immediately.
+// During shutdown we want the former, but bounded — if the connection is already
+// gone (or the server is unreachable) quit() can hang, so fall back to
+// disconnect() after a short deadline.
+export async function closeRedis(timeoutMs = 5_000): Promise<void> {
+  if (redis.status === 'end') return
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      redis.quit(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          console.error(`[redis] quit() did not complete within ${timeoutMs}ms; forcing disconnect`)
+          redis.disconnect()
+          resolve()
+        }, timeoutMs)
+      }),
+    ])
+  } catch (err) {
+    console.error('[redis] Error during close:', err instanceof Error ? err.message : err)
+    redis.disconnect()
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function getCachedPrice(pairKey: string): Promise<string | null> {
   try {
     return await redis.get(`lens:${activeNetwork}:price:${pairKey}`)

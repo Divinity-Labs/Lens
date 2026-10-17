@@ -254,6 +254,9 @@ const globalConfig = {
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
+  shutdown: {
+    gracePeriodMs: parseInt(process.env.SHUTDOWN_GRACE_PERIOD_MS ?? '30000', 10),
+  },
 } as const
 
 // ── Per-network map ───────────────────────────────────────────────────────────
@@ -334,4 +337,5 @@ export const config = {
   indexer: globalConfig.indexer,
   cache:   globalConfig.cache,
   http:    globalConfig.http,
+  shutdown: globalConfig.shutdown,
 }
