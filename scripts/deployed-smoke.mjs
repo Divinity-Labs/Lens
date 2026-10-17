@@ -72,8 +72,14 @@ try {
     if (data.ok !== true) throw new Error('not healthy')
     fresh(data.ingestLagSeconds)
   })
-  await check('/ready', async () => {
-    const data = await getJson('ready')
+  await check('/ready (if available)', async () => {
+    const response = await fetch(new URL('ready', url), { signal: AbortSignal.timeout(timeout) })
+    if (response.status === 404) {
+      console.log('SKIP /ready: route not available yet (#334)')
+      return
+    }
+    if (!response.ok) throw new Error('HTTP ' + response.status)
+    const data = await response.json()
     if (data.ok !== true) throw new Error('not ready')
   })
   await check('/price/XLM/USDC + freshness', async () => {

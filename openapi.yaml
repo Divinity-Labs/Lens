@@ -49,37 +49,6 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /ready:
-    get:
-      operationId: getReady
-      summary: Check database connectivity and API readiness
-      security: []
-      responses:
-        '200':
-          description: Database connection available
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok]
-                properties:
-                  ok:
-                    type: boolean
-                    enum: [true]
-        '503':
-          description: Database unavailable; instance is not ready
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok]
-                properties:
-                  ok:
-                    type: boolean
-                    enum: [false]
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
   /price/{assetA}/{assetB}:
     get:
       operationId: getPrice

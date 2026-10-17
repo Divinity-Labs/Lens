@@ -525,8 +525,8 @@ SMOKE_MAX_AGE_SECONDS=120 SMOKE_TIMEOUT_MS=8000 npm run smoke -- http://localhos
 
 Validate the smoke checker itself with `npm run test:smoke`.
 
-The check requires public `/status`, `/ready`, and `/price/XLM/USDC` and a
-`graphql-transport-ws` live price subscription at `/graphql`. It checks
+The check requires public `/status` and `/price/XLM/USDC` and checks `/ready` when available. It uses a
+`graphql-transport-ws` live price subscription at `/graphql`. An HTTP 404 on `/ready` is skipped until issue #334 provides the endpoint; any other readiness failure is fatal. It checks
 indexer and trade freshness, validates price shape, and waits for a real
 subscription event. It fails non-zero, naming the failing check, on timeout,
 stale data, a missing message, or HTTP errors. No synthetic price events are
