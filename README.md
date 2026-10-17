@@ -30,6 +30,7 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
+| GET | `/pegs` | All configured pegged assets with current and worst deviation and provenance |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
 | GET | `/status` | Indexer health |
 | GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
@@ -56,7 +57,7 @@ ones listed below still read a single instance-wide network.
 Per-request today: `/price/:assetA/:assetB` (its VWAP, OHLCV, AMM and
 best-route reads), `/price/:assetA/:assetB/route`, `/price/:assetA/:assetB/depth`, `/book/:assetA/:assetB`,
 `/prices/history`, `/screener`, `/pools`, `/pairs`, `/spreads/:asset`,
-`/volumes/:asset`, `/status`, and the x402 payment `network`/`payTo`. That list
+`/volumes/:asset`, `/pegs`, `/status`, and the x402 payment `network`/`payTo`. That list
 is the same one `openapi.yaml` declares a `network` parameter on — if they ever
 disagree, the spec is the thing to fix.
 
