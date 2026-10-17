@@ -59,6 +59,13 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+export const graphql_active_subscriptions = new Gauge({
+  name: 'graphql_active_subscriptions',
+  help: 'Number of active GraphQL price subscriptions by pair and network',
+  labelNames: ['pair', 'network'],
+  registers: [register]
+})
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
