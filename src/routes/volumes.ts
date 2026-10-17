@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import { isPrimaryVenue } from '../ingest/venues'
 
 // Supported windows → lookback in hours.
 const WINDOW_HOURS = {
@@ -19,10 +20,15 @@ const WINDOWS = Object.keys(WINDOW_HOURS) as VolumeWindow[]
  * GET /volumes/:asset?window=24h|7d|30d&network=testnet|mainnet
  *
  * Sums traded volume for `asset` across every pair it appears in and across all
- * venues (SDEX, AMM, …) over the requested window. Volume is measured in the
- * asset's own units: when it is the base asset of a pair we count `base_volume`,
- * when it is the counter asset we count `counter_volume`. The response breaks the
- * total down per venue and also returns the cross-venue sum.
+ * venues (SDEX, AMM, Soroswap, Aquarius, …) over the requested window. Volume is
+ * measured in the asset's own units: when it is the base asset of a pair we count
+ * `base_volume`, when it is the counter asset we count `counter_volume`.
+ *
+ * Venues are classified as either primary markets (e.g. SDEX, AMM, Soroswap) or
+ * aggregators (e.g. Aquarius) that route trades through underlying primary venues.
+ * To prevent double-counting of trades, the response reports labelled net totals
+ * (summed across primary venues) and gross totals (including aggregators), alongside
+ * a per-venue breakdown.
  *
  * Only one network's rows are summed: testnet and mainnet volume added together
  * is not a volume of anything. `network` defaults to this process's own network,
@@ -74,14 +80,22 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       )
 
       const byVenue: Record<string, number> = {}
-      let totalVolume = 0
-      let tradeCount = 0
+      let netVolume = 0
+      let grossVolume = 0
+      let netTradeCount = 0
+      let grossTradeCount = 0
 
       for (const row of rows) {
         const volume = parseFloat(row.volume) || 0
+        const trades = Number(row.trade_count) || 0
         byVenue[row.source] = volume
-        totalVolume += volume
-        tradeCount += Number(row.trade_count) || 0
+        grossVolume += volume
+        grossTradeCount += trades
+
+        if (isPrimaryVenue(row.source)) {
+          netVolume += volume
+          netTradeCount += trades
+        }
       }
 
       return {
@@ -90,12 +104,21 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         window,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        // Cross-venue sum.
-        totalVolume,
-        // Per-venue breakdown that the total is summed from.
+        // Labelled net and gross totals to eliminate aggregator double-counting.
+        totals: {
+          net: netVolume,
+          gross: grossVolume,
+        },
+        netVolume,
+        grossVolume,
+        // Backward-compatible alias for net volume.
+        totalVolume: netVolume,
+        // Per-venue breakdown that the totals are summed from.
         byVenue,
         venues: Object.keys(byVenue),
-        tradeCount,
+        tradeCount: netTradeCount,
+        netTradeCount,
+        grossTradeCount,
       }
     } catch (err) {
       return reply

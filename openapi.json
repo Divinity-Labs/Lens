@@ -1059,7 +1059,7 @@
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
-        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown.",
+        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown. Venues are classified as primary markets or aggregators in the registry. Reports labelled net volume (summed across primary markets) and gross volume (including aggregator venues like Aquarius that route through other venues) to eliminate double-counting of trades.",
         "security": [],
         "parameters": [
           {
@@ -2524,14 +2524,36 @@
           }
         }
       },
+      "VolumeTotals": {
+        "type": "object",
+        "required": [
+          "net",
+          "gross"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "net": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "gross": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          }
+        }
+      },
       "VolumeResponse": {
         "type": "object",
         "required": [
           "asset",
+          "network",
           "window",
           "startTime",
           "endTime",
           "totalVolume",
+          "netVolume",
+          "grossVolume",
+          "totals",
           "byVenue",
           "venues",
           "tradeCount"
@@ -2539,6 +2561,9 @@
         "additionalProperties": false,
         "properties": {
           "asset": {
+            "type": "string"
+          },
+          "network": {
             "type": "string"
           },
           "window": {
@@ -2557,8 +2582,20 @@
             "type": "string",
             "format": "date-time"
           },
+          "totals": {
+            "$ref": "#/components/schemas/VolumeTotals"
+          },
+          "netVolume": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "grossVolume": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          },
           "totalVolume": {
-            "type": "number"
+            "type": "number",
+            "description": "Primary volume total (alias for netVolume for backward compatibility)"
           },
           "byVenue": {
             "type": "object",
@@ -2573,7 +2610,16 @@
             }
           },
           "tradeCount": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Count of trades from primary markets"
+          },
+          "netTradeCount": {
+            "type": "integer",
+            "description": "Count of trades from primary markets"
+          },
+          "grossTradeCount": {
+            "type": "integer",
+            "description": "Count of trades across all venues including aggregators"
           }
         }
       },

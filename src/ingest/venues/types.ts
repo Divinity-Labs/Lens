@@ -15,6 +15,8 @@ export interface VenuePricePoint {
   eventId?: string
 }
 
+export type VenueClassification = 'primary' | 'aggregator'
+
 /**
  * Universal interface for all venue adapters (SDEX, Stellar AMM, Soroswap, Aquarius, etc.).
  *
@@ -27,6 +29,7 @@ export interface VenuePricePoint {
 export interface VenueAdapter<TTarget = any, TRaw = any> {
   readonly name: string
   readonly source: string
+  readonly classification: VenueClassification
 
   /**
    * Whether this venue adapter is enabled on the given network.

@@ -233,6 +233,7 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
   source: 'AMM',
+  classification: 'primary',
 
   isEnabled(_network: NetworkName): boolean {
     return true

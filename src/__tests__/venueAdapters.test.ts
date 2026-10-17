@@ -11,6 +11,11 @@ import {
   getLastPrice,
   resetLastPrice,
   setLastPrice,
+  VENUE_CLASSIFICATIONS,
+  getVenueClassification,
+  isPrimaryVenue,
+  isAggregatorVenue,
+  getVenueReasoning,
   type VenueAdapter,
 } from '../ingest/venues'
 
@@ -44,6 +49,7 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     for (const adapter of venueAdapters) {
       expect(typeof adapter.name).toBe('string')
       expect(typeof adapter.source).toBe('string')
+      expect(['primary', 'aggregator']).toContain(adapter.classification)
       expect(typeof adapter.isEnabled).toBe('function')
       expect(typeof adapter.getPollIntervalMs).toBe('function')
       expect(typeof adapter.discover).toBe('function')
@@ -52,6 +58,29 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
       expect(typeof adapter.write).toBe('function')
       expect(typeof adapter.ingestPair).toBe('function')
     }
+  })
+
+  it('classifies SDEX, AMM, and Soroswap as primary markets and Aquarius as an aggregator', () => {
+    expect(sdexAdapter.classification).toBe('primary')
+    expect(ammAdapter.classification).toBe('primary')
+    expect(soroswapAdapter.classification).toBe('primary')
+    expect(aquariusAdapter.classification).toBe('aggregator')
+
+    expect(isPrimaryVenue('SDEX')).toBe(true)
+    expect(isPrimaryVenue('AMM')).toBe(true)
+    expect(isPrimaryVenue('soroswap_amm')).toBe(true)
+    expect(isPrimaryVenue('aquarius_amm')).toBe(false)
+
+    expect(isAggregatorVenue('aquarius_amm')).toBe(true)
+    expect(isAggregatorVenue('Aquarius')).toBe(true)
+    expect(isAggregatorVenue('SDEX')).toBe(false)
+    expect(isAggregatorVenue('AMM')).toBe(false)
+
+    // Documented reasoning must be present
+    expect(getVenueReasoning('SDEX')).toMatch(/order book|CLOB/i)
+    expect(getVenueReasoning('AMM')).toMatch(/liquidity pool|reserves/i)
+    expect(getVenueReasoning('soroswap_amm')).toMatch(/Soroban/i)
+    expect(getVenueReasoning('aquarius_amm')).toMatch(/aggregator|double-count/i)
   })
 
   it('preserves exact source strings for backward compatibility', () => {
@@ -82,6 +111,7 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     const customAdapter: VenueAdapter = {
       name: 'CustomDEX',
       source: 'custom_dex',
+      classification: 'primary',
       isEnabled: () => false,
       getPollIntervalMs: () => 1000,
       discover: async () => [],

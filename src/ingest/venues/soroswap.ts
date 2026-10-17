@@ -345,6 +345,7 @@ export async function ingestPair(
 export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   name: 'Soroswap',
   source: 'soroswap_amm',
+  classification: 'primary',
 
   isEnabled(network: NetworkName): boolean {
     return getNetworkConfig(network).soroswap.enabled
