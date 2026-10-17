@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { formatPrice, formatVolume } from '../pricing/precision'
 
 /** Supported aggregation intervals → bucket width in seconds. */
 export const HISTORY_INTERVAL_SECONDS: Record<string, number> = {
@@ -82,8 +83,8 @@ export async function queryHistory(
   const result = await pgPool.query(
     `SELECT
        to_timestamp(floor(EXTRACT(EPOCH FROM ts) / $1) * $1) AS bucket,
-       (array_agg(price::float ORDER BY ts DESC))[1] AS price,
-       SUM(volume::float) AS volume
+       (array_agg(price ORDER BY ts DESC))[1] AS price,
+       SUM(volume) AS volume
      FROM price_snapshots
      WHERE pair = $2 AND network = $5
        AND ts >= $3
@@ -95,8 +96,8 @@ export async function queryHistory(
 
   return result.rows.map(r => ({
     ts: new Date(r.bucket).toISOString(),
-    price: Number(r.price),
-    volume: Number(r.volume),
+    price: formatPrice(r.price) ?? 0,
+    volume: formatVolume(r.volume),
   }))
 }
 

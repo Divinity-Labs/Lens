@@ -123,6 +123,9 @@ paths:
     get:
       operationId: getPriceHistory
       summary: Get price history buckets
+      description: >-
+        Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18
+        decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
       security: []
       parameters:
         - name: assetA
@@ -221,6 +224,9 @@ paths:
     get:
       operationId: getCandles
       summary: Get OHLCV candle data
+      description: >-
+        Aggregates price_points into interval-sized buckets using exact numeric arithmetic.
+        Prices are serialized up to 18 decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
       security:
         - x402: []
       parameters:
@@ -300,8 +306,9 @@ paths:
       summary: Get historical 1-minute price snapshots
       description: >-
         Returns minute-resolution price snapshots for a pair over [from, to],
-        optionally aggregated into 5m or 1h buckets. Snapshots are retained for
-        ~30 days. Gated by x402 (matches the /price prefix).
+        optionally aggregated into 5m or 1h buckets. Aggregations use exact numeric arithmetic;
+        prices are serialized up to 18 decimal places and volumes up to 7 decimal places.
+        Snapshots are retained for ~30 days. Gated by x402 (matches the /price prefix).
       security:
         - x402: []
       parameters:
@@ -683,6 +690,7 @@ paths:
       description: >-
         Sums traded volume for `asset` across every pair and venue it appears
         in, measured in the asset's own units, with a per-venue breakdown.
+        Aggregated in numeric and serialized up to 7 decimal places matching Stellar stroop precision.
       security: []
       parameters:
         - name: asset

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import { formatVolume } from '../pricing/precision'
 
 // Supported windows → lookback in hours.
 const WINDOW_HOURS = {
@@ -78,9 +79,9 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       let tradeCount = 0
 
       for (const row of rows) {
-        const volume = parseFloat(row.volume) || 0
+        const volume = formatVolume(row.volume)
         byVenue[row.source] = volume
-        totalVolume += volume
+        totalVolume = formatVolume(totalVolume + volume)
         tradeCount += Number(row.trade_count) || 0
       }
 

@@ -18,14 +18,14 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | GET | `/price/:assetA/:assetB/route?amount=1000` | Best execution route for a given amount |
 | GET | `/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
 | GET | `/book/:assetA/:assetB?depth=0.1&step=0.01&network=testnet` | Aggregated SDEX book and synthetic AMM price ladder with cumulative size and venue provenance |
-| GET | `/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`) |
+| GET | `/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`); prices up to 18 decimal places, volumes up to 7 decimal places |
 | GET | `/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
 | GET | `/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
-| GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
-| GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; `?format=csv` serves the points as `text/csv` (`ts,price,volume`); ~30-day retention |
+| GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) aggregated in numeric; prices up to 18 decimals, volumes up to 7 decimals |
+| GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`) in numeric; honours `?network=`; `?format=csv` serves points as `text/csv` (`ts,price,volume`); ~30-day retention |
 | GET | `/pools` | Active AMM pools being watched |
 | GET | `/pairs` | Watched trading pairs |
-| GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
+| GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown; aggregated in numeric, serialized to 7 decimal places |
 | GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
 | GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
@@ -483,6 +483,15 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 
 *(Note: timestamp values above reflect the dynamic hourly anchor at seed execution time and request time).*
 
+## Numeric Precision & Serialization
+
+Lens enforces strict arbitrary-precision numeric aggregation across SQL queries to eliminate floating-point representation artifacts and order-dependent rounding errors:
+
+- **Database Precision**: Declared in `prisma/schema.prisma` as `Decimal(36, 18)` for prices and `Decimal(36, 7)` for volumes (matching Stellar 7-decimal stroop precision).
+- **Exact Aggregations**: All intermediate SQL aggregations (`SUM`, `array_agg`, `MAX`, `MIN`) are computed in PostgreSQL using exact `numeric` arithmetic without `::float` casts inside aggregate expressions.
+- **Edge Serialization**: Values are cast once at the serialization boundary to documented precision:
+  - Prices: up to 18 decimal places (`PRICE_DECIMAL_PLACES = 18`).
+  - Volumes: up to 7 decimal places (`VOLUME_DECIMAL_PLACES = 7`).
 
 ## Environment Variables
 

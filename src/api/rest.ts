@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { formatPrice, formatVolume } from '../pricing/precision'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -174,9 +175,9 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       }
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
+        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
+                volume, trade_count, open_price, close_price,
+                high_price, low_price
          FROM price_aggregates
          WHERE pair_key = $1 AND window = $2 AND network = $3
          ORDER BY bucket DESC
@@ -190,15 +191,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         window,
         buckets: result.rows.map(r => ({
           bucket: r.bucket,
-          vwap: r.vwap,
-          sdexVwap: r.sdex_vwap,
-          ammVwap: r.amm_vwap,
-          volume: r.volume,
-          tradeCount: r.trade_count,
-          open: r.open_price,
-          close: r.close_price,
-          high: r.high_price,
-          low: r.low_price,
+          vwap: formatPrice(r.vwap),
+          sdexVwap: formatPrice(r.sdex_vwap),
+          ammVwap: formatPrice(r.amm_vwap),
+          volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
+          tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
+          open: formatPrice(r.open_price),
+          close: formatPrice(r.close_price),
+          high: formatPrice(r.high_price),
+          low: formatPrice(r.low_price),
         })),
       }
     }
