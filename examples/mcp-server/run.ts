@@ -34,7 +34,10 @@ async function main() {
   });
 
   const server = new BazaarMcpServer({
-    fetchWithPayment
+    fetchWithPayment,
+    maxPrice: process.env.MCP_MAX_PAYMENT_PRICE || '$1.00',
+    maxCumulativeSpend: process.env.MCP_MAX_CUMULATIVE_SPEND || '$10.00',
+    spendLedgerPath: process.env.MCP_SPEND_LEDGER_PATH,
   });
 
   console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
