@@ -6,6 +6,7 @@ import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
+import { fetchHorizonJson, HorizonRateLimitError } from './horizon'
 import {
   getLastPrice,
   resetLastPrice,
@@ -35,13 +36,14 @@ export async function fetchPools(pair: WatchedPair, network: NetworkName = activ
     params.append('reserves[]', assetBStr)
     params.set('limit', '10')
 
-    const response = await fetch(
-      `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`
+    const data = await fetchHorizonJson<any>(
+      `${getNetworkConfig(network).horizon.url}/liquidity_pools?${params.toString()}`,
+      network,
     )
-    const data = (await response.json()) as any
     if (!data._embedded?.records) return []
     return data._embedded.records
   } catch (err) {
+    if (err instanceof HorizonRateLimitError) throw err
     console.error(`[amm] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
     return []
   }
@@ -136,10 +138,10 @@ export async function ingestPoolTrades(
   const cursor = state.cursor ?? '0'
 
   try {
-    const response = await fetch(
-      `${getNetworkConfig(network).horizon.url}/liquidity_pools/${pool.id}/trades?cursor=${cursor}&limit=${config.indexer.ammPageSize}&order=asc`
+    const data = await fetchHorizonJson<any>(
+      `${getNetworkConfig(network).horizon.url}/liquidity_pools/${pool.id}/trades?cursor=${cursor}&limit=${config.indexer.ammPageSize}&order=asc`,
+      network,
     )
-    const data = (await response.json()) as any
     const records = data._embedded?.records ?? []
 
     if (!records.length) return
@@ -213,6 +215,7 @@ export async function ingestPoolTrades(
       network,
     }).catch((err) => console.error('[amm] webhook dispatch error:', err.message))
   } catch (err) {
+    if (err instanceof HorizonRateLimitError) throw err
     console.error(`[amm] Trade ingest error for pool ${pool.id}:`, (err as Error).message)
   }
 }

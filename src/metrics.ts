@@ -59,6 +59,13 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+export const horizon_rate_limit_remaining = new Gauge({
+  name: 'horizon_rate_limit_remaining',
+  help: 'Remaining Horizon API requests in the current rate-limit window',
+  labelNames: ['network'],
+  registers: [register],
+})
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
