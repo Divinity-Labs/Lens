@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
+import { apiError } from '../errors'
 
 /**
  * Metadata for an authenticated API key, attached to each request as
@@ -75,20 +76,20 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     if (routeConfig.public) return
 
     const token = extractBearer(req.headers['authorization'])
-    if (!token) {
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        message: 'Missing API key. Provide an Authorization: Bearer <key> header.',
-      })
-    }
+      if (!token) {
+        return reply.status(401).send({
+          ...apiError('unauthorized', 'Unauthorized'),
+          message: 'Missing API key. Provide an Authorization: Bearer <key> header.',
+        })
+      }
 
-    const keyContext = await lookupApiKey(token)
-    if (!keyContext) {
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        message: 'Invalid or revoked API key.',
-      })
-    }
+      const keyContext = await lookupApiKey(token)
+      if (!keyContext) {
+        return reply.status(401).send({
+          ...apiError('unauthorized', 'Unauthorized'),
+          message: 'Invalid or revoked API key.',
+        })
+      }
 
     req.apiKey = keyContext
   })

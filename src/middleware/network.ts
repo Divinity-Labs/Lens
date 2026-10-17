@@ -60,7 +60,7 @@ async function networkSelectorPlugin(app: FastifyInstance) {
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const resolved = resolveNetworkName(rawNetworkFromRequest(req))
     if (!resolved.ok) {
-      reply.status(400).send({ error: resolved.error })
+      reply.status(400).send({ error: resolved.error, code: 'bad_network' })
       return
     }
     req.network = resolved.network

@@ -27,6 +27,7 @@ import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
 import { getMetrics } from './metrics'
+import { apiError } from './errors'
 
 export interface BuildAppOptions {
   /**
@@ -98,7 +99,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     allowList: (req) => req.url === '/status',
     errorResponseBuilder: (req, context) => ({
       statusCode: 429,
-      error: 'Too Many Requests',
+      ...apiError('rate_limited', 'Too Many Requests'),
       message: `Rate limit exceeded, retry in ${context.after}`,
       retryAfter: context.after
     })

@@ -2,6 +2,15 @@ import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { apiError } from '../errors'
+import {
+  parseLimit,
+  encodeCursor,
+  decodeCursor,
+  slicePage,
+  SCREENER_DEFAULT_LIMIT,
+  SCREENER_MAX_LIMIT,
+} from '../pagination'
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
 // used to be reported as a copy of `liquidity`; a caller who sorts or filters on
@@ -29,24 +38,25 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       const q = req.query
 
       // 1. Parse and validate pagination & sorting
-      const limit = Math.min(Math.max(parseInt(q.limit ?? '20', 10), 1), 100)
-      if (isNaN(limit)) {
-        return reply.status(400).send({ error: 'limit must be a valid integer' })
+      const parsedLimit = parseLimit(q.limit, SCREENER_DEFAULT_LIMIT, SCREENER_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedLimit.error))
       }
+      const limit = parsedLimit.limit
 
       if (q.market_cap !== undefined || q.sortBy === 'market_cap') {
-        return reply.status(400).send({ error: MARKET_CAP_UNSUPPORTED })
+        return reply.status(400).send(apiError('unsupported', MARKET_CAP_UNSUPPORTED))
       }
 
       const allowedSortFields = ['volume', 'change_24h', 'price', 'liquidity']
       const sortBy = q.sortBy ?? 'volume'
       if (!allowedSortFields.includes(sortBy)) {
-        return reply.status(400).send({ error: `sortBy must be one of: ${allowedSortFields.join(', ')}` })
+        return reply.status(400).send(apiError('invalid_parameter', `sortBy must be one of: ${allowedSortFields.join(', ')}`))
       }
 
       const order = (q.order ?? 'desc').toLowerCase()
       if (order !== 'asc' && order !== 'desc') {
-        return reply.status(400).send({ error: 'order must be asc or desc' })
+        return reply.status(400).send(apiError('invalid_parameter', 'order must be asc or desc'))
       }
 
       // 2. Parse filters
@@ -62,7 +72,7 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
 
       for (const [key, val] of Object.entries(filters)) {
         if (val !== undefined && isNaN(val)) {
-          return reply.status(400).send({ error: `Filter ${key} must be a valid number` })
+          return reply.status(400).send(apiError('invalid_parameter', `Filter ${key} must be a valid number`))
         }
       }
 
@@ -100,17 +110,14 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
 
       // 4. Cursor decoding and pagination condition
       if (q.cursor) {
-        try {
-          const decoded = Buffer.from(q.cursor, 'base64').toString('utf-8')
-          const [lastVal, lastId] = JSON.parse(decoded)
-          
-          if (lastVal !== null && lastVal !== undefined && lastId) {
-            const op = order === 'desc' ? '<' : '>'
-            conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
-            params.push(lastVal, lastId)
-          }
-        } catch (e) {
-          return reply.status(400).send({ error: 'Invalid cursor format' })
+        const decoded = decodeCursor(q.cursor)
+        if (decoded === null) {
+          return reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
+        }
+        if (decoded !== 'skip') {
+          const op = order === 'desc' ? '<' : '>'
+          conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
+          params.push(decoded.value, decoded.id)
         }
       }
 
@@ -169,17 +176,13 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       // 6. Execute query
       params.push(limit + 1) // Fetch one extra to determine hasMore
       const result = await pgPool.query(sql, params)
-      const rows = result.rows
-
-      const hasMore = rows.length > limit
-      const data = hasMore ? rows.slice(0, limit) : rows
+      const { data, hasMore } = slicePage(result.rows, limit)
 
       // 7. Generate nextCursor
       let nextCursor = null
       if (hasMore && data.length > 0) {
         const lastRecord = data[data.length - 1]
-        const cursorPayload = JSON.stringify([lastRecord[sortBy], lastRecord.pair_key])
-        nextCursor = Buffer.from(cursorPayload).toString('base64')
+        nextCursor = encodeCursor(lastRecord[sortBy], lastRecord.pair_key)
       }
 
       return {
@@ -190,7 +193,7 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       }
     } catch (error) {
       console.error('[screener]', error)
-      return reply.status(500).send({ error: 'Internal server error' })
+      return reply.status(500).send(apiError('internal_error', 'Internal server error'))
     }
   })
 }

@@ -3,6 +3,7 @@ import { activeNetwork, type NetworkName } from '../config'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
 import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
 import { pgPool } from '../db'
+import { apiError } from '../errors'
 
 const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
 
@@ -26,7 +27,7 @@ export async function registerOracleRoutes(
       const assetCode = req.params.asset.toUpperCase()
       const requestedNetwork = req.query.network
       if (requestedNetwork !== undefined && requestedNetwork !== 'testnet' && requestedNetwork !== 'mainnet') {
-        return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+        return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
       }
       const network: NetworkName = requestedNetwork ?? activeNetwork
 
@@ -60,7 +61,7 @@ export async function registerOracleRoutes(
       const lensPrice = dbResult.rows[0] ? parseFloat(dbResult.rows[0].vwap) : null
       const anyOracleConfigured = oracleResults.some(result => result.configured)
       if (lensPrice === null && !anyOracleConfigured) {
-        return reply.status(404).send({ error: `No price data found for asset ${assetCode}` })
+        return reply.status(404).send(apiError('unknown_pair', `No price data found for asset ${assetCode}`))
       }
 
       const oracles = oracleResults.map(result => {

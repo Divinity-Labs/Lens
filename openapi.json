@@ -292,6 +292,26 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned as `nextCursor` by the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -334,6 +354,14 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to pass as `?cursor=` for the next page, or null on the last page."
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -409,6 +437,26 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned as `nextCursor` by the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "default": 500
+            }
           }
         ],
         "responses": {
@@ -457,6 +505,14 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to pass as `?cursor=` for the next page, or null on the last page."
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -543,6 +599,26 @@
           },
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned as `nextCursor` by the previous page. When `format=csv`, the cursor is returned in the `X-Next-Cursor` response header instead.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            }
           }
         ],
         "responses": {
@@ -600,6 +676,14 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to pass as `?cursor=` for the next page, or null on the last page."
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -626,6 +710,26 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned as `nextCursor` by the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -661,6 +765,14 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor to pass as `?cursor=` for the next page, or null on the last page."
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -1896,6 +2008,16 @@
       }
     },
     "responses": {
+      "Error": {
+        "description": "Standard error envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "PaymentRequired": {
         "description": "Payment Required",
         "content": {
@@ -1928,6 +2050,9 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "code": {
+                  "$ref": "#/components/schemas/ErrorCode"
                 },
                 "description": {
                   "type": "string"
@@ -1964,6 +2089,9 @@
                 "error": {
                   "type": "string"
                 },
+                "code": {
+                  "$ref": "#/components/schemas/ErrorCode"
+                },
                 "message": {
                   "type": "string"
                 },
@@ -1977,6 +2105,46 @@
       }
     },
     "schemas": {
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable machine-readable error code. Branch on this, never on `error`, which is human-readable.",
+        "enum": [
+          "missing_parameter",
+          "invalid_parameter",
+          "bad_network",
+          "bad_interval",
+          "bad_window",
+          "unsupported",
+          "unknown_pair",
+          "unwatched_pair",
+          "pair_already_watched",
+          "unauthorized",
+          "not_found",
+          "upstream_unavailable",
+          "internal_error",
+          "rate_limited",
+          "payment_required",
+          "payment_invalid",
+          "payment_verification_failed",
+          "quota_exceeded"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message. Do not branch on it."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          }
+        }
+      },
       "Asset": {
         "type": "object",
         "properties": {

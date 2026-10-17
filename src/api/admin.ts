@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { prisma } from '../db'
 import { hashApiKey } from './auth'
+import { apiError } from '../errors'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -49,16 +50,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys',
     { config: { public: true } },
     async (req: FastifyRequest<{ Body: CreateKeyBody }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+       if (!isAdminAuthorized(req)) {
+         return reply.status(401).send({
+           ...apiError('unauthorized', 'Unauthorized'),
+           message: 'Provide a valid X-Admin-Token header.',
+         })
+       }
 
       const { label, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
-        return reply.status(400).send({ error: 'label is required' })
+        return reply.status(400).send(apiError('missing_parameter', 'label is required'))
       }
 
       // Generate the key, store only its hash, and return the plaintext once.
@@ -93,18 +94,18 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id',
     { config: { public: true } },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+       if (!isAdminAuthorized(req)) {
+         return reply.status(401).send({
+           ...apiError('unauthorized', 'Unauthorized'),
+           message: 'Provide a valid X-Admin-Token header.',
+         })
+       }
 
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })
-      if (!existing) {
-        return reply.status(404).send({ error: 'API key not found' })
-      }
+       if (!existing) {
+         return reply.status(404).send(apiError('not_found', 'API key not found'))
+       }
       if (existing.revokedAt) {
         return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
       }

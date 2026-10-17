@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
+import { apiError } from '../errors'
 
 async function fetchAssetVWAP(asset: string): Promise<number | null> {
   const result = await pgPool.query(
@@ -31,18 +32,18 @@ export async function registerBasketRoutes(app: FastifyInstance) {
       : []
 
     if (assets.length === 0) {
-      return reply.status(400).send({ error: 'At least one asset is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'At least one asset is required'))
     }
     if (assets.length < 2) {
-      return reply.status(400).send({ error: 'Basket requires at least 2 assets' })
+      return reply.status(400).send(apiError('invalid_parameter', 'Basket requires at least 2 assets'))
     }
     if (assets.length !== weightStrings.length) {
-      return reply.status(400).send({ error: 'Number of assets and weights must match' })
+      return reply.status(400).send(apiError('invalid_parameter', 'Number of assets and weights must match'))
     }
 
     const rawWeightValues = weightStrings.map(w => parseFloat(w))
     if (rawWeightValues.some(w => isNaN(w) || w <= 0)) {
-      return reply.status(400).send({ error: 'All weights must be positive numbers' })
+      return reply.status(400).send(apiError('invalid_parameter', 'All weights must be positive numbers'))
     }
 
     const weightSum = rawWeightValues.reduce((a, b) => a + b, 0)
@@ -58,7 +59,7 @@ export async function registerBasketRoutes(app: FastifyInstance) {
 
     const missingAssets = components.filter(c => c.price === null).map(c => c.asset)
     if (missingAssets.length > 0) {
-      return reply.status(404).send({ error: `No price data found for: ${missingAssets.join(', ')}` })
+      return reply.status(404).send(apiError('unknown_pair', `No price data found for: ${missingAssets.join(', ')}`))
     }
 
     const basketPrice = components.reduce(

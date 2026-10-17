@@ -221,9 +221,30 @@ describe('GET /pairs', () => {
       const app = await buildApp()
       const body = (await app.inject({ method: 'GET', url: '/pairs' })).json()
 
+      // Sorted ascending by pairKey (the keyset order), so NEW/Y precedes QUIET/X.
       expect(body.pairs).toHaveLength(2)
-      expect(body.pairs[0]).toMatchObject({ pairKey: 'QUIET/X', latestPrice: 1.5, lastUpdated: old.toISOString() })
-      expect(body.pairs[1]).toMatchObject({ pairKey: 'NEW/Y', latestPrice: null, lastUpdated: null })
+      expect(body.pairs[0]).toMatchObject({ pairKey: 'NEW/Y', latestPrice: null, lastUpdated: null })
+      expect(body.pairs[1]).toMatchObject({ pairKey: 'QUIET/X', latestPrice: 1.5, lastUpdated: old.toISOString() })
+    })
+
+    it('paginates keyset-style on pairKey, fetching one extra row', async () => {
+      mockGetActivePairs.mockReturnValue([pair('A/B'), pair('C/D'), pair('E/F')])
+      const app = await buildApp()
+      const body = (await app.inject({ method: 'GET', url: '/pairs?limit=2' })).json()
+
+      expect(body.pairs.map((p: { pairKey: string }) => p.pairKey)).toEqual(['A/B', 'C/D'])
+      expect(body.hasMore).toBe(true)
+      expect(JSON.parse(Buffer.from(body.nextCursor, 'base64').toString())).toEqual(['C/D', 'C/D'])
+    })
+
+    it('resumes after the cursor without duplicating the boundary row', async () => {
+      mockGetActivePairs.mockReturnValue([pair('A/B'), pair('C/D'), pair('E/F')])
+      const cursor = Buffer.from(JSON.stringify(['C/D', 'C/D'])).toString('base64')
+      const app = await buildApp()
+      const body = (await app.inject({ method: 'GET', url: `/pairs?cursor=${cursor}` })).json()
+
+      expect(body.pairs.map((p: { pairKey: string }) => p.pairKey)).toEqual(['E/F'])
+      expect(body.hasMore).toBe(false)
     })
   })
 })

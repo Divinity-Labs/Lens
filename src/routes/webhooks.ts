@@ -3,6 +3,7 @@ import { randomBytes } from 'crypto'
 import { prisma } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { resolveNetworkName } from '../middleware/network'
+import { apiError } from '../errors'
 
 function isValidHttpsUrl(raw: string): boolean {
   try {
@@ -21,26 +22,26 @@ export async function registerWebhookRoutes(app: FastifyInstance) {
     const { url, assetA, assetB, threshold, direction, network: bodyNetwork } = req.body ?? {}
 
     if (!url || !isValidHttpsUrl(url)) {
-      return reply.status(400).send({ error: 'url must be a valid HTTPS URL' })
+      return reply.status(400).send(apiError('invalid_parameter', 'url must be a valid HTTPS URL'))
     }
     if (!assetA || typeof assetA !== 'string') {
-      return reply.status(400).send({ error: 'assetA is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'assetA is required'))
     }
     if (!assetB || typeof assetB !== 'string') {
-      return reply.status(400).send({ error: 'assetB is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'assetB is required'))
     }
     if (typeof threshold !== 'number' || isNaN(threshold)) {
-      return reply.status(400).send({ error: 'threshold must be a number' })
+      return reply.status(400).send(apiError('invalid_parameter', 'threshold must be a number'))
     }
     if (direction !== 'above' && direction !== 'below') {
-      return reply.status(400).send({ error: 'direction must be "above" or "below"' })
+      return reply.status(400).send(apiError('invalid_parameter', 'direction must be "above" or "below"'))
     }
 
     let targetNetwork: NetworkName = req.network ?? activeNetwork
     if (bodyNetwork !== undefined) {
       const resolved = resolveNetworkName(bodyNetwork)
       if (!resolved.ok) {
-        return reply.status(400).send({ error: resolved.error })
+        return reply.status(400).send(apiError('bad_network', resolved.error))
       }
       targetNetwork = resolved.network
     }
