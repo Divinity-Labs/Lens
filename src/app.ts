@@ -95,7 +95,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     max: (req) => req.apiKey?.ratePerMin ?? ipRateLimitMax,
     timeWindow: '1 minute',
     keyGenerator: (req) => req.apiKey?.id ?? req.ip,
-    allowList: (req) => req.url === '/status',
+    allowList: (req) => req.url === '/status' || req.url === '/live' || req.url === '/ready',
     errorResponseBuilder: (req, context) => ({
       statusCode: 429,
       error: 'Too Many Requests',

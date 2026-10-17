@@ -33,6 +33,38 @@ export const statusResponseSchema = {
     // Seconds since the last ingester write for this network, null before the
     // first one. Lets `/status` reveal a stalled ingester on its own.
     ingestLagSeconds: { type: ['integer', 'null'] },
+    retentionMode: { type: 'string' },
+    ingesterCrashes: { type: 'object', additionalProperties: true },
+    failedVenues: { type: 'object', additionalProperties: true },
+    failedWebhooks: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  },
+} as const
+
+/** GET /live probe (#334) */
+export const liveResponseSchema = {
+  type: 'object',
+  required: ['status'],
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string' },
+  },
+} as const
+
+/** GET /ready probe (#334) */
+export const readyResponseSchema = {
+  type: 'object',
+  required: ['status', 'checks'],
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string' },
+    checks: {
+      type: 'object',
+      required: ['database', 'redis'],
+      properties: {
+        database: { type: 'boolean' },
+        redis: { type: 'boolean' },
+      },
+    },
   },
 } as const
 

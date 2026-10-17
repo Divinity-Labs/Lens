@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { price_requests_total } from '../metrics'
-import { getCachedPrice, setCachedPrice } from '../redis'
+import { redis, getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
@@ -8,6 +8,8 @@ import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../co
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
   statusResponseSchema,
+  liveResponseSchema,
+  readyResponseSchema,
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
@@ -15,6 +17,11 @@ import {
   depthResponseSchema,
   installResponseValidation,
 } from './schemas'
+import { getRecentWebhookFailures } from '../alerts/delivery'
+import { getIngesterCrashHistory } from '../ingest/supervisor'
+import { getFailedVenues } from '../ingest/venues/errors'
+import { getRetentionPathMode } from '../jobs/snapshotRetention'
+import { isBootCompleted } from '../bootState'
 import { getDepth } from '../pricing/depth'
 
 function makePairKey(a: string, b: string): string {
@@ -68,6 +75,51 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // up the validating serializer.
   installResponseValidation(app)
 
+  // GET /live — lightweight liveness probe (#334)
+  app.get('/live', { config: { public: true }, schema: { response: { 200: liveResponseSchema } } }, async () => {
+    return { status: 'live' }
+  })
+
+  // GET /ready — readiness probe checking boot lifecycle and dependencies (#334)
+  app.get(
+    '/ready',
+    { config: { public: true }, schema: { response: { 200: readyResponseSchema, 503: readyResponseSchema } } },
+    async (_req, reply) => {
+      let dbOk = false
+      try {
+        await pgPool.query('SELECT 1')
+        dbOk = true
+      } catch {
+        dbOk = false
+      }
+
+      let redisOk = false
+      try {
+        if (redis.status === 'ready' || redis.status === 'connect') {
+          redisOk = true
+        } else {
+          await redis.ping()
+          redisOk = true
+        }
+      } catch {
+        redisOk = false
+      }
+
+      const ready = isBootCompleted() && dbOk
+      const body = {
+        status: ready ? 'ready' : 'unhealthy',
+        checks: {
+          database: dbOk,
+          redis: redisOk,
+        },
+      }
+      if (!ready) {
+        return reply.status(503).send(body)
+      }
+      return body
+    }
+  )
+
   // GET /status — public health/monitoring endpoint (no API key required)
   app.get('/status', { config: { public: true }, schema: { response: { 200: statusResponseSchema } } }, async (req) => {
     const network = req.network ?? activeNetwork
@@ -92,6 +144,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       ingestLagSeconds: lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
         : null,
+      retentionMode: getRetentionPathMode(),
+      ingesterCrashes: getIngesterCrashHistory(),
+      failedVenues: getFailedVenues(),
+      failedWebhooks: getRecentWebhookFailures(),
     }
   })
 

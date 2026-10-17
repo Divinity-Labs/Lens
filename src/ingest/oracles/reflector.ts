@@ -20,6 +20,7 @@ import {
 import { activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { getRpcServer } from '../../network/clients'
 import type { OracleAdapter, OracleQuote } from './adapter'
+import { recordVenueFailure, recordVenueSuccess } from '../venues/errors'
 
 // Ephemeral fee payer — simulation only, no real funds needed
 const FEE_PAYER = Keypair.random()
@@ -83,14 +84,24 @@ export async function fetchReflectorPrice(
     // Reflector uses 14 decimal places of precision
     const price = Number(raw.price) / 1e14
 
+    recordVenueSuccess('Reflector')
     return {
       asset: assetCode.toUpperCase(),
       price,
       timestamp: Number(raw.timestamp ?? 0),
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[reflector] Failed to fetch oracle quote for ${assetCode} on ${network}:`, (err as Error).message)
+    lastReflectorError = (err as Error).message
+    recordVenueFailure('Reflector', (err as Error).message)
     return null
   }
+}
+
+let lastReflectorError: string | null = null
+
+export function getLastReflectorError(): string | null {
+  return lastReflectorError
 }
 
 // In-memory cache (60 s TTL) to avoid hammering RPC on every comparison request

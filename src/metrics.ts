@@ -98,6 +98,90 @@ export const db_query_duration_seconds = new Histogram({
   registers: [register]
 })
 
+// ── Rate Limiting & Upstream Horizon Metrics (#348) ───────────────────────────
+export const horizon_rate_limit_remaining = new Gauge({
+  name: 'horizon_rate_limit_remaining',
+  help: 'Remaining Horizon rate limit requests from X-RateLimit-Remaining header',
+  labelNames: ['network'],
+  registers: [register]
+})
+
+export const horizon_rate_limited_total = new Counter({
+  name: 'horizon_rate_limited_total',
+  help: 'Total number of 429 Rate Limited responses encountered from Horizon',
+  labelNames: ['network'],
+  registers: [register]
+})
+
+// ── Redis & Retention Degradation Metrics (#345) ──────────────────────────────
+export const redis_connected = new Gauge({
+  name: 'redis_connected',
+  help: 'Status of primary Redis connection (1 = connected, 0 = unavailable)',
+  registers: [register]
+})
+
+export const retention_path_mode = new Gauge({
+  name: 'retention_path_mode',
+  help: 'Active snapshot retention execution mode (1 for active mode)',
+  labelNames: ['mode'],
+  registers: [register]
+})
+
+// ── Process Crash & Unhandled Rejection Metrics (#344) ────────────────────────
+export const unhandled_rejections_total = new Counter({
+  name: 'unhandled_rejections_total',
+  help: 'Total count of unhandled promise rejections encountered by process',
+  registers: [register]
+})
+
+export const uncaught_exceptions_total = new Counter({
+  name: 'uncaught_exceptions_total',
+  help: 'Total count of uncaught exceptions encountered by process',
+  registers: [register]
+})
+
+// ── Database Connection Pool Metrics (#339) ───────────────────────────────────
+export const pg_pool_total_connections = new Gauge({
+  name: 'pg_pool_total_connections',
+  help: 'Total active connections in PostgreSQL connection pool',
+  registers: [register]
+})
+
+export const pg_pool_idle_connections = new Gauge({
+  name: 'pg_pool_idle_connections',
+  help: 'Idle connections available in PostgreSQL connection pool',
+  registers: [register]
+})
+
+export const pg_pool_waiting_count = new Gauge({
+  name: 'pg_pool_waiting_count',
+  help: 'Number of queries currently waiting for an available PostgreSQL connection',
+  registers: [register]
+})
+
+export const pg_pool_exhausted_total = new Counter({
+  name: 'pg_pool_exhausted_total',
+  help: 'Total number of connection acquisitions that failed due to pool exhaustion',
+  registers: [register]
+})
+
+// ── Ingester Restart & Backoff Metrics (#331) ─────────────────────────────────
+export const ingester_restarts_total = new Counter({
+  name: 'ingester_restarts_total',
+  help: 'Total number of ingester loop crash restarts by ingester and network',
+  labelNames: ['ingester', 'network'],
+  registers: [register]
+})
+
+// ── Webhook Delivery Failure Metrics (#342) ───────────────────────────────────
+export const webhook_delivery_failures_total = new Counter({
+  name: 'webhook_delivery_failures_total',
+  help: 'Total count of exhausted webhook delivery failures by bounded category',
+  labelNames: ['category'],
+  registers: [register]
+})
+
 export async function getMetrics() {
   return await register.metrics()
 }
+

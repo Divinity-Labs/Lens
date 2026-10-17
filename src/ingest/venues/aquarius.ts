@@ -18,6 +18,7 @@ import {
   startVenueAdapter,
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
+import { VenueFetchError, recordVenueFailure, recordVenueSuccess } from './errors'
 
 export function _resetLastPrice(): void {
   resetLastPrice('Aquarius')
@@ -54,12 +55,22 @@ export async function fetchAquariusPools(
     params.append('assets[]', assetBStr)
 
     const res = await fetchWithTimeout(`${apiUrl}?${params.toString()}`)
-    if (!res.ok) return []
+    if (!res.ok) {
+      console.error(`[aquarius] Horizon/API returned HTTP ${res.status} for ${pair.pairKey}`)
+      recordVenueFailure('Aquarius', `HTTP ${res.status}`)
+      throw new VenueFetchError('Aquarius', `HTTP ${res.status}`, res.status)
+    }
+    recordVenueSuccess('Aquarius')
     const data = (await res.json()) as AquariusListResponse
     return data.results ?? []
   } catch (err) {
+    if (err instanceof VenueFetchError) {
+      recordVenueFailure('Aquarius', err.message)
+      throw err
+    }
     console.error(`[aquarius] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
-    return []
+    recordVenueFailure('Aquarius', (err as Error).message)
+    throw new VenueFetchError('Aquarius', (err as Error).message)
   }
 }
 

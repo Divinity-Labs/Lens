@@ -31,7 +31,9 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
-| GET | `/status` | Indexer health |
+| GET | `/status` | Indexer health and operational telemetry |
+| GET | `/live` | Liveness check (process event loop responsiveness) |
+| GET | `/ready` | Readiness check (validates database and cache connectivity) |
 | GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
 | GET | `/usage/me` | Usage and quota for the calling API key (requires `Authorization: Bearer <key>`) |
 | GET | `/supported` | Payment kinds and extensions this facilitator supports |
@@ -506,8 +508,16 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 | `ORACLE_PAYMENT_ADDRESS` | Stellar address for x402 API payments | - | No* |
 | `ORACLE_PAYMENT_ADDRESS_TESTNET` / `ORACLE_PAYMENT_ADDRESS_MAINNET` | Per-network override for the address above | - | No |
 | `X402_FACILITATOR_URL` | x402 facilitator service URL | - | No |
+| `DATABASE_POOL_SIZE` | Maximum PostgreSQL connections (shared across ingesters and API) | `20` | No |
+| `DATABASE_POOL_TIMEOUT_MS` | Connection acquisition timeout in ms | `10000` | No |
 
 *\*Required if enabling x402 payment gating.*
+
+## Operations & Runbook
+
+For production architecture, failure mode diagnostics, degraded operational states, and deployment procedures, see [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+
+> **Note on Connection Pooling:** The Fastify API server and background venue ingesters (SDEX, AMM, Soroswap, Aquarius) share a single database connection pool (`DATABASE_POOL_SIZE`). At 20 connections per instance, 3 running replicas require at most 60 connections, safely under the default PostgreSQL `max_connections` ceiling of 100.
 
 ## Stack
 - **Runtime:** Node.js 20 + TypeScript
