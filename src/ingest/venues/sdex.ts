@@ -168,6 +168,8 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
   name: 'SDEX',
   source: 'SDEX',
+  type: 'Order Book',
+  description: "Stellar's Classic Order Book (SDEX)",
 
   isEnabled(_network: NetworkName): boolean {
     return true

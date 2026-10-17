@@ -27,6 +27,8 @@ export interface VenuePricePoint {
 export interface VenueAdapter<TTarget = any, TRaw = any> {
   readonly name: string
   readonly source: string
+  readonly type?: string
+  readonly description?: string
 
   /**
    * Whether this venue adapter is enabled on the given network.

@@ -5,41 +5,55 @@
 [![Stellar](https://img.shields.io/badge/Stellar-SDEX%20%2B%20AMM-black)](https://stellar.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity Pools into a single, unified API.
+Aggregates price data from Stellar's Classic Order Book (SDEX), native AMM pools, Soroswap, and Aquarius into a single, unified API.
 
 **What Horizon doesn't do:** Horizon's `/trade_aggregations` only covers SDEX. AMM pool prices (derived from reserve ratios) are not aggregated anywhere. Lens fills this gap.
+
+## Venues
+
+<!-- VENUES:START -->
+| Venue | Source | Type | Description |
+|---|---|---|---|
+| SDEX | `SDEX` | Order Book | Stellar's Classic Order Book (SDEX) |
+| AMM | `AMM` | Liquidity Pool | Stellar native AMM liquidity pools (Horizon) |
+| Soroswap | `soroswap_amm` | AMM DEX | Soroswap constant-product automated market maker on Soroban |
+| Aquarius | `aquarius_amm` | Liquidity Pool | Aquarius AMM liquidity pools |
+<!-- VENUES:END -->
 
 ## Endpoints
 
 ### REST
+<!-- ENDPOINTS:START -->
 | Method | Path | Description |
 |---|---|---|
+| GET | `/status` | Indexer health |
 | GET | `/price/:assetA/:assetB` | Current VWAP, 24h volume, best route |
 | GET | `/price/:assetA/:assetB/route?amount=1000` | Best execution route for a given amount |
-| GET | `/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
-| GET | `/book/:assetA/:assetB?depth=0.1&step=0.01&network=testnet` | Aggregated SDEX book and synthetic AMM price ladder with cumulative size and venue provenance |
 | GET | `/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`) |
-| GET | `/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
-| GET | `/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
+| GET | `/pools` | Active AMM pools being watched |
 | GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
 | GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; `?format=csv` serves the points as `text/csv` (`ts,price,volume`); ~30-day retention |
-| GET | `/pools` | Active AMM pools being watched |
 | GET | `/pairs` | Watched trading pairs |
+| POST | `/pairs` | Add a new trading pair (Admin only) |
+| GET | `/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
+| GET | `/book/:assetA/:assetB?depth=0.1&step=0.01&network=testnet` | Aggregated SDEX book and synthetic AMM price ladder with cumulative size and venue provenance |
+| GET | `/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
+| GET | `/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
 | GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
 | GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
 | GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
-| GET | `/status` | Indexer health |
 | GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
+| POST | `/webhooks` | Subscribe to a price-threshold webhook |
+| DELETE | `/webhooks/:id` | Delete a webhook subscription |
 | GET | `/usage/me` | Usage and quota for the calling API key (requires `Authorization: Bearer <key>`) |
 | GET | `/supported` | Payment kinds and extensions this facilitator supports |
 | POST | `/verify` | Verify an x402 payment payload |
 | POST | `/settle` | Settle an x402 payment (idempotent — retries replay the stored result) |
-| POST | `/webhooks` | Subscribe to a price-threshold webhook |
-| DELETE | `/webhooks/:id` | Delete a webhook subscription |
 | GET/POST | `/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md)) |
+<!-- ENDPOINTS:END -->
 
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is

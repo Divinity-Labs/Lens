@@ -233,6 +233,8 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
   source: 'AMM',
+  type: 'Liquidity Pool',
+  description: 'Stellar native AMM liquidity pools (Horizon)',
 
   isEnabled(_network: NetworkName): boolean {
     return true
