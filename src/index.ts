@@ -12,7 +12,7 @@ import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
 import { venueAdapters, startVenueAdapter } from './ingest/venues'
-import { startSnapshotIngester } from './ingesters/snapshot'
+import { startSnapshotIngester } from './ingest/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
