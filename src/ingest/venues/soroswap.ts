@@ -196,16 +196,22 @@ export async function fetchPoolReserves(
 // ── Spot price ────────────────────────────────────────────────────────────────
 
 /**
- * Pure function: calculate spot price from constant-product reserves.
+ * Pure function: calculate spot price from constant-product reserves,
+ * accounting for tokens declaring different decimals (#227).
  * Returns 0 if either reserve is zero (empty pool guard).
  *
- * price = reserveA / reserveB
- * (price of assetB denominated in assetA)
+ * price = (reserveA / 10^decimalsA) / (reserveB / 10^decimalsB)
+ *       = (reserveA / reserveB) * 10^(decimalsB - decimalsA)
  */
-export function calcSpotPrice(reserveA: bigint, reserveB: bigint): number {
+export function calcSpotPrice(
+  reserveA: bigint,
+  reserveB: bigint,
+  decimalsA: number = 7,
+  decimalsB: number = 7
+): number {
   if (reserveA === 0n || reserveB === 0n) return 0
-  // Use Number division; reserves are i128 scaled to 7 decimal places
-  return Number(reserveA) / Number(reserveB)
+  const factor = 10 ** (decimalsB - decimalsA)
+  return (Number(reserveA) / Number(reserveB)) * factor
 }
 
 // ── Per-pool ingestion ────────────────────────────────────────────────────────
@@ -225,7 +231,12 @@ export async function ingestPool(
     if (!reserves) return
 
     const [reserveA, reserveB] = reserves
-    const spotPrice = calcSpotPrice(reserveA, reserveB)
+    const spotPrice = calcSpotPrice(
+      reserveA,
+      reserveB,
+      poolEntry.tokenA?.decimals ?? 7,
+      poolEntry.tokenB?.decimals ?? 7
+    )
 
     if (spotPrice === 0) {
       console.debug(
@@ -376,7 +387,12 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
 
   derive(raw: [bigint, bigint], target: PoolEntry, pair: WatchedPair, _network: NetworkName): VenuePricePoint[] {
     const [reserveA, reserveB] = raw
-    const spotPrice = calcSpotPrice(reserveA, reserveB)
+    const spotPrice = calcSpotPrice(
+      reserveA,
+      reserveB,
+      target.tokenA?.decimals ?? 7,
+      target.tokenB?.decimals ?? 7
+    )
     if (spotPrice === 0) return []
 
     return [

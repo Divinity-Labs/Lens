@@ -16,6 +16,9 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getAllVenueStatuses } from '../ingest/venues/runner'
+import { reconcilePairVenues } from '../aggregator/reconciliation'
+import { getBlendRates } from '../ingest/venues/blend'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -255,8 +258,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
       if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
 
-      // NOTE: getDepth reads order-book data with no network column yet — see L048.
-      const depthResult = await getDepth(pair.pairKey, amount)
+      const depthResult = await getDepth(pair.pairKey, amount, network)
       
       return {
         assetA: pair.assetA.code,
@@ -266,4 +268,44 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       }
     }
   )
+
+  // GET /venues/status — Venue liveness and quiet venue detection (#219)
+  app.get<{ Querystring: { network?: string } }>('/venues/status', async (req) => {
+    const requestedNetwork = req.query.network ?? req.network
+    const network = (requestedNetwork as NetworkName) ?? activeNetwork
+    const statuses = getAllVenueStatuses(network)
+    return {
+      network,
+      timestamp: new Date().toISOString(),
+      venues: statuses,
+    }
+  })
+
+  // GET /price/:assetA/:assetB/reconciliation — Cross-venue price reconciliation and divergence check (#239)
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { network?: string }
+  }>('/price/:assetA/:assetB/reconciliation', async (req, reply) => {
+    const { assetA, assetB } = req.params
+    const network = (req.query.network ?? req.network ?? activeNetwork) as NetworkName
+    const pair = findPair(assetA, assetB, network)
+    if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+
+    return await reconcilePairVenues(pair.pairKey, network)
+  })
+
+  // GET /blend/rates/:asset — Blend lending market rates (#212)
+  app.get<{
+    Params: { asset: string }
+    Querystring: { network?: string }
+  }>('/blend/rates/:asset', async (req, reply) => {
+    const { asset } = req.params
+    const network = (req.query.network ?? req.network ?? activeNetwork) as NetworkName
+    const rates = getBlendRates(asset, network)
+    if (!rates) {
+      return reply.status(404).send({ error: `No Blend lending pool found for asset ${asset} on ${network}` })
+    }
+    return rates
+  })
 }
+

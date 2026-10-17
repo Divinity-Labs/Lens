@@ -3,7 +3,7 @@ export interface PricePoint {
   assetA: string
   assetB: string
   pairKey: string
-  source: 'SDEX' | 'AMM'
+  source: 'SDEX' | 'AMM' | string
   poolId?: string
   price: number
   baseVolume: number
@@ -11,6 +11,18 @@ export interface PricePoint {
   ledger: number
   timestamp: Date
   eventId?: string
+  /** The on-chain ledger close timestamp (#240) */
+  chainTimestamp?: Date
+  /** The wall-clock timestamp when the data was ingested/observed (#240) */
+  observedAt?: Date
+}
+
+export interface RouteSplit {
+  venue: 'SDEX' | 'AMM' | 'SOROSWAP' | 'PHOENIX' | string
+  portion: number
+  inputAmount: number
+  outputAmount: number
+  executionPrice: number
 }
 
 export interface AggregatedPrice {
@@ -43,6 +55,7 @@ export interface RouteInfo {
   estimatedOutput: number
   slippagePct: number
   recommendation: string
+  splits?: RouteSplit[]
 }
 
 export interface WatchedPair {

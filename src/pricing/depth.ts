@@ -62,24 +62,33 @@ export function generateAMMDepthLevels(
   return { asks, bids }
 }
 
-export async function getAMMDepth(pairKey: string, amount: number): Promise<DepthResult | null> {
+import { activeNetwork, type NetworkName } from '../config'
+
+export async function getAMMDepth(
+  pairKey: string,
+  amount: number,
+  network: NetworkName = activeNetwork,
+  feeBpOverride?: number
+): Promise<DepthResult | null> {
   const result = await pgPool.query(
     `SELECT DISTINCT ON (ps.pool_id) ps.reserve_a, ps.reserve_b, ps.fee_bp
      FROM pool_snapshots ps
-     WHERE ps.pool_id IN (
-       SELECT DISTINCT pool_id FROM price_points
-       WHERE pair_key = $1 AND source = 'AMM' AND pool_id IS NOT NULL
-     )
+     WHERE ps.network = $2
+       AND ps.pool_id IN (
+         SELECT DISTINCT pool_id FROM price_points
+         WHERE pair_key = $1 AND network = $2 AND source = 'AMM' AND pool_id IS NOT NULL
+       )
      ORDER BY ps.pool_id, ps.timestamp DESC
      LIMIT 1`,
-    [pairKey]
+    [pairKey, network]
   )
   if (!result.rows[0]) return null
 
   const { reserve_a, reserve_b, fee_bp } = result.rows[0]
   const rA = parseFloat(reserve_a)
   const rB = parseFloat(reserve_b)
-  const feeBp = parseInt(fee_bp)
+  const parsedFee = parseInt(fee_bp, 10)
+  const feeBp = feeBpOverride ?? (!isNaN(parsedFee) && parsedFee > 0 ? parsedFee : 30)
 
   const spotPrice = calculateAMMSpotPrice(rA, rB)
   const executionPrice = calculateAMMPrice(rA, rB, amount, feeBp)
@@ -96,8 +105,13 @@ export async function getAMMDepth(pairKey: string, amount: number): Promise<Dept
   }
 }
 
-export async function getDepth(pairKey: string, amount: number): Promise<DepthResult> {
-  const ammDepth = await getAMMDepth(pairKey, amount)
+export async function getDepth(
+  pairKey: string,
+  amount: number,
+  network: NetworkName = activeNetwork,
+  feeBpOverride?: number
+): Promise<DepthResult> {
+  const ammDepth = await getAMMDepth(pairKey, amount, network, feeBpOverride)
   
   if (ammDepth) {
     return ammDepth

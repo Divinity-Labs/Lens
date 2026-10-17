@@ -38,6 +38,90 @@ export function setLastPrice(
   return { previousPrice, currentPrice: price }
 }
 
+// ── Venue Heartbeat & Liveness Tracking (#219) ────────────────────────────────
+
+export interface VenueHeartbeat {
+  venue: string
+  network: NetworkName
+  lastHeartbeat: Date
+  lastSuccessfulPoll: Date | null
+  lastTradesIngested: number
+  status: 'HEALTHY' | 'QUIET' | 'OFFLINE'
+  consecutiveFailures: number
+}
+
+const venueHeartbeats = new Map<string, VenueHeartbeat>()
+
+export function recordVenueHeartbeat(
+  venue: string,
+  network: NetworkName,
+  tradesIngested: number = 0,
+  success: boolean = true
+): void {
+  const key = `${venue}:${network}`
+  const existing = venueHeartbeats.get(key)
+  const now = new Date()
+
+  if (success) {
+    venueHeartbeats.set(key, {
+      venue,
+      network,
+      lastHeartbeat: now,
+      lastSuccessfulPoll: now,
+      lastTradesIngested: tradesIngested,
+      status: 'HEALTHY',
+      consecutiveFailures: 0,
+    })
+  } else {
+    const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1
+    venueHeartbeats.set(key, {
+      venue,
+      network,
+      lastHeartbeat: now,
+      lastSuccessfulPoll: existing?.lastSuccessfulPoll ?? null,
+      lastTradesIngested: existing?.lastTradesIngested ?? 0,
+      status: consecutiveFailures >= 3 ? 'OFFLINE' : 'QUIET',
+      consecutiveFailures,
+    })
+  }
+}
+
+export function getVenueStatus(venue: string, network: NetworkName, quietThresholdSeconds = 300): VenueHeartbeat {
+  const key = `${venue}:${network}`
+  const hb = venueHeartbeats.get(key)
+  if (!hb) {
+    return {
+      venue,
+      network,
+      lastHeartbeat: new Date(0),
+      lastSuccessfulPoll: null,
+      lastTradesIngested: 0,
+      status: 'OFFLINE',
+      consecutiveFailures: 0,
+    }
+  }
+
+  const ageSeconds = Math.floor((Date.now() - hb.lastHeartbeat.getTime()) / 1000)
+  if (ageSeconds > quietThresholdSeconds && hb.status === 'HEALTHY') {
+    return { ...hb, status: 'QUIET' }
+  }
+  return hb
+}
+
+export function getAllVenueStatuses(network?: NetworkName): VenueHeartbeat[] {
+  const list: VenueHeartbeat[] = []
+  for (const hb of venueHeartbeats.values()) {
+    if (!network || hb.network === network) {
+      list.push(getVenueStatus(hb.venue, hb.network))
+    }
+  }
+  return list
+}
+
+export function resetVenueHeartbeats(): void {
+  venueHeartbeats.clear()
+}
+
 // ── Shared Price Point Writer & Dispatcher ────────────────────────────────────
 
 export async function writeVenuePricePoints(
@@ -49,6 +133,7 @@ export async function writeVenuePricePoints(
   if (points.length === 0) return
 
   await upsertPricePoints(points as any, network)
+  recordVenueHeartbeat(venue, network, points.length, true)
 
   const latest = points[points.length - 1]
   const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
@@ -105,8 +190,10 @@ export async function startVenueAdapter(
         await adapter.ingestPair(pair, network)
       }
       consecutiveErrors = 0
+      recordVenueHeartbeat(adapter.name, network, 0, true)
     } catch (err) {
       consecutiveErrors++
+      recordVenueHeartbeat(adapter.name, network, 0, false)
       const backoffMs = Math.min(10_000 * Math.pow(2, consecutiveErrors - 1), 60_000)
       console.error(
         `[${adapter.name}] Cycle failed on ${network} (attempt ${consecutiveErrors}), retrying in ${backoffMs}ms:`,

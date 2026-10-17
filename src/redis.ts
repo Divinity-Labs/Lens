@@ -46,17 +46,30 @@ redis.on('error', (err) => {
   suppressedRedisErrors = 0
 })
 
-export async function getCachedPrice(pairKey: string): Promise<string | null> {
+export function normalizePriceCacheKey(pairKey: string, network?: string): string {
+  const colonIndex = pairKey.indexOf(':')
+  if (colonIndex > 0) {
+    const prefix = pairKey.slice(0, colonIndex)
+    if (prefix === 'testnet' || prefix === 'mainnet') {
+      const actualPair = pairKey.slice(colonIndex + 1)
+      return `lens:${prefix}:price:${actualPair}`
+    }
+  }
+  const net = network ?? activeNetwork
+  return `lens:${net}:price:${pairKey}`
+}
+
+export async function getCachedPrice(pairKey: string, network?: string): Promise<string | null> {
   try {
-    return await redis.get(`lens:${activeNetwork}:price:${pairKey}`)
+    return await redis.get(normalizePriceCacheKey(pairKey, network))
   } catch {
     return null
   }
 }
 
-export async function setCachedPrice(pairKey: string, data: object, ttlSeconds: number): Promise<void> {
+export async function setCachedPrice(pairKey: string, data: object, ttlSeconds: number, network?: string): Promise<void> {
   try {
-    await redis.set(`lens:${activeNetwork}:price:${pairKey}`, JSON.stringify(data), 'EX', ttlSeconds)
+    await redis.set(normalizePriceCacheKey(pairKey, network), JSON.stringify(data), 'EX', ttlSeconds)
   } catch {
     // Redis cache miss is non-fatal
   }
