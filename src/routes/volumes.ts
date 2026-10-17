@@ -70,7 +70,7 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
             AND network = $2
             AND timestamp >= $3
           GROUP BY source`,
-        [asset, network, startTime],
+        [asset, network, startTime]
       )
 
       const byVenue: Record<string, number> = {}
@@ -82,6 +82,48 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         byVenue[row.source] = volume
         totalVolume += volume
         tradeCount += Number(row.trade_count) || 0
+      }
+
+      // Also query individual trade sizes to compute concentration, median, and largest trade (#302)
+      const tradeSizesRes = await pgPool.query(
+        `SELECT (
+           CASE
+             WHEN asset_a = $1 THEN base_volume
+             WHEN asset_b = $1 THEN counter_volume
+             ELSE 0
+           END
+         )::float AS trade_size
+         FROM price_points
+         WHERE (asset_a = $1 OR asset_b = $1)
+           AND network = $2
+           AND timestamp >= $3
+         ORDER BY trade_size ASC`,
+        [asset, network, startTime]
+      )
+
+      const tradeSizes: number[] = tradeSizesRes.rows
+        .map((r) => parseFloat(r.trade_size))
+        .filter((s) => !isNaN(s) && s > 0)
+
+      let medianSize = 0
+      let largestTradeVolume = 0
+      let topTradeShare = 0
+      let herfindahlIndex = 0
+
+      if (tradeSizes.length > 0) {
+        const mid = Math.floor(tradeSizes.length / 2)
+        medianSize = tradeSizes.length % 2 === 0
+          ? (tradeSizes[mid - 1] + tradeSizes[mid]) / 2
+          : tradeSizes[mid]
+
+        largestTradeVolume = tradeSizes[tradeSizes.length - 1]
+
+        if (totalVolume > 0) {
+          topTradeShare = parseFloat((largestTradeVolume / totalVolume).toFixed(4))
+          // Herfindahl-Hirschman Index: sum of squared market shares
+          const sumSq = tradeSizes.reduce((acc, s) => acc + Math.pow(s / totalVolume, 2), 0)
+          herfindahlIndex = parseFloat(sumSq.toFixed(4))
+        }
       }
 
       return {
@@ -96,6 +138,17 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         byVenue,
         venues: Object.keys(byVenue),
         tradeCount,
+        medianSize: parseFloat(medianSize.toFixed(4)),
+        largestTradeVolume: parseFloat(largestTradeVolume.toFixed(4)),
+        topTradeShare,
+        concentrationScore: herfindahlIndex,
+        concentration: {
+          medianSize: parseFloat(medianSize.toFixed(4)),
+          largestTradeVolume: parseFloat(largestTradeVolume.toFixed(4)),
+          topTradeShare,
+          herfindahlIndex,
+          method: 'Herfindahl-Hirschman Index (sum of squared volume shares) and top-trade volume share',
+        },
       }
     } catch (err) {
       return reply

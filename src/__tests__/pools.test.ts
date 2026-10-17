@@ -68,8 +68,27 @@ describe('GET /pools', () => {
     const res = await app.inject({ method: 'GET', url: '/pools' })
     expect(res.statusCode).toBe(200)
     expect(res.json().pools).toEqual([
-      { pool_id: 'C1', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 10, reserve_b: 20, spot_price: 2, fee_bp: 30, timestamp: old.toISOString() },
+      { pool_id: 'C1', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 10, reserve_b: 20, spot_price: 2, fee_bp: 30, timestamp: old.toISOString(), venue: 'sdex' },
     ])
+    await app.close()
+  })
+
+  it('lists Phoenix pools alongside existing pools and tags venue on each (#211)', async () => {
+    const ts = new Date('2026-01-01T00:00:00Z')
+    mockQuery.mockResolvedValue({
+      rows: [
+        { pool_id: 'C_SDEX_1', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 100, reserve_b: 200, spot_price: 2, fee_bp: 30, timestamp: ts, venue: 'sdex' },
+        { pool_id: 'phoenix_pool_xlm_usdc', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 500, reserve_b: 1000, spot_price: 2, fee_bp: 25, timestamp: ts, venue: 'phoenix' },
+        { pool_id: 'aquarius_pool_hash_123', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 300, reserve_b: 600, spot_price: 2, fee_bp: 30, timestamp: ts, venue: 'aquarius' },
+      ],
+    })
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/pools' })
+    expect(res.statusCode).toBe(200)
+    const pools = res.json().pools
+    expect(pools).toHaveLength(3)
+    expect(pools.map((p: any) => p.venue)).toEqual(['sdex', 'phoenix', 'aquarius'])
+    expect(pools.find((p: any) => p.venue === 'phoenix')?.pool_id).toBe('phoenix_pool_xlm_usdc')
     await app.close()
   })
 })

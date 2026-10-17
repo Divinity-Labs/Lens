@@ -292,6 +292,26 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Base64 opaque cursor from previous page"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            },
+            "description": "Number of pools to return per page (max 100)"
           }
         ],
         "responses": {
@@ -331,9 +351,20 @@
                           "timestamp": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "venue": {
+                            "type": "string",
+                            "description": "Venue originating this pool (e.g. sdex, phoenix, aquarius, soroswap)"
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -626,6 +657,56 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Base64 opaque cursor from previous page"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            },
+            "description": "Number of pairs to return per page"
+          },
+          {
+            "name": "min_volume",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 10
+            },
+            "description": "Minimum 24h volume for tradeable classification"
+          },
+          {
+            "name": "min_venues",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1
+            },
+            "description": "Minimum active venues for tradeable classification"
+          },
+          {
+            "name": "ref_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 100
+            },
+            "description": "Reference trade depth size for tradeable classification"
           }
         ],
         "responses": {
@@ -658,9 +739,40 @@
                             "type": "string",
                             "format": "date-time",
                             "nullable": true
+                          },
+                          "tradeable": {
+                            "type": "boolean",
+                            "description": "Indicates whether this pair meets active trading criteria"
+                          },
+                          "tradeability": {
+                            "type": "object",
+                            "properties": {
+                              "tradeable": {
+                                "type": "boolean"
+                              },
+                              "reasons": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "criteria": {
+                                "type": "object"
+                              }
+                            }
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    },
+                    "criteria": {
+                      "type": "object"
                     }
                   }
                 }
@@ -1858,6 +1970,541 @@
           }
         }
       }
+    },
+    "/volatility/{pairKey}": {
+      "get": {
+        "operationId": "getVolatility",
+        "summary": "Get realised volatility for a trading pair",
+        "security": [],
+        "parameters": [
+          {
+            "name": "pairKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM/USDC"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Realised volatility data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pairKey": {
+                      "type": "string"
+                    },
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "annualizedVolatility": {
+                      "type": "number"
+                    },
+                    "sampleCount": {
+                      "type": "integer"
+                    },
+                    "periodStart": {
+                      "type": "string"
+                    },
+                    "periodEnd": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Insufficient data or invalid parameter"
+          }
+        }
+      }
+    },
+    "/correlation": {
+      "get": {
+        "operationId": "getCorrelation",
+        "summary": "Get Pearson correlation matrix between Stellar assets",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assets",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM,USDC,EURC"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Correlation matrix",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "assets": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "matrix": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        }
+      }
+    },
+    "/movers": {
+      "get": {
+        "operationId": "getMovers",
+        "summary": "Get leaderboard of top gainers, losers, and volume movers",
+        "security": [],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Top movers leaderboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "gainers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "losers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "volumeMovers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/impact/{assetA}/{assetB}": {
+      "get": {
+        "operationId": "getPriceImpact",
+        "summary": "Get size-ladder slippage and price impact curve",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetA",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM"
+          },
+          {
+            "name": "assetB",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "name": "sizes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional comma-separated list of sizes"
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slippage impact ladder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pair": {
+                      "type": "string"
+                    },
+                    "network": {
+                      "type": "string"
+                    },
+                    "tradeable": {
+                      "type": "boolean"
+                    },
+                    "spotPrice": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "ladder": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "thresholdCrossings": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/yield": {
+      "get": {
+        "operationId": "getPoolYields",
+        "summary": "Get fee APR and impermanent loss for liquidity pools",
+        "security": [],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pool yields list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "yields": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pools/{id}/il": {
+      "get": {
+        "operationId": "getPoolImpermanentLoss",
+        "summary": "Get divergence and impermanent loss for a specific pool",
+        "security": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pool impermanent loss and net yield",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "poolId": {
+                      "type": "string"
+                    },
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "currentPrice": {
+                      "type": "number"
+                    },
+                    "startPrice": {
+                      "type": "number"
+                    },
+                    "priceRatio": {
+                      "type": "number"
+                    },
+                    "feeApr": {
+                      "type": "number"
+                    },
+                    "impermanentLoss": {
+                      "type": "number"
+                    },
+                    "netYield": {
+                      "type": "number"
+                    },
+                    "assumptions": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found"
+          }
+        }
+      }
+    },
+    "/pegs": {
+      "get": {
+        "operationId": "getPegs",
+        "summary": "Get comparative stablecoin multi-peg health",
+        "security": [],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Multi-peg comparative status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "pegs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rates/{asset}": {
+      "get": {
+        "operationId": "getLendingRates",
+        "summary": "Get lending market supply and borrow rates",
+        "security": [],
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lending market rates per venue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "venue": {
+                        "type": "string"
+                      },
+                      "pool": {
+                        "type": "string"
+                      },
+                      "poolId": {
+                        "type": "string"
+                      },
+                      "asset": {
+                        "type": "string"
+                      },
+                      "network": {
+                        "type": "string"
+                      },
+                      "supplyApy": {
+                        "type": "number"
+                      },
+                      "borrowApy": {
+                        "type": "number"
+                      },
+                      "utilizationRate": {
+                        "type": "number"
+                      },
+                      "timestamp": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2574,6 +3221,38 @@
           },
           "tradeCount": {
             "type": "integer"
+          },
+          "medianSize": {
+            "type": "number"
+          },
+          "largestTradeVolume": {
+            "type": "number"
+          },
+          "topTradeShare": {
+            "type": "number"
+          },
+          "concentrationScore": {
+            "type": "number"
+          },
+          "concentration": {
+            "type": "object",
+            "properties": {
+              "medianSize": {
+                "type": "number"
+              },
+              "largestTradeVolume": {
+                "type": "number"
+              },
+              "topTradeShare": {
+                "type": "number"
+              },
+              "herfindahlIndex": {
+                "type": "number"
+              },
+              "method": {
+                "type": "string"
+              }
+            }
           }
         }
       },
@@ -3216,6 +3895,45 @@
                 }
               }
             }
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN_PAIR",
+          "UNWATCHED_PAIR",
+          "BAD_INTERVAL",
+          "BAD_WINDOW",
+          "BAD_NETWORK",
+          "MISSING_PARAMETER",
+          "UPSTREAM_UNAVAILABLE",
+          "INSUFFICIENT_DATA",
+          "NOT_FOUND",
+          "INVALID_REQUEST",
+          "UNAUTHORIZED",
+          "RATE_LIMITED",
+          "INTERNAL_ERROR"
+        ],
+        "description": "Canonical machine-readable error codes (#261)"
+      },
+      "AppError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message"
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request tracing ID (#265)"
           }
         }
       }

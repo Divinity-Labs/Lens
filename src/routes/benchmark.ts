@@ -31,7 +31,10 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
 
       const pair = findPair(asset, target)
       if (!pair) {
-        return reply.status(404).send({ error: `Pair ${asset}/${target} not watched` })
+        return reply.status(404).send({
+          error: `Pair ${asset}/${target} not watched`,
+          code: 'UNWATCHED_PAIR',
+        })
       }
 
       const isAssetA = pair.assetA.code.toUpperCase() === normAsset

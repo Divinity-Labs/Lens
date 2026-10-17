@@ -26,6 +26,13 @@ import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerTracing } from './middleware/tracing'
+import { registerCaching } from './middleware/caching'
+import { ErrorCodes, inferErrorCode } from './errors'
+import { registerAnalyticsRoutes } from './routes/analytics'
+import { registerYieldRoutes } from './routes/yield'
+import { registerPegsRoutes } from './routes/pegs'
+import { registerRatesRoutes } from './routes/rates'
 import { getMetrics } from './metrics'
 
 export interface BuildAppOptions {
@@ -59,7 +66,34 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.addHook('onRoute', options.onRoute)
   }
 
-  await app.register(cors, { origin: true })
+  // Granular CORS Policy (#268): Open on public reads, restricted on credentialed/admin routes.
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000,http://localhost:5173,https://app.stellar-lens.com')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+
+  await app.register(cors, () => {
+    return (req: any, cb: any) => {
+      const origin = req.headers.origin
+      const isPublic =
+        !req.url.startsWith('/admin') &&
+        !req.url.startsWith('/keys') &&
+        !req.url.startsWith('/usage')
+      if (isPublic) {
+        cb(null, { origin: true, credentials: false })
+      } else {
+        const isAllowed = !!(origin && allowedOrigins.includes(origin))
+        cb(null, { origin: isAllowed, credentials: true })
+      }
+    }
+  })
+
+  // End-to-end request tracing via x-request-id header (#265)
+  await app.register(registerTracing)
+
+  // HTTP Cache-Control and conditional request ETag (304) handling (#266, #267)
+  await app.register(registerCaching)
+
   await app.register(compress)
 
   // HTTP request/latency metrics. Registered FIRST, ahead of the network
@@ -141,6 +175,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSettleRoute(app)
   await registerGraphQL(app)
   await registerWebSocket(app)
+  await registerAnalyticsRoutes(app)
+  await registerYieldRoutes(app)
+  await registerPegsRoutes(app)
+  await registerRatesRoutes(app)
+
+  // Standardized Error Handler (#261, #265)
+  app.setErrorHandler((error: any, req: any, reply: any) => {
+    const statusCode = error.statusCode ?? 500
+    const message = error.message || 'Internal server error'
+    const code = (error as any).code && typeof (error as any).code === 'string' && (error as any).code in ErrorCodes
+      ? (error as any).code
+      : inferErrorCode(message, statusCode)
+
+    reply.status(statusCode).send({
+      error: message,
+      code,
+      requestId: req.id,
+    })
+  })
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)
   app.get('/metrics', { config: { public: true } }, async (req, reply) => {

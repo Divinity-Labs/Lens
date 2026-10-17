@@ -212,7 +212,9 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // each step), then one LIMIT 1 index probe per pool fetches its newest row.
   // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
   // network. A quiet pool is kept with its real `timestamp`, never dropped.
-  app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
+  app.get<{
+    Querystring: { cursor?: string; limit?: string }
+  }>('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req, reply) => {
     const network = req.network ?? activeNetwork
     const result = await pgPool.query(
       `WITH RECURSIVE ids AS (
@@ -236,7 +238,60 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         WHERE ids.pool_id IS NOT NULL`,
       [network]
     )
-    return { pools: result.rows }
+
+    const mappedPools = result.rows.map((r: any) => {
+      let venue = r.venue
+      if (!venue) {
+        const pid = (r.pool_id || '').toLowerCase()
+        if (pid.includes('phoenix') || pid.includes('phx')) venue = 'phoenix'
+        else if (pid.includes('aqua')) venue = 'aquarius'
+        else if (pid.includes('soroswap')) venue = 'soroswap'
+        else venue = 'sdex'
+      }
+      return {
+        ...r,
+        venue,
+      }
+    })
+
+    const q = req.query
+    if (q.limit !== undefined || q.cursor !== undefined) {
+      const limit = Math.min(Math.max(parseInt(q.limit ?? '20', 10), 1), 100)
+      let startIndex = 0
+
+      if (q.cursor) {
+        try {
+          const decoded = Buffer.from(q.cursor, 'base64').toString('utf-8')
+          const [lastPoolId] = JSON.parse(decoded)
+          const foundIdx = mappedPools.findIndex(p => p.pool_id === lastPoolId)
+          if (foundIdx !== -1) {
+            startIndex = foundIdx + 1
+          }
+        } catch {
+          return reply.status(400).send({ error: 'Invalid cursor format' })
+        }
+      }
+
+      const paged = mappedPools.slice(startIndex, startIndex + limit)
+      const hasMore = startIndex + limit < mappedPools.length
+      let nextCursor: string | null = null
+      if (hasMore && paged.length > 0) {
+        const last = paged[paged.length - 1]
+        nextCursor = Buffer.from(JSON.stringify([last.pool_id])).toString('base64')
+      }
+
+      return {
+        pools: paged,
+        nextCursor,
+        hasMore,
+      }
+    }
+
+    return {
+      pools: mappedPools,
+      nextCursor: null,
+      hasMore: false,
+    }
   })
 
   // GET /price/:assetA/:assetB/depth?amount=1000
