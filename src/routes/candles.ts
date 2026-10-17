@@ -1,5 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
+import {
+  CANDLES_DEFAULT_LIMIT,
+  CANDLES_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 
 const INTERVAL_SECONDS: Record<string, number> = {
   '1m': 60,
@@ -11,9 +19,17 @@ const INTERVAL_SECONDS: Record<string, number> = {
 }
 
 export async function registerCandleRoutes(app: FastifyInstance) {
+  // GET /candles/:assetA/:assetB?interval=&from=&to=&cursor=&limit=
+  //
+  // Paginated keyset-style on the bucket start time ASC (default limit 500,
+  // max 5000). The cursor carries the last page's bucket epoch in seconds (the
+  // tiebreaker id is the pairKey, kept so every route emits the same cursor
+  // shape), and the keyset predicate is applied to the bucket expression in
+  // the WHERE clause, so a candle inserted mid-paging cannot shift a page
+  // boundary the way an offset would.
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { interval?: string; from?: string; to?: string }
+    Querystring: { interval?: string; from?: string; to?: string; cursor?: string; limit?: string }
   }>('/candles/:assetA/:assetB', async (req, reply) => {
     const { assetA, assetB } = req.params
     const interval = req.query.interval ?? '1h'
@@ -24,6 +40,12 @@ export async function registerCandleRoutes(app: FastifyInstance) {
         error: `interval must be one of: ${Object.keys(INTERVAL_SECONDS).join(', ')}`,
       })
     }
+
+    const parsedLimit = parseLimit(req.query.limit, CANDLES_DEFAULT_LIMIT, CANDLES_MAX_LIMIT)
+    if ('error' in parsedLimit) {
+      return reply.status(400).send({ error: parsedLimit.error })
+    }
+    const { limit } = parsedLimit
 
     const pairKey = [assetA, assetB].sort().join('/')
 
@@ -39,6 +61,20 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
     }
 
+    const params: unknown[] = [intervalSecs, pairKey, from, to]
+    let cursorCondition = ''
+    if (req.query.cursor) {
+      const decoded = decodeCursor(req.query.cursor)
+      if (decoded === null) {
+        return reply.status(400).send({ error: 'Invalid cursor format' })
+      }
+      if (decoded !== 'skip') {
+        params.push(Number(decoded.value))
+        cursorCondition = ` AND floor(EXTRACT(EPOCH FROM timestamp) / $1) * $1 > $${params.length}`
+      }
+    }
+    params.push(limit + 1) // Fetch one extra to determine hasMore
+
     const result = await pgPool.query(
       `SELECT
          to_timestamp(floor(EXTRACT(EPOCH FROM timestamp) / $1) * $1) AS time,
@@ -50,18 +86,25 @@ export async function registerCandleRoutes(app: FastifyInstance) {
        FROM price_points
        WHERE pair_key = $2
          AND timestamp >= $3
-         AND timestamp <= $4
+         AND timestamp <= $4${cursorCondition}
        GROUP BY floor(EXTRACT(EPOCH FROM timestamp) / $1)
-       ORDER BY time ASC`,
-      [intervalSecs, pairKey, from, to]
+       ORDER BY time ASC
+       LIMIT $${params.length}`,
+      params
     )
+
+    const { data, hasMore } = slicePage(result.rows, limit)
+    const last = hasMore && data.length > 0 ? data[data.length - 1] : null
+    const nextCursor = last
+      ? encodeCursor(Math.floor(new Date(last.time).getTime() / 1000), pairKey)
+      : null
 
     return {
       pairKey,
       interval,
       from: from.toISOString(),
       to: to.toISOString(),
-      candles: result.rows.map(r => ({
+      candles: data.map(r => ({
         time: r.time,
         open: Number(r.open),
         high: Number(r.high),
@@ -69,6 +112,8 @@ export async function registerCandleRoutes(app: FastifyInstance) {
         close: Number(r.close),
         volume: Number(r.volume),
       })),
+      nextCursor,
+      hasMore,
     }
   })
 }

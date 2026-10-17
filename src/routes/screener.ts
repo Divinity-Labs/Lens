@@ -1,6 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork } from '../config'
+import {
+  SCREENER_DEFAULT_LIMIT,
+  SCREENER_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
@@ -29,10 +37,11 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       const q = req.query
 
       // 1. Parse and validate pagination & sorting
-      const limit = Math.min(Math.max(parseInt(q.limit ?? '20', 10), 1), 100)
-      if (isNaN(limit)) {
-        return reply.status(400).send({ error: 'limit must be a valid integer' })
+      const parsedLimit = parseLimit(q.limit, SCREENER_DEFAULT_LIMIT, SCREENER_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send({ error: parsedLimit.error })
       }
+      const limit = parsedLimit.limit
 
       if (q.market_cap !== undefined || q.sortBy === 'market_cap') {
         return reply.status(400).send({ error: MARKET_CAP_UNSUPPORTED })
@@ -100,17 +109,14 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
 
       // 4. Cursor decoding and pagination condition
       if (q.cursor) {
-        try {
-          const decoded = Buffer.from(q.cursor, 'base64').toString('utf-8')
-          const [lastVal, lastId] = JSON.parse(decoded)
-          
-          if (lastVal !== null && lastVal !== undefined && lastId) {
-            const op = order === 'desc' ? '<' : '>'
-            conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
-            params.push(lastVal, lastId)
-          }
-        } catch (e) {
+        const decoded = decodeCursor(q.cursor)
+        if (decoded === null) {
           return reply.status(400).send({ error: 'Invalid cursor format' })
+        }
+        if (decoded !== 'skip') {
+          const op = order === 'desc' ? '<' : '>'
+          conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
+          params.push(decoded.value, decoded.id)
         }
       }
 
@@ -169,17 +175,13 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       // 6. Execute query
       params.push(limit + 1) // Fetch one extra to determine hasMore
       const result = await pgPool.query(sql, params)
-      const rows = result.rows
-
-      const hasMore = rows.length > limit
-      const data = hasMore ? rows.slice(0, limit) : rows
+      const { data, hasMore } = slicePage(result.rows, limit)
 
       // 7. Generate nextCursor
       let nextCursor = null
       if (hasMore && data.length > 0) {
         const lastRecord = data[data.length - 1]
-        const cursorPayload = JSON.stringify([lastRecord[sortBy], lastRecord.pair_key])
-        nextCursor = Buffer.from(cursorPayload).toString('base64')
+        nextCursor = encodeCursor(lastRecord[sortBy], lastRecord.pair_key)
       }
 
       return {

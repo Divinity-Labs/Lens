@@ -2,10 +2,18 @@ import type { FastifyInstance } from 'fastify'
 import { getActivePairs, parseAssetStr, makePairKey, registerPair, persistPair, hasPair } from '../pairsRegistry'
 import { pgPool } from '../db'
 import { activeNetwork } from '../config'
+import {
+  PAIRS_DEFAULT_LIMIT,
+  PAIRS_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 export async function registerPairsRoutes(app: FastifyInstance) {
-  // GET /pairs — list all active pairs with latest price metadata
+  // GET /pairs?cursor=&limit= — list active pairs with latest price metadata
   //
   // One index probe per watched pair on (network, pair_key, timestamp DESC):
   // `ORDER BY timestamp DESC LIMIT 1` reads a single index entry, so the cost is
@@ -16,9 +24,30 @@ export async function registerPairsRoutes(app: FastifyInstance) {
   // the probe still finds its last print, and the response carries that print's
   // real `lastUpdated`, so a caller can see it is old. A pair with no rows on
   // this network at all comes back with null price and timestamp.
-  app.get('/pairs', async (req) => {
+  //
+  // Paginated keyset-style on pairKey ASC (default limit 50, max 200). The rows
+  // are assembled in memory from the registry, so the keyset filter and the
+  // limit+1 probe are applied to the merged list; the cursor carries the last
+  // page's pairKey, so a pair registered mid-paging cannot shift a page
+  // boundary the way an offset would.
+  app.get<{ Querystring: { cursor?: string; limit?: string } }>('/pairs', async (req, reply) => {
     const activePairs = getActivePairs()
     const network = req.network ?? activeNetwork
+
+    const parsedLimit = parseLimit(req.query.limit, PAIRS_DEFAULT_LIMIT, PAIRS_MAX_LIMIT)
+    if ('error' in parsedLimit) {
+      return reply.status(400).send({ error: parsedLimit.error })
+    }
+    const { limit } = parsedLimit
+
+    let afterKey: string | null = null
+    if (req.query.cursor) {
+      const decoded = decodeCursor(req.query.cursor)
+      if (decoded === null) {
+        return reply.status(400).send({ error: 'Invalid cursor format' })
+      }
+      if (decoded !== 'skip') afterKey = String(decoded.value)
+    }
 
     const result = await pgPool.query(
       `SELECT p.pair_key, l.price, l.timestamp
@@ -42,8 +71,8 @@ export async function registerPairsRoutes(app: FastifyInstance) {
       })
     })
 
-    return {
-      pairs: activePairs.map(p => {
+    const rows = activePairs
+      .map(p => {
         const latest = latestPrices.get(p.pairKey)
         return {
           pairKey: p.pairKey,
@@ -53,7 +82,13 @@ export async function registerPairsRoutes(app: FastifyInstance) {
           lastUpdated: latest?.timestamp ?? null,
         }
       })
-    }
+      .sort((a, b) => (a.pairKey < b.pairKey ? -1 : a.pairKey > b.pairKey ? 1 : 0))
+
+    const pageSource = afterKey ? rows.filter(r => r.pairKey > afterKey) : rows
+    const { data, hasMore } = slicePage(pageSource, limit)
+    const nextCursor = hasMore && data.length > 0 ? encodeCursor(data[data.length - 1].pairKey, data[data.length - 1].pairKey) : null
+
+    return { pairs: data, nextCursor, hasMore }
   })
 
   // POST /pairs — add a new trading pair at runtime

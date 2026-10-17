@@ -158,11 +158,12 @@ export const historyResponseSchema = {
  *
  * Rows come straight from a raw SQL query whose column set may evolve, so the
  * row shape is intentionally permissive (additionalProperties allowed). The
- * envelope, however, is validated.
+ * envelope, however, is validated — including the cursor-pagination fields
+ * every list route carries alongside its own key.
  */
 export const poolsResponseSchema = {
   type: 'object',
-  required: ['pools'],
+  required: ['pools', 'nextCursor', 'hasMore'],
   additionalProperties: false,
   properties: {
     pools: {
@@ -181,6 +182,8 @@ export const poolsResponseSchema = {
         },
       },
     },
+    nextCursor: { type: ['string', 'null'] },
+    hasMore: { type: 'boolean' },
   },
 } as const
 
