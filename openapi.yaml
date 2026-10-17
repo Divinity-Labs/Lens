@@ -29,9 +29,45 @@ paths:
                 properties:
                   ok:
                     type: boolean
+                  status:
+                    type: string
+                    enum: [healthy, degraded, unhealthy]
                   network:
                     type: string
                     enum: [testnet, mainnet]
+                  health:
+                    type: object
+                    properties:
+                      process:
+                        type: string
+                        enum: [healthy, degraded]
+                      data:
+                        type: string
+                        enum: [healthy, stale]
+                  process:
+                    type: object
+                    properties:
+                      uptimeSeconds:
+                        type: number
+                      memoryUsageMb:
+                        type: number
+                      status:
+                        type: string
+                  data:
+                    type: object
+                    properties:
+                      lastIndexedLedger:
+                        type: integer
+                        nullable: true
+                      lastProcessedAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      ingestLagSeconds:
+                        type: integer
+                        nullable: true
+                      isStale:
+                        type: boolean
                   watchedPairs:
                     type: array
                     items:
@@ -46,6 +82,21 @@ paths:
                   ingestLagSeconds:
                     type: integer
                     nullable: true
+        '503':
+          description: Service unhealthy or database unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  status:
+                    type: string
+                  error:
+                    type: string
+                  pagingCondition:
+                    type: string
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1196,6 +1247,242 @@ paths:
                 $ref: '#/components/schemas/GraphQlResponse'
         '402':
           $ref: '#/components/responses/PaymentRequired'
+
+  /price/{asset}/fiat:
+    get:
+      operationId: getPriceInFiat
+      summary: Convert asset price to fiat currency via base USD quote
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - name: currency
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [USD, NGN, EUR, GBP, KES, ZAR, CAD, BRL]
+            default: USD
+          example: NGN
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Converted fiat price and cross legs
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Unsupported fiat currency
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /tvl:
+    get:
+      operationId: getTvl
+      summary: Total value locked in Stellar DeFi by venue and asset
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Total Value Locked metrics
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /tvl/history:
+    get:
+      operationId: getTvlHistory
+      summary: Historical TVL progression over time window
+      security: []
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 30d
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Historical TVL data series
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /assets:
+    get:
+      operationId: getAssets
+      summary: List all tracked Stellar assets with verified metadata
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Tracked assets directory
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /assets/{code}:
+    get:
+      operationId: getAssetByCode
+      summary: Get metadata and verification details for a specific asset
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Asset metadata
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Asset not found
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /coverage:
+    get:
+      operationId: getCoverage
+      summary: Market coverage ratio across Stellar DEX orderbooks and pools
+      security: []
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 24h
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Market visibility ratio and asset breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /compare/{asset}/history:
+    get:
+      operationId: getCompareHistory
+      summary: Historical oracle vs spot comparison and deviation statistics
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 24h
+        - name: bandPct
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 1.0
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Historical oracle comparison points and summary stats
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid network
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /accuracy:
+    get:
+      operationId: getAccuracy
+      summary: Quote accuracy and route recommendation performance vs realized trades
+      security: []
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 24h
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Accuracy evaluation metrics
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /arbitrage:
+    get:
+      operationId: getArbitrage
+      summary: Quantified cross-venue arbitrage opportunities with net spread and break-even sizes
+      security: []
+      parameters:
+        - name: minSpreadBps
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Arbitrage opportunities list and summary
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /questions:
+    get:
+      operationId: getQuestions
+      summary: Plain-English question-led index of Lens capabilities
+      security: []
+      responses:
+        '200':
+          description: Questions directory mapping questions to endpoints
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
 components:
   securitySchemes:

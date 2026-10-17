@@ -8,6 +8,7 @@ import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../co
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
   statusResponseSchema,
+  statusErrorResponseSchema,
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
@@ -68,32 +69,79 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // up the validating serializer.
   installResponseValidation(app)
 
-  // GET /status — public health/monitoring endpoint (no API key required)
-  app.get('/status', { config: { public: true }, schema: { response: { 200: statusResponseSchema } } }, async (req) => {
-    const network = req.network ?? activeNetwork
-    const result = await pgPool.query(
-      `SELECT last_ledger, last_processed_at
-         FROM indexer_state
-        WHERE network = $1
-        ORDER BY updated_at DESC
-        LIMIT 1`,
-      [network]
-    )
-    const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
-    return {
-      ok: true,
-      network,
-      watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
-      lastIndexedLedger: result.rows[0]?.last_ledger ?? null,
-      lastProcessedAt,
-      // Seconds since the last write for this network — a stalled ingester is
-      // visible to `/status` polling without needing Prometheus. Null until the
-      // network has ingested at least once.
-      ingestLagSeconds: lastProcessedAt
+  // GET /status — public health/monitoring endpoint (no API key required) (#273)
+  app.get(
+    '/status',
+    {
+      config: { public: true },
+      schema: {
+        response: {
+          200: statusResponseSchema,
+          503: statusErrorResponseSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const network = req.network ?? activeNetwork
+      const mem = process.memoryUsage()
+      const uptimeSeconds = Math.round(process.uptime())
+      const memoryUsageMb = Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100
+
+      let result
+      try {
+        result = await pgPool.query(
+          `SELECT last_ledger, last_processed_at
+             FROM indexer_state
+            WHERE network = $1
+            ORDER BY updated_at DESC
+            LIMIT 1`,
+          [network]
+        )
+      } catch (err: any) {
+        return reply.status(503).send({
+          ok: false,
+          status: 'unhealthy',
+          error: err?.message || 'Database query failed',
+          pagingCondition: 'DATABASE_DOWN',
+        })
+      }
+
+      const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
+      const lastIndexedLedger = result.rows[0]?.last_ledger ?? null
+      const ingestLagSeconds = lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
-        : null,
+        : null
+      const isStale = ingestLagSeconds !== null && ingestLagSeconds > 300
+      const processHealth = 'healthy' as const
+      const dataHealth = isStale ? ('stale' as const) : ('healthy' as const)
+      const overallStatus = isStale ? ('degraded' as const) : ('healthy' as const)
+
+      return {
+        ok: true,
+        status: overallStatus,
+        network,
+        health: {
+          process: processHealth,
+          data: dataHealth,
+        },
+        process: {
+          uptimeSeconds,
+          memoryUsageMb,
+          status: 'healthy',
+        },
+        data: {
+          lastIndexedLedger,
+          lastProcessedAt,
+          ingestLagSeconds,
+          isStale,
+        },
+        watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
+        lastIndexedLedger,
+        lastProcessedAt,
+        ingestLagSeconds,
+      }
     }
-  })
+  )
 
 
   // GET /price/:assetA/:assetB

@@ -26,6 +26,13 @@ import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerFiatRoutes } from './routes/fiat'
+import { registerTvlRoutes } from './routes/tvl'
+import { registerAssetsRoutes } from './routes/assets'
+import { registerCoverageRoutes } from './routes/coverage'
+import { registerAccuracyRoutes } from './routes/accuracy'
+import { registerArbitrageRoutes } from './routes/arbitrage'
+import { registerQuestionsRoutes } from './routes/questions'
 import { getMetrics } from './metrics'
 
 export interface BuildAppOptions {
@@ -50,6 +57,13 @@ export interface BuildAppOptions {
  *
  * The returned app is NOT listening; the caller calls `app.listen(...)`.
  */
+export const RATE_LIMITS = {
+  ipDefault: 100,
+  authenticatedDefault: 1000,
+  monitoring: 1000,
+  timeWindow: '1 minute',
+} as const
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: 'warn' } })
 
@@ -90,18 +104,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // requests fall back to a conservative shared limit keyed by IP. The IP
   // fallback is overridable via RATE_LIMIT_IP_MAX so load tests (which flood
   // from a single IP without a key) can measure the endpoint, not the limiter.
-  const ipRateLimitMax = parseInt(process.env.RATE_LIMIT_IP_MAX ?? '100', 10)
+  const ipRateLimitMax = parseInt(process.env.RATE_LIMIT_IP_MAX ?? String(RATE_LIMITS.ipDefault), 10)
   await app.register(rateLimit, {
     max: (req) => req.apiKey?.ratePerMin ?? ipRateLimitMax,
     timeWindow: '1 minute',
     keyGenerator: (req) => req.apiKey?.id ?? req.ip,
-    allowList: (req) => req.url === '/status',
-    errorResponseBuilder: (req, context) => ({
-      statusCode: 429,
-      error: 'Too Many Requests',
-      message: `Rate limit exceeded, retry in ${context.after}`,
-      retryAfter: context.after
-    })
+    allowList: (req) => req.url === '/status' || req.url === '/live' || req.url === '/ready',
+    errorResponseBuilder: (_req, context) => {
+      const seconds = Math.ceil(context.ttl / 1000) || 60
+      return {
+        statusCode: 429,
+        error: 'Too Many Requests',
+        code: 'rate_limited',
+        message: `Rate limit exceeded, retry in ${seconds} seconds`,
+        retryAfter: seconds,
+      }
+    },
+  })
+
+  // Ensure Retry-After header is always present on 429 responses (#272)
+  app.addHook('onSend', async (_req, reply, payload) => {
+    if (reply.statusCode === 429 && !reply.hasHeader('retry-after')) {
+      try {
+        const body = typeof payload === 'string' ? JSON.parse(payload) : payload
+        if (body?.retryAfter) {
+          reply.header('Retry-After', String(body.retryAfter))
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+    return payload
   })
 
   // Specific limit for /status (higher for monitoring)
@@ -139,6 +172,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerBasketRoutes(app)
   await registerDiscoveryRoutes(app)
   await registerSettleRoute(app)
+  await registerFiatRoutes(app)
+  await registerTvlRoutes(app)
+  await registerAssetsRoutes(app)
+  await registerCoverageRoutes(app)
+  await registerAccuracyRoutes(app)
+  await registerArbitrageRoutes(app)
+  await registerQuestionsRoutes(app)
   await registerGraphQL(app)
   await registerWebSocket(app)
 
