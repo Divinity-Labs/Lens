@@ -19,6 +19,9 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
    - [Runnable Client Example (Raw WebSocket & Handshake)](#runnable-client-example-raw-websocket--handshake)
    - [Runnable Client Example (`graphql-ws` Library)](#runnable-client-example-graphql-ws-library)
 5. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
+6. [Schema Artifact & CI Drift Guard](#schema-artifact--ci-drift-guard)
+7. [Persisted Queries & Security](#persisted-queries--security)
+8. [Prometheus Metrics & Observability](#prometheus-metrics--observability)
 
 ---
 
@@ -548,3 +551,97 @@ The following matrix documents the differences explicitly:
 | **Indexer Synchronization & Health** | `GET /status` | *No equivalent* | **REST Only**: Checking ledger heights, node lag seconds, and indexer operational status is REST-only. |
 | **x402 Micropayment Facilitator** | `/verify`, `/settle`, `/supported`, `/discovery/resources`, `/usage/me` | *No equivalent* | **REST Only**: All x402 payment validation, settlement, and bazaar resource discovery routes are REST-only. |
 | **Webhook Management** | `POST /webhooks`, `DELETE /webhooks/:id` | *No equivalent* | **REST Only**: Subscribing to price-threshold alert webhooks is REST-only. |
+
+---
+
+## Schema Artifact & CI Drift Guard
+
+Lens provides a committed GraphQL Schema Definition Language (SDL) artifact at [`schema.graphql`](../schema.graphql). This allows client code generators (Apollo, GraphQL Code Generator, Relay) and IDE tooling to inspect the full schema statically without booting a live server.
+
+### Commands
+
+- **Export/Regenerate Schema:**
+  ```bash
+  npm run schema:export
+  ```
+  Exports the canonical, formatted SDL from `src/api/schema.ts` directly into `schema.graphql`.
+
+- **Verify Zero Schema Drift (CI Check):**
+  ```bash
+  npm run schema:check
+  ```
+  Fails with exit code `1` if `schema.graphql` does not match the schema defined in TypeScript.
+
+---
+
+## Persisted Queries & Security
+
+To prevent Denial of Service (DoS) via expensive, unbounded adversarial GraphQL documents, Lens supports **persisted queries**. Clients send a cryptographic SHA-256 hash instead of a full query string.
+
+### Arbitrary Query Toggle (`GRAPHQL_ALLOW_ARBITRARY_QUERIES`)
+
+- **Development / Test (`true`)**: Arbitrary raw GraphQL query strings are accepted alongside registered hashes.
+- **Production (`false` by default)**: Only registered persisted queries are accepted. Any arbitrary query string is rejected with `400 Bad Request`:
+  ```json
+  {
+    "data": null,
+    "errors": [
+      {
+        "message": "Arbitrary GraphQL queries are disabled. Only registered persisted queries are allowed."
+      }
+    ]
+  }
+  ```
+
+### Executing a Persisted Query
+
+Clients can execute persisted queries using the standard **Apollo Automatic Persisted Queries (APQ)** format:
+
+```bash
+curl -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "extensions": {
+      "persistedQuery": {
+        "version": 1,
+        "sha256Hash": "99d1aac6bd493749bd5db715d4ccb398a3fd85796ee1fbaccfc39740a9548a67"
+      }
+    },
+    "variables": {
+      "assetA": "XLM",
+      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+    }
+  }'
+```
+
+Or via the Mercurius persisted format:
+```bash
+curl -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "persisted": true,
+    "query": "99d1aac6bd493749bd5db715d4ccb398a3fd85796ee1fbaccfc39740a9548a67",
+    "variables": { "assetA": "XLM", "assetB": "USDC" }
+  }'
+```
+
+### Registering Queries
+
+The query manifest lives in [`queries/manifest.json`](../queries/manifest.json). To register a new query file or string:
+```bash
+npm run query:register <path-to-query.graphql> [OperationName]
+```
+The script validates the document against the schema, computes its SHA-256 hash, and appends it to the manifest.
+
+---
+
+## Prometheus Metrics & Observability
+
+Lens exports dedicated GraphQL metrics on `GET /metrics` with strictly bounded label cardinality:
+
+| Metric Name | Type | Labels | Description |
+|---|---|---|---|
+| `graphql_operations_total` | Counter | `operation_name`, `operation_type` | Counts GraphQL operations by operation name (`getPrice`, `getBestRoute`, `getPriceHistory`, `listPairs`, `priceUpdated`, `other`) and operation type (`query`, `subscription`). Unknown client-provided names are folded into `"other"` to prevent time-series cardinality explosion. |
+| `graphql_resolver_duration_seconds` | Histogram | `field` | Execution duration in seconds for expensive database-backed resolvers (`getPrice`, `getBestRoute`, `getPriceHistory`). |
+| `graphql_errors_total` | Counter | `category` | GraphQL errors classified into bounded categories: `"validation"`, `"not_found"`, `"unauthorized"`, `"persisted_query"`, `"internal"`, or `"other"`. |
+

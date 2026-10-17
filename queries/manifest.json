@@ -1,0 +1,27 @@
+{
+  "99d1aac6bd493749bd5db715d4ccb398a3fd85796ee1fbaccfc39740a9548a67": {
+    "name": "GetPrice",
+    "hash": "99d1aac6bd493749bd5db715d4ccb398a3fd85796ee1fbaccfc39740a9548a67",
+    "query": "query GetPrice($assetA: String!, $assetB: String!) {\n  getPrice(assetA: $assetA, assetB: $assetB) {\n    assetA\n    assetB\n    pairKey\n    price\n    sdexPrice\n    ammPrice\n    bestRoute\n    volume24h\n    sdexVolume24h\n    ammVolume24h\n    vwap1m\n    vwap5m\n    vwap1h\n    vwap24h\n    priceChange24h\n    lastUpdated\n    sources\n    confidence\n    lastTradeAgeSeconds\n  }\n}"
+  },
+  "741b1ab3f437d3f016304fe4102d5df6d00858b8f4cb65c87c4251c24d47f566": {
+    "name": "GetBestRoute",
+    "hash": "741b1ab3f437d3f016304fe4102d5df6d00858b8f4cb65c87c4251c24d47f566",
+    "query": "query GetBestRoute($assetA: String!, $assetB: String!, $amount: Float!) {\n  getBestRoute(assetA: $assetA, assetB: $assetB, amount: $amount) {\n    route\n    sdexPrice\n    ammPrice\n    estimatedOutput\n    slippagePct\n    recommendation\n  }\n}"
+  },
+  "47c189a4cea77c48994a7d9c8b0ce810733f5e0312a71a00743e8331ba64d1f1": {
+    "name": "GetPriceHistory",
+    "hash": "47c189a4cea77c48994a7d9c8b0ce810733f5e0312a71a00743e8331ba64d1f1",
+    "query": "query GetPriceHistory($assetA: String!, $assetB: String!, $window: String!, $limit: Int) {\n  getPriceHistory(assetA: $assetA, assetB: $assetB, window: $window, limit: $limit) {\n    bucket\n    window\n    vwap\n    sdexVwap\n    ammVwap\n    volume\n    tradeCount\n    open\n    close\n    high\n    low\n  }\n}"
+  },
+  "c655423a31d157afc1f5b492f50189bff13ad7c781a2147bd82721a3eeee0bab": {
+    "name": "ListPairs",
+    "hash": "c655423a31d157afc1f5b492f50189bff13ad7c781a2147bd82721a3eeee0bab",
+    "query": "query ListPairs {\n  listPairs\n}"
+  },
+  "c991c45a10395c6d0a0c5d9b93f0ef5c4ef23033638d9b9716c371ab7de5f7bd": {
+    "name": "PriceUpdated",
+    "hash": "c991c45a10395c6d0a0c5d9b93f0ef5c4ef23033638d9b9716c371ab7de5f7bd",
+    "query": "subscription PriceUpdated($pair: String!, $network: String) {\n  priceUpdated(pair: $pair, network: $network) {\n    pair\n    price\n    ts\n    network\n  }\n}"
+  }
+}

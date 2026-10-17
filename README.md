@@ -71,6 +71,12 @@ curl "https://api.example.com/price/XLM/USDC?network=mainnet"
 Available at `/graphql` with GraphiQL IDE at `/graphiql`. Real-time price
 streaming is available via the `priceUpdated` [subscription](#graphql-subscriptions-live-prices).
 
+- **Schema Artifact**: Committed SDL artifact at [`schema.graphql`](schema.graphql).
+  - Refresh schema: `npm run schema:export`
+  - CI drift check: `npm run schema:check`
+- **Persisted Queries**: Apollo APQ and hash execution supported with configurable arbitrary-document toggle (`GRAPHQL_ALLOW_ARBITRARY_QUERIES`, default `false` in production). Register queries via `npm run query:register`.
+- **Metrics**: GraphQL operations (`graphql_operations_total`), database resolver durations (`graphql_resolver_duration_seconds`), and categorized errors (`graphql_errors_total`) with bounded cardinality on `/metrics`.
+
 For complete GraphQL schema documentation, all queries with runnable `curl` examples, WebSocket `graphql-transport-ws` handshake specifications, and an explicit comparison against the REST surface, see [`docs/graphql.md`](docs/graphql.md).
 
 ```graphql

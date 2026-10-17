@@ -98,6 +98,35 @@ export const db_query_duration_seconds = new Histogram({
   registers: [register]
 })
 
+// ── GraphQL Metrics (Bounded Cardinality) ────────────────────────────────────
+
+export const graphql_operations_total = new Counter({
+  name: 'graphql_operations_total',
+  help: 'Total number of GraphQL operations processed by operation name and type',
+  // labelNames: ['operation_name', 'operation_type']
+  // Cardinality is strictly bounded: unknown/client-generated operation names
+  // are folded into 'other' or 'unknown' to avoid time-series explosion.
+  labelNames: ['operation_name', 'operation_type'],
+  registers: [register],
+})
+
+export const graphql_resolver_duration_seconds = new Histogram({
+  name: 'graphql_resolver_duration_seconds',
+  help: 'Duration of database-backed GraphQL resolvers in seconds',
+  labelNames: ['field'],
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  registers: [register],
+})
+
+export const graphql_errors_total = new Counter({
+  name: 'graphql_errors_total',
+  help: 'Total number of GraphQL errors classified by bounded category',
+  // Bounded categories: 'validation' | 'not_found' | 'unauthorized' | 'persisted_query' | 'internal' | 'other'
+  labelNames: ['category'],
+  registers: [register],
+})
+
 export async function getMetrics() {
   return await register.metrics()
 }
+
