@@ -85,18 +85,43 @@ export async function registerWebSocket(app: FastifyInstance) {
     app.log.info('[ws] Connection authorized')
     socket.send(JSON.stringify({ type: 'status', message: 'Streaming active' }))
 
-    // Register with fan-out manager for backpressure-aware broadcasting
+    // Register with fan-out manager for backpressure-aware broadcasting (#335, #336, #347)
     const clientId = uuid()
     const unsubscribe = fanOutManager.register('*', {
       id: clientId,
+      get bufferedAmount() {
+        return socket.bufferedAmount ?? 0
+      },
       send: (data: string) => {
         if (socket.readyState === 1) { // OPEN
           socket.send(data)
         }
       },
-      close: () => {
-        socket.close()
+      close: (code = 1000, reason = 'Normal closure') => {
+        try {
+          socket.close(code, reason)
+        } catch {
+          // ignore
+        }
       },
+      ping: () => {
+        try {
+          if (socket.readyState === 1) socket.ping()
+        } catch {
+          // ignore
+        }
+      },
+      terminate: () => {
+        try {
+          socket.terminate()
+        } catch {
+          // ignore
+        }
+      },
+    })
+
+    socket.on('pong', () => {
+      fanOutManager.recordPong(clientId)
     })
 
     socket.on('close', () => {
