@@ -4,11 +4,9 @@ import { db_query_duration_seconds } from './metrics'
 import { config, type NetworkName } from './config'
 
 // Prisma for schema management + simple queries
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
-export const prisma = globalForPrisma.prisma ?? new PrismaClient({
+export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer
@@ -30,12 +28,36 @@ pgPool.query = (async (...args: any[]) => {
 }) as any
 
 /**
+ * Closes the Prisma client and the raw pg pool explicitly. Called from the
+ * graceful shutdown handler after the HTTP listener and ingester loops have
+ * stopped and in-flight work has drained. Errors are logged rather than thrown so
+ * one failing close cannot prevent the other from running.
+ */
+export async function closeDatabaseConnections(): Promise<void> {
+  const results = await Promise.allSettledSafely([
+    prisma.$disconnect(),
+    pgPool.end(),
+  ])
+  for (const r of results) {
+    if (r.status === 'rejected') {
+      console.error('[shutdown] failed to close a database connection', r.reason)
+    }
+  }
+}
+
+// Small helper so closeDatabaseConnections does not depend on the runtime
+// flavour of Promise.allSettled while remaining type-safe.
+async function PromiseAllSettledSafely<T>(promises: Promise<T> []): Promise<PromiseSettledResult<T> []> {
+  return Promise.allSettled(promises)
+}
+
+/**
  * `network` is required rather than defaulting to the active one. Ingesters are
  * started per network (see startSDEXIngester(network) and friends), so a single
  * process runs a testnet and a mainnet loop side by side. Tagging rows from the
- * global STELLAR_NETWORK wrote every mainnet price as testnet, silently blending
+ * global STELAR_NETWORK wrote every mainnet price as testnet, silently blending
  * real prices with a test chain's in one table. A required argument is what
- * stops that reappearing the next time a venue is added.
+ * stops that repappearing the next time a venue is added.
  */
 export async function upsertPricePoints(points: {
   assetA: string; assetB: string; pairKey: string; source: string
