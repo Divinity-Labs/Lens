@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { pgPool } from '../db'
-import { activeNetwork } from '../config'
-import '../middleware/network' // declares req.network on the FastifyRequest type
+import { activeNetwork, type NetworkName } from '../config'
+import { formatZodError } from '../validation/formatter'
+import '../middleware/network'
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
 // used to be reported as a copy of `liquidity`; a caller who sorts or filters on
@@ -9,13 +11,62 @@ import '../middleware/network' // declares req.network on the FastifyRequest typ
 const MARKET_CAP_UNSUPPORTED =
   'market_cap is not supported: Lens has no circulating supply data to compute it from. Use liquidity instead'
 
+const numericParam = (fieldName: string) =>
+  z
+    .string()
+    .optional()
+    .refine(val => val === undefined || (val.trim() !== '' && !isNaN(Number(val))), {
+      message: `${fieldName} must be a valid number`,
+    })
+    .transform(val => (val !== undefined ? Number(val) : undefined))
+
+const ScreenerQuerySchema = z
+  .object({
+    volume: numericParam('volume'),
+    change_24h_min: numericParam('change_24h_min'),
+    change_24h_max: numericParam('change_24h_max'),
+    market_cap: z.string().optional(),
+    price_min: numericParam('price_min'),
+    price_max: numericParam('price_max'),
+    liquidity: numericParam('liquidity'),
+    sortBy: z
+      .string()
+      .optional()
+      .default('volume')
+      .superRefine((val, ctx) => {
+        if (!['volume', 'change_24h', 'price', 'liquidity'].includes(val)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              val === 'market_cap'
+                ? MARKET_CAP_UNSUPPORTED
+                : 'sortBy must be one of: volume, change_24h, price, liquidity',
+          })
+        }
+      }),
+
+    order: z
+      .enum(['asc', 'desc'], {
+        errorMap: () => ({ message: 'order must be asc or desc' }),
+      })
+      .default('desc'),
+    cursor: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    network: z.enum(['testnet', 'mainnet']).optional(),
+  })
+  .refine(data => data.market_cap === undefined, {
+    message: MARKET_CAP_UNSUPPORTED,
+    path: ['market_cap'],
+  })
+
+
 export async function registerScreenerRoutes(app: FastifyInstance) {
   app.get<{
     Querystring: {
       volume?: string
       change_24h_min?: string
       change_24h_max?: string
-      market_cap?: string // rejected with a 400, see MARKET_CAP_UNSUPPORTED
+      market_cap?: string
       price_min?: string
       price_max?: string
       liquidity?: string
@@ -23,100 +74,71 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       order?: string
       cursor?: string
       limit?: string
+      network?: string
     }
   }>('/screener', async (req, reply) => {
     try {
-      const q = req.query
-
-      // 1. Parse and validate pagination & sorting
-      const limit = Math.min(Math.max(parseInt(q.limit ?? '20', 10), 1), 100)
-      if (isNaN(limit)) {
-        return reply.status(400).send({ error: 'limit must be a valid integer' })
+      const parsed = ScreenerQuerySchema.safeParse(req.query)
+      if (!parsed.success) {
+        return reply.status(400).send(formatZodError(parsed.error))
       }
 
-      if (q.market_cap !== undefined || q.sortBy === 'market_cap') {
-        return reply.status(400).send({ error: MARKET_CAP_UNSUPPORTED })
-      }
+      const q = parsed.data
+      const limit = q.limit
+      const sortBy = q.sortBy
+      const order = q.order
 
-      const allowedSortFields = ['volume', 'change_24h', 'price', 'liquidity']
-      const sortBy = q.sortBy ?? 'volume'
-      if (!allowedSortFields.includes(sortBy)) {
-        return reply.status(400).send({ error: `sortBy must be one of: ${allowedSortFields.join(', ')}` })
-      }
-
-      const order = (q.order ?? 'desc').toLowerCase()
-      if (order !== 'asc' && order !== 'desc') {
-        return reply.status(400).send({ error: 'order must be asc or desc' })
-      }
-
-      // 2. Parse filters
-      const parseNum = (val?: string) => val ? parseFloat(val) : undefined
-      const filters = {
-        volume: parseNum(q.volume),
-        change_24h_min: parseNum(q.change_24h_min),
-        change_24h_max: parseNum(q.change_24h_max),
-        price_min: parseNum(q.price_min),
-        price_max: parseNum(q.price_max),
-        liquidity: parseNum(q.liquidity),
-      }
-
-      for (const [key, val] of Object.entries(filters)) {
-        if (val !== undefined && isNaN(val)) {
-          return reply.status(400).send({ error: `Filter ${key} must be a valid number` })
-        }
-      }
-
-      // 3. Build query parameters and WHERE conditions
       const conditions: string[] = []
-      // Every CTE below is scoped to one network: testnet and mainnet rows share
-      // these tables, and pooling them would rank a pair on the other chain's data.
-      const params: any[] = [req.network ?? activeNetwork]
+      const network: NetworkName = req.network ?? q.network ?? activeNetwork
+      const params: any[] = [network]
       let paramIdx = 2
 
-      if (filters.volume !== undefined) {
+      if (q.volume !== undefined) {
         conditions.push(`volume >= $${paramIdx++}`)
-        params.push(filters.volume)
+        params.push(q.volume)
       }
-      if (filters.change_24h_min !== undefined) {
+      if (q.change_24h_min !== undefined) {
         conditions.push(`change_24h >= $${paramIdx++}`)
-        params.push(filters.change_24h_min)
+        params.push(q.change_24h_min)
       }
-      if (filters.change_24h_max !== undefined) {
+      if (q.change_24h_max !== undefined) {
         conditions.push(`change_24h <= $${paramIdx++}`)
-        params.push(filters.change_24h_max)
+        params.push(q.change_24h_max)
       }
-      if (filters.price_min !== undefined) {
+      if (q.price_min !== undefined) {
         conditions.push(`price >= $${paramIdx++}`)
-        params.push(filters.price_min)
+        params.push(q.price_min)
       }
-      if (filters.price_max !== undefined) {
+      if (q.price_max !== undefined) {
         conditions.push(`price <= $${paramIdx++}`)
-        params.push(filters.price_max)
+        params.push(q.price_max)
       }
-      if (filters.liquidity !== undefined) {
+      if (q.liquidity !== undefined) {
         conditions.push(`liquidity >= $${paramIdx++}`)
-        params.push(filters.liquidity)
+        params.push(q.liquidity)
       }
 
-      // 4. Cursor decoding and pagination condition
+      // Cursor decoding and pagination condition
       if (q.cursor) {
         try {
           const decoded = Buffer.from(q.cursor, 'base64').toString('utf-8')
           const [lastVal, lastId] = JSON.parse(decoded)
-          
+
           if (lastVal !== null && lastVal !== undefined && lastId) {
             const op = order === 'desc' ? '<' : '>'
             conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
             params.push(lastVal, lastId)
           }
         } catch (e) {
-          return reply.status(400).send({ error: 'Invalid cursor format' })
+          return reply.status(400).send({ error: 'Invalid cursor format', code: 'INVALID_PARAMETERS' })
         }
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
-      // 5. Construct the full SQL query using CTEs
+      // Liquidity Definition (#283):
+      // Total pool reserves valued in quote asset (reserve_a * spot_price + reserve_b)
+      // summed across all active liquidity pool snapshots for each pair on the active network.
       const sql = `
         WITH pair_pools AS (
           SELECT DISTINCT pair_key, pool_id 
@@ -156,7 +178,8 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
             la.volume,
             la.price,
             la.change_24h,
-            COALESCE(pl.liquidity::float, 0) AS liquidity
+            COALESCE(pl.liquidity::float, 0) AS liquidity,
+            'quote' AS liquidity_unit
           FROM latest_aggregates la
           LEFT JOIN pair_liquidity pl ON pl.pair_key = la.pair_key
         )
@@ -166,15 +189,13 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
         LIMIT $${paramIdx}
       `
 
-      // 6. Execute query
-      params.push(limit + 1) // Fetch one extra to determine hasMore
+      params.push(limit + 1)
       const result = await pgPool.query(sql, params)
       const rows = result.rows
 
       const hasMore = rows.length > limit
       const data = hasMore ? rows.slice(0, limit) : rows
 
-      // 7. Generate nextCursor
       let nextCursor = null
       if (hasMore && data.length > 0) {
         const lastRecord = data[data.length - 1]
@@ -183,7 +204,18 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       }
 
       return {
-        data,
+        data: data.map(item => ({
+          pair_key: item.pair_key,
+          volume: item.volume,
+          price: item.price,
+          change_24h: item.change_24h,
+          liquidity: item.liquidity,
+          liquidity_unit: 'quote',
+        })),
+        liquidityDefinition:
+          'Total pool reserves valued in quote asset (reserve_a * spot_price + reserve_b) summed across active AMM venues',
+        liquidityUnit: 'quote',
+        network,
         nextCursor,
         hasMore,
         total: null,

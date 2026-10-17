@@ -17,7 +17,7 @@ function queueName(network: NetworkName): string {
 }
 
 function redisConnection() {
-  const url = process.env.REDIS_URL
+  const url = config.redis?.url ?? process.env.REDIS_URL
   if (url) return { url }
   return { host: 'localhost', port: 6379 }
 }

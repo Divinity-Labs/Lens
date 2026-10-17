@@ -25,6 +25,7 @@ export interface PricePublishedEvent {
   /** pairKey, e.g. "XLM:native/USDC:GA5..." */
   pair: string
   price: number
+  priceDecimal?: string
   /** ISO-8601 timestamp of when the price was recorded */
   ts: string
   /**

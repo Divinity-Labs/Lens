@@ -52,14 +52,24 @@ describe('OpenAPI route coverage', () => {
   })
 
   it('documents every non-internal route in openapi.yaml', () => {
-    const missing = registered.filter(r => !isInternalRoute(r.path) && !(r.path in spec.paths))
+    const missing = registered.filter(r => {
+      if (isInternalRoute(r.path)) return false
+      if (r.path.startsWith('/v1/')) {
+        return !(r.path in spec.paths)
+      }
+      const canonicalV1Path = `/v1${r.path}`
+      return !(canonicalV1Path in spec.paths)
+    })
     expect(missing, `Undocumented routes: ${JSON.stringify(missing)}`).toEqual([])
   })
 
   it('documents the HTTP method for every documented route', () => {
-    const missing = registered.filter(
-      r => !isInternalRoute(r.path) && !(r.method.toLowerCase() in (spec.paths[r.path] ?? {})),
-    )
+    const missing = registered.filter(r => {
+      if (isInternalRoute(r.path)) return false
+      const specPath = r.path.startsWith('/v1/') ? r.path : `/v1${r.path}`
+      const operations = spec.paths[specPath] ?? {}
+      return !(r.method.toLowerCase() in operations)
+    })
     expect(missing, `Undocumented operations: ${JSON.stringify(missing)}`).toEqual([])
   })
 
@@ -67,6 +77,15 @@ describe('OpenAPI route coverage', () => {
     const registeredPaths = new Set(registered.map(r => r.path))
     const phantom = Object.keys(spec.paths).filter(p => !registeredPaths.has(p))
     expect(phantom, `Documented but unregistered: ${JSON.stringify(phantom)}`).toEqual([])
+  })
+
+  it('ensures every versioned route has an unversioned backwards-compatible alias', () => {
+    const v1Routes = registered.filter(r => r.path.startsWith('/v1/'))
+    for (const v1 of v1Routes) {
+      const unversioned = v1.path.replace(/^\/v1/, '')
+      const hasAlias = registered.some(r => r.path === unversioned && r.method === v1.method)
+      expect(hasAlias, `Missing unversioned alias for ${v1.path}`).toBe(true)
+    }
   })
 
   it('documents only operations that are actually registered', () => {

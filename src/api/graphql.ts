@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
 import { price_requests_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
-import { GraphQLError, type ExecutionResult } from 'graphql'
+import { GraphQLError, GraphQLScalarType, Kind, type ExecutionResult } from 'graphql'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -20,18 +20,14 @@ const PRICE_TOPIC = 'PRICE_UPDATED'
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked.
-const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
+const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED', 'QUOTA_EXCEEDED'])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
 function isUserFacing(err: GraphQLError): boolean {
-  // No originalError means graphql-js itself rejected the document (syntax or
-  // validation), which only describes the caller's own query.
   const original = err.originalError as
     | { extensions?: { code?: unknown }; errors?: unknown; statusCode?: unknown }
     | undefined
   if (!original) return true
-  // Mercurius wraps document validation failures (and other request-level
-  // 4xx faults) in a Fastify error before they reach the formatter.
   if (Array.isArray(original.errors)) return true
   if (typeof original.statusCode === 'number' && original.statusCode < 500) return true
   const code = original.extensions?.code
@@ -54,22 +50,66 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
   return defaultErrorFormatter({ ...execution, errors }, ctx)
 }
 
+/**
+ * Custom Decimal scalar preserving 18-decimal precision (#371).
+ * Serializes as a string to avoid IEEE 754 double precision loss on large/small monetary figures.
+ */
+export const DecimalScalar = new GraphQLScalarType({
+  name: 'Decimal',
+  description: 'High-precision decimal amount represented as a string without float rounding',
+  serialize(value: unknown): string {
+    if (value === null || value === undefined) return ''
+    const str = String(value)
+    if (isNaN(Number(str))) {
+      throw new TypeError(`Decimal scalar expected numeric value, got: ${str}`)
+    }
+    return str
+  },
+  parseValue(value: unknown): string {
+    const str = String(value)
+    if (isNaN(Number(str))) {
+      throw new TypeError(`Decimal scalar expected numeric value, got: ${str}`)
+    }
+    return str
+  },
+  parseLiteral(ast): string | null {
+    if (ast.kind === Kind.STRING || ast.kind === Kind.INT || ast.kind === Kind.FLOAT) {
+      if (!isNaN(Number(ast.value))) {
+        return ast.value
+      }
+    }
+    return null
+  },
+})
+
+
 const schema = `
+  """
+  High-precision monetary amount preserving full 18-decimal precision without IEEE 754 float rounding.
+  Serializes as a string.
+  """
+  scalar Decimal
+
   type AggregatedPrice {
     assetA: String!
     assetB: String!
     pairKey: String!
     price: Float!
+    priceDecimal: Decimal!
     sdexPrice: Float!
+    sdexPriceDecimal: Decimal
     ammPrice: Float!
+    ammPriceDecimal: Decimal
     bestRoute: String!
     volume24h: Float!
+    volume24hDecimal: Decimal
     sdexVolume24h: Float!
     ammVolume24h: Float!
     vwap1m: Float!
     vwap5m: Float!
     vwap1h: Float!
     vwap24h: Float!
+    vwap24hDecimal: Decimal
     priceChange24h: Float!
     lastUpdated: String!
     sources: Int!
@@ -103,6 +143,7 @@ const schema = `
   type PriceUpdate {
     pair: String!
     price: Float!
+    priceDecimal: Decimal!
     ts: String!
     """Which chain the price came from — testnet or mainnet."""
     network: String!
@@ -118,39 +159,52 @@ const schema = `
       a GraphQL error whose extensions.code is PAIR_NOT_FOUND.
     - A tracked pair with no trade data yet is not an error: it resolves to an
       AggregatedPrice with zeroed figures rather than null or an error.
-
-    The result is only null if the resolver itself cannot produce a payload;
-    clients should branch on extensions.code, not on null.
     """
     getPrice(assetA: String!, assetB: String!): AggregatedPrice
+
+    """
+    Best execution route between two assets for a given trade size.
+    Returns null when the pair is unknown or has no liquidity.
+    """
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-    getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
-    listPairs: [String]!
+
+    """
+    Historical aggregated OHLCV candle buckets for a pair and window
+    (e.g. window "1h"). Returns empty list when no buckets exist yet.
+    """
+    getPriceHistory(
+      assetA: String!
+      assetB: String!
+      window: String!
+      limit: Int
+    ): [PriceBucket!]!
+
+    """List of pair keys currently being tracked by the aggregator."""
+    listPairs: [String!]!
   }
 
   type Subscription {
     """
-    Streams a PriceUpdate every time an ingester records a new price for the
-    given pair.
+    Real-time price feed for a pair.
 
-    The network argument narrows the stream to one chain. It is optional, and
-    omitting it delivers every enabled network — the right default only if you
-    read the network field on each message, since a dual-network deployment
-    otherwise interleaves two chains prices on one stream.
+    The client filters by pair (required, e.g. "XLM/USDC"). When 'network' is
+    omitted (or null), updates from every enabled chain are pushed; pass
+    "testnet" or "mainnet" to restrict the stream to one chain.
     """
     priceUpdated(pair: String!, network: String): PriceUpdate!
   }
 `
 
 function makePairKey(a: string, b: string): string {
-  return [a, b].sort().join('/')
+  const norm = (s: string) => s.toLowerCase() === 'native' ? 'XLM' : s.toUpperCase()
+  return [norm(a), norm(b)].sort().join('/')
 }
 
 function findPair(assetA: string, assetB: string) {
   const normalize = (a: string) => a.toLowerCase() === 'native' ? 'XLM' : a.split(':')[0].toUpperCase()
   const cA = normalize(assetA)
   const cB = normalize(assetB)
-  return config.pairs.find(p => {
+  return config.pairs?.find(p => {
     const pA = p.assetA.code.toUpperCase()
     const pB = p.assetB.code.toUpperCase()
     return (cA === pA && cB === pB) || (cA === pB && cB === pA)
@@ -158,6 +212,8 @@ function findPair(assetA: string, assetB: string) {
 }
 
 const resolvers = {
+  Decimal: DecimalScalar,
+
   Query: {
     async getPrice(_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
@@ -178,13 +234,6 @@ const resolvers = {
       }
       const pairKey = pair.pairKey
 
-      // These queries carry no network argument, so they resolve against the
-      // active network's pair list (findPair above) and read that same
-      // network's price data — scoped, not pooled across both chains.
-      // Per-request network selection on the GraphQL surface is separate work.
-      // The cache key is network-prefixed to match the REST route and the
-      // refresh worker, so no deployment can serve another network's cached
-      // payload under a network-less key.
       const cacheKey = `${activeNetwork}:${pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
@@ -194,7 +243,15 @@ const resolvers = {
       const agg = await getAggregatedPrice(pairKey, activeNetwork)
       const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
       return {
-        assetA, assetB, pairKey, ...agg,
+        assetA,
+        assetB,
+        pairKey,
+        ...agg,
+        priceDecimal: (agg as any).priceDecimal ?? String(agg.price),
+        sdexPriceDecimal: (agg as any).sdexPriceDecimal ?? String(agg.sdexPrice),
+        ammPriceDecimal: (agg as any).ammPriceDecimal ?? String(agg.ammPrice),
+        volume24hDecimal: (agg as any).volume24hDecimal ?? String(agg.volume24h),
+        vwap24hDecimal: (agg as any).vwap24hDecimal ?? String(agg.vwap24h),
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
       }
@@ -240,7 +297,7 @@ const resolvers = {
     },
 
     listPairs() {
-      return config.pairs.map(p => p.pairKey)
+      return (config.pairs ?? []).map(p => p.pairKey)
     },
   },
 
@@ -253,39 +310,85 @@ const resolvers = {
         { pair: string; network?: string | null }
       >(
         (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
         (payload, { pair, network }) =>
           payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
           (network == null || payload.priceUpdated.network === network)
       ),
+      resolve: (payload: { priceUpdated: PricePublishedEvent }) => {
+        const p = payload.priceUpdated
+        return {
+          ...p,
+          priceDecimal: p.priceDecimal ?? String(p.price),
+        }
+      },
     },
   },
 }
 
+export const activeSubscriptionsPerKey = new Map<string, number>()
+
 export async function registerGraphQL(app: FastifyInstance) {
+  const maxWsConcurrent = config.maxWsSubscriptionsPerKey ?? 10
+  const isGraphiqlEnabled =
+    config.enableGraphiql !== undefined
+      ? config.enableGraphiql === 'true'
+      : config.nodeEnv !== 'production'
+
   await app.register(mercurius, {
     schema,
     resolvers,
-    graphiql: true,
+    graphiql: isGraphiqlEnabled,
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
-      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
-      // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
+      onConnect: (data) => {
+        const params = (data.connectionParams ?? {}) as Record<string, unknown>
+        const apiKey = (params.apiKey || params.authToken || params.authorization) as string | undefined
+
+        // Enforce authentication if requireApiKey is enabled and running in production or explicit auth required
+        const isAuthRequired = (config as any).requireSubscriptionAuth ?? (config.nodeEnv === 'production')
+        if (isAuthRequired && !apiKey) {
+          return false
+        }
+
+        if (apiKey) {
+          const currentCount = activeSubscriptionsPerKey.get(apiKey) ?? 0
+          if (currentCount >= maxWsConcurrent) {
+            throw new Error(`Quota exceeded: Maximum ${maxWsConcurrent} concurrent subscriptions reached for this API key`)
+          }
+          activeSubscriptionsPerKey.set(apiKey, currentCount + 1)
+        }
+        return { apiKey }
+      },
+      onDisconnect: (ctx) => {
+        const apiKey = (ctx as any)?.apiKey
+        if (apiKey && activeSubscriptionsPerKey.has(apiKey)) {
+          const count = activeSubscriptionsPerKey.get(apiKey)!
+          if (count <= 1) {
+            activeSubscriptionsPerKey.delete(apiKey)
+          } else {
+            activeSubscriptionsPerKey.set(apiKey, count - 1)
+          }
+        }
+      },
     },
   })
 
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
+  const forwardGraphQL = async (req: any, reply: any) => {
+    const res = await app.inject({
+      method: req.method,
+      url: '/graphql',
+      payload: req.body,
+      query: req.query,
+      headers: req.headers,
+    })
+    return reply.code(res.statusCode).headers(res.headers).send(res.body)
+  }
+  app.get('/v1/graphql', { config: { public: true } }, forwardGraphQL)
+  app.post('/v1/graphql', { config: { public: true } }, forwardGraphQL)
+
   const onPricePublished = (event: PricePublishedEvent) => {
     app.graphql.pubsub.publish({
       topic: PRICE_TOPIC,
@@ -294,9 +397,8 @@ export async function registerGraphQL(app: FastifyInstance) {
   }
   priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
 
-  // Detach the listener when the server shuts down so repeated
-  // register/close cycles (e.g. in tests) don't leak listeners.
   app.addHook('onClose', async () => {
     priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
   })
 }
+

@@ -1,9 +1,5 @@
 import 'dotenv/config'
 import { execSync } from 'child_process'
-
-if (!process.env.DIRECT_DATABASE_URL && process.env.DATABASE_URL) {
-  process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL
-}
 import { config, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { redis } from './redis'

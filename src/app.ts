@@ -10,12 +10,12 @@ import { registerPairsRoutes } from './routes/pairs'
 import { registerScreenerRoutes } from './routes/screener'
 import { registerHistoryRoutes } from './api/history'
 import { registerX402 } from './middleware/x402'
-import { registerNetworkSelector } from './middleware/network'
 import { registerHttpMetrics } from './middleware/httpMetrics'
+import { registerNetworkSelector } from './middleware/network'
 import { registerWebSocket } from './api/websocket'
 import { registerApiKeyAuth } from './api/auth'
 import { registerAdminRoutes } from './api/admin'
-import { registerUsageRoutes } from './api/usage'
+import { registerAdminUsageRoutes, registerUsageMeRoute } from './api/usage'
 import { registerFacilitatorRoutes } from './api/facilitator'
 import { registerPriceRoutes } from './routes/price'
 import { registerVolumeRoutes } from './routes/volumes'
@@ -25,8 +25,11 @@ import { registerBenchmarkRoutes } from './routes/benchmark'
 import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
+import { registerVenuesRoutes } from './routes/venues'
+import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerSettleRoute } from './routes/facilitator'
 import { getMetrics } from './metrics'
+import { config } from './config'
 
 export interface BuildAppOptions {
   /**
@@ -79,7 +82,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // that req.apiKey is populated when the limiter evaluates its per-key quota
   // (both run in the onRequest phase, in registration order). Disabled when
   // REQUIRE_API_KEY=false. Routes marked `config.public` bypass auth.
-  if (process.env.REQUIRE_API_KEY !== 'false') {
+  if (config.requireApiKey) {
     await app.register(registerApiKeyAuth)
   } else {
     app.log.warn('[auth] REQUIRE_API_KEY=false — API key authentication disabled')
@@ -90,7 +93,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // requests fall back to a conservative shared limit keyed by IP. The IP
   // fallback is overridable via RATE_LIMIT_IP_MAX so load tests (which flood
   // from a single IP without a key) can measure the endpoint, not the limiter.
-  const ipRateLimitMax = parseInt(process.env.RATE_LIMIT_IP_MAX ?? '100', 10)
+  const ipRateLimitMax = config.rateLimitIpMax
   await app.register(rateLimit, {
     max: (req) => req.apiKey?.ratePerMin ?? ipRateLimitMax,
     timeWindow: '1 minute',
@@ -120,25 +123,53 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // Admin endpoints (key issuance/revocation) — gated by ADMIN_TOKEN. Marked
   // `config.public` so the API-key auth hook skips them.
   await registerAdminRoutes(app)
-  await registerUsageRoutes(app)
-  await app.register(registerFacilitatorRoutes)
+  await registerAdminUsageRoutes(app)
 
   await app.register(registerX402)
-  await registerRESTRoutes(app)
-  await registerWebhookRoutes(app)
-  await registerCandleRoutes(app)
-  await registerPairsRoutes(app)
-  await registerScreenerRoutes(app)
-  await registerHistoryRoutes(app)
-  await registerPriceRoutes(app)
-  await registerVolumeRoutes(app)
-  await registerBookRoutes(app)
-  await registerSpreadsRoutes(app)
-  await registerBenchmarkRoutes(app)
-  await registerOracleRoutes(app)
-  await registerBasketRoutes(app)
-  await registerDiscoveryRoutes(app)
-  await registerSettleRoute(app)
+
+  const registerAllApiRoutes = async (instance: FastifyInstance) => {
+    await registerRESTRoutes(instance)
+    await registerWebhookRoutes(instance)
+    await registerCandleRoutes(instance)
+    await registerPairsRoutes(instance)
+    await registerScreenerRoutes(instance)
+    await registerHistoryRoutes(instance)
+    await registerPriceRoutes(instance)
+    await registerVolumeRoutes(instance)
+    await registerBookRoutes(instance)
+    await registerSpreadsRoutes(instance)
+    await registerBenchmarkRoutes(instance)
+    await registerOracleRoutes(instance)
+    await registerBasketRoutes(instance)
+    await registerDiscoveryRoutes(instance)
+    await registerVenuesRoutes(instance)
+    await registerSnapshotRoutes(instance)
+    await registerUsageMeRoute(instance)
+    await instance.register(registerFacilitatorRoutes)
+    await registerSettleRoute(instance)
+  }
+
+
+  // Canonical /v1 versioned routes (#264)
+  await app.register(registerAllApiRoutes, { prefix: '/v1' })
+
+  // Backward-compatible unversioned aliases (#264)
+  await app.register(registerAllApiRoutes)
+
+  // Attach standard HTTP deprecation headers to unversioned route requests (#264)
+  app.addHook('onSend', async (req, reply) => {
+    if (
+      !req.url.startsWith('/v1') &&
+      !req.url.startsWith('/admin') &&
+      !req.url.startsWith('/metrics') &&
+      !req.url.startsWith('/graphql') &&
+      !req.url.startsWith('/ws')
+    ) {
+      reply.header('Deprecation', 'true')
+      reply.header('Sunset', 'Wed, 31 Dec 2026 23:59:59 GMT')
+    }
+  })
+
   await registerGraphQL(app)
   await registerWebSocket(app)
 
