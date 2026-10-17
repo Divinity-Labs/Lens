@@ -54,7 +54,7 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
   return defaultErrorFormatter({ ...execution, errors }, ctx)
 }
 
-const schema = `
+export const schema = `
   type AggregatedPrice {
     assetA: String!
     assetB: String!
