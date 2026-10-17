@@ -6,6 +6,7 @@ import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
+import { logEvent } from '../../logging'
 import {
   getLastPrice,
   resetLastPrice,
@@ -42,7 +43,14 @@ export async function fetchPools(pair: WatchedPair, network: NetworkName = activ
     if (!data._embedded?.records) return []
     return data._embedded.records
   } catch (err) {
-    console.error(`[amm] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
+    logEvent('error', 'Failed to fetch AMM pools', {
+      route: '/liquidity_pools',
+      venue: 'AMM',
+      pair: pair.pairKey,
+      network,
+      status: 'error',
+      error: (err as Error).message,
+    })
     return []
   }
 }

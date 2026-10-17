@@ -5,6 +5,7 @@ import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
+import { logEvent } from '../../logging'
 
 // ── Centralized Last Price Cache ──────────────────────────────────────────────
 // Keyed by `${venue}:${network}:${pairKey}`
@@ -99,19 +100,29 @@ export async function startVenueAdapter(
 
   let consecutiveErrors = 0
   while (true) {
+    const cycleStartedAt = Date.now()
+    let currentPair: string | undefined
     try {
       const pairs = getActivePairs()
       for (const pair of pairs) {
+        currentPair = pair.pairKey
         await adapter.ingestPair(pair, network)
       }
       consecutiveErrors = 0
     } catch (err) {
       consecutiveErrors++
       const backoffMs = Math.min(10_000 * Math.pow(2, consecutiveErrors - 1), 60_000)
-      console.error(
-        `[${adapter.name}] Cycle failed on ${network} (attempt ${consecutiveErrors}), retrying in ${backoffMs}ms:`,
-        (err as Error).message
-      )
+      logEvent('error', 'Venue ingestion cycle failed', {
+        route: `ingest/${adapter.name}`,
+        venue: adapter.name,
+        network,
+        pair: currentPair,
+        status: 'error',
+        attempt: consecutiveErrors,
+        retryMs: backoffMs,
+        durationMs: Date.now() - cycleStartedAt,
+        error: (err as Error).message,
+      })
       await sleep(backoffMs)
       continue
     }
