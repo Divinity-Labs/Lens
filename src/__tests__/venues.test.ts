@@ -14,8 +14,21 @@ vi.mock('../config', () => ({
 }))
 
 import { registerVenueRoutes } from '../routes/venues'
-import { registerVenueAdapter, unregisterVenueAdapter } from '../ingest/venues/registry'
+import { venueAdapters, type VenueAdapter } from '../ingest/venues'
 import { registerNetworkSelector } from '../middleware/network'
+
+const testAdapter: VenueAdapter = {
+  name: 'test-adapter',
+  source: 'test-source',
+  kind: 'amm',
+  isEnabled: () => true,
+  getPollIntervalMs: () => 1000,
+  discover: async () => [],
+  read: async () => null,
+  derive: () => [],
+  write: async () => {},
+  ingestPair: async () => {},
+}
 
 async function buildApp() {
   const app = Fastify({ logger: false })
@@ -32,7 +45,10 @@ describe('GET /venues/registry', () => {
     })
   })
 
-  afterEach(() => unregisterVenueAdapter('test-adapter'))
+  afterEach(() => {
+    const index = venueAdapters.indexOf(testAdapter)
+    if (index !== -1) venueAdapters.splice(index, 1)
+  })
 
   it('lists registered venues with kind, selected network, configuration, and recent liveness', async () => {
     const app = await buildApp()
@@ -44,14 +60,14 @@ describe('GET /venues/registry', () => {
     expect(body.venues).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'SDEX', kind: 'orderbook', network: 'testnet', enabled: true, liveness: 'live' }),
       expect.objectContaining({ id: 'Soroswap', kind: 'amm', enabled: false, liveness: 'disabled' }),
-      expect.objectContaining({ id: 'Reflector', kind: 'oracle', enabled: false, liveness: 'disabled' }),
+      expect.objectContaining({ id: 'Aquarius', kind: 'amm', enabled: false, liveness: 'disabled' }),
     ]))
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('price_points'), ['testnet', expect.any(Array)])
     await app.close()
   })
 
   it('reflects newly registered adapters without changing the route', async () => {
-    registerVenueAdapter({ id: 'test-adapter', kind: 'amm', priceSources: ['test-source'], isEnabled: () => true })
+    venueAdapters.push(testAdapter)
     const app = await buildApp()
     const response = await app.inject({ method: 'GET', url: '/venues/registry?network=mainnet' })
 
