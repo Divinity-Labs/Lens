@@ -204,9 +204,28 @@ const resolvers = {
       _: unknown,
       { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
     ) {
+      for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
+        if (!parseAssetStr(value)) {
+          throw new ErrorWithProps(
+            `Invalid ${field}: expected CODE or CODE:ISSUER, got "${value}"`,
+            { code: 'INVALID_INPUT', field },
+          )
+        }
+      }
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new ErrorWithProps(
+          `Invalid amount: expected a positive number, got "${amount}"`,
+          { code: 'INVALID_INPUT', field: 'amount' },
+        )
+      }
       const pair = findPair(assetA, assetB)
-      if (!pair) return null
-      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
+      if (!pair) {
+        throw new ErrorWithProps(
+          `Pair ${assetA}/${assetB} is not tracked on ${activeNetwork}`,
+          { code: 'PAIR_NOT_FOUND' },
+        )
+      }
+      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, activeNetwork)
     },
 
     async getPriceHistory(
