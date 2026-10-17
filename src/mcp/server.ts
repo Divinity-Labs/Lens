@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
+import { McpErrorCode } from './codes.js';
 import { fetchWithTimeout } from '../fetch.js';
 
 export interface McpServerConfig {
@@ -92,13 +92,30 @@ export class BazaarMcpServer {
           const hasResources = (d: unknown): d is { resources: unknown[] } => 
             typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
 
-          if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
-            return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
+          // An empty result is a successful search that found nothing. Return it as a
+          // structured success with an explicit empty collection and a count of zero,
+          // so the caller can distinguish "none" from "could not tell".
+          if (Array.isArray(data)) {
+            return this.createSuccessResponse({
+              resources: data,
+              count: data.length,
+            });
           }
           
-          return {
-            content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-          };
+          if (hasResources(data)) {
+            return this.createSuccessResponse({
+              ...data,
+              resources: data.resources,
+              count: data.resources.length,
+            });
+          }
+          
+          // The response was reachable and parsed, but it is not the shape we expect.
+          // That is a malformed response, not an empty result.
+          return this.createErrorResponse(
+            'ERR_BAD_REQUEST',
+            'Malformed response: expected an array or an object with a resources array'
+          );
         } catch (e: any) {
           return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
         }
@@ -158,6 +175,12 @@ export class BazaarMcpServer {
     }
     
     return this.createErrorResponse('ERR_INTERNAL_FAILURE', e.message || 'An unknown error occurred during the paid call.');
+  }
+
+  private createSuccessResponse(payload: Record<string, unknown>) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+    };
   }
 
   private createErrorResponse(code: McpErrorCode, reason: string) {
