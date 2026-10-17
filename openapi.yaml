@@ -12,9 +12,15 @@ info:
     reference data that changes rarely (`/pairs`, `/pools`, `/benchmark/*`)
     is `public, max-age=300`; the discovery document is
     `public, max-age=3600`. `/candles` for a closed historical window (its
-    `to` at least one full interval in the past) is immutable and cacheable
-    as `public, max-age=86400`; the still-forming window is
-    `public, max-age=60`. Per-caller responses (`/usage/me`), operator routes
+    `to` at least one full interval in the past) is *probably* immutable —
+    backfill can rewrite history — so it is
+    `public, max-age=3600, stale-while-revalidate=86400`; the still-forming
+    window is `public, max-age=60`. Every `public` response also sends
+    `Vary: x-network`, because the Stellar network can come from the
+    `x-network` header (not part of the URL cache key). Routes behind the
+    x402 payment gate use `private` instead of `public` when x402 is
+    configured, so a shared cache never serves paid content for free.
+    Per-caller responses (`/usage/me`), operator routes
     (`/admin/*`), mutations and error responses are `no-store` and must never
     sit in a shared cache.
   version: 0.1.0
