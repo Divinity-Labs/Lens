@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { pgPool } from '../db'
 import { activeNetwork } from '../config'
-import { formatValidationError } from '../validation'
+import { formatValidationError, VALIDATION_ERROR_CODE } from '../validation'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
@@ -11,6 +11,9 @@ import '../middleware/network' // declares req.network on the FastifyRequest typ
 const MARKET_CAP_UNSUPPORTED =
   'market_cap is not supported: Lens has no circulating supply data to compute it from. Use liquidity instead'
 
+/** Machine-readable code for the market_cap rejection (not a validation error). */
+const MARKET_CAP_CODE = 'UNSUPPORTED_PARAMETER'
+
 const ALLOWED_SORT_FIELDS = ['volume', 'change_24h', 'price', 'liquidity'] as const
 
 const numFilter = (name: string) =>
@@ -18,7 +21,13 @@ const numFilter = (name: string) =>
 
 const ScreenerQuerySchema = z
   .object({
-    limit: z.coerce.number({ error: 'limit must be a valid integer' }).int().min(1).max(100).default(20),
+    // Historical behavior: limit is clamped to [1, 100], never rejected.
+    // `GET /screener?limit=500` returns 100 rows, `limit=0` behaves as 1.
+    limit: z.coerce
+      .number({ error: 'limit must be a valid integer' })
+      .int({ error: 'limit must be a valid integer' })
+      .default(20)
+      .transform((v) => Math.min(100, Math.max(1, v))),
     sortBy: z.string().default('volume'),
     order: z
       .preprocess(
@@ -33,8 +42,18 @@ const ScreenerQuerySchema = z
     price_max: numFilter('price_max'),
     liquidity: numFilter('liquidity'),
     cursor: z.string().optional(),
+    // market_cap is declared only so the rejection below goes through the
+    // shared error formatter like every other rejection.
+    market_cap: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.market_cap !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['market_cap'],
+        message: MARKET_CAP_UNSUPPORTED,
+      })
+    }
     if (data.sortBy === 'market_cap') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -69,15 +88,21 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
     try {
       const q = req.query
 
-      // market_cap is rejected outright, not validated — it can never be a
-      // legal value, so it is checked before the schema runs.
-      if (q.market_cap !== undefined) {
-        return reply.status(400).send({ error: MARKET_CAP_UNSUPPORTED, code: 'UNSUPPORTED_PARAMETER' })
-      }
-
       const parsed = ScreenerQuerySchema.safeParse(q)
       if (!parsed.success) {
-        return reply.status(400).send(formatValidationError(parsed.error))
+        // market_cap is not a validation error but an unsupported parameter;
+        // it keeps its own machine-readable code while using the shared shape.
+        const marketCapRejected = parsed.error.issues.some(
+          (issue) => issue.path[0] === 'market_cap'
+        )
+        return reply
+          .status(400)
+          .send(
+            formatValidationError(
+              parsed.error,
+              marketCapRejected ? MARKET_CAP_CODE : VALIDATION_ERROR_CODE
+            )
+          )
       }
       const { limit, sortBy, order, cursor } = parsed.data
       const filters = {
