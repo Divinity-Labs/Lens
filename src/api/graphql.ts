@@ -1,8 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total } from '../metrics'
+import { price_requests_total, graphql_active_subscriptions } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
-import { GraphQLError, type ExecutionResult } from 'graphql'
+import {
+  GraphQLError,
+  parse,
+  visit,
+  type ExecutionResult,
+  type DocumentNode,
+  type ValidationRule,
+  type ValidationContext,
+} from 'graphql'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -20,8 +28,85 @@ const PRICE_TOPIC = 'PRICE_UPDATED'
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked.
-const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
+const USER_FACING_CODES = new Set([
+  'INVALID_INPUT',
+  'PAIR_NOT_FOUND',
+  'UNAUTHORIZED',
+  'QUERY_TOO_COMPLEX',
+  'COST_LIMIT_EXCEEDED',
+  'PAYMENT_REQUIRED',
+  'DEPTH_LIMIT_EXCEEDED',
+])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
+
+/**
+ * Complexity cost weights assigned to GraphQL query fields (#361).
+ * Expensive resolvers hitting the cache, database aggregates, or external routes
+ * have higher costs than lightweight in-memory metadata resolvers.
+ */
+export const GRAPHQL_FIELD_COSTS: Record<string, number> = {
+  getPrice: 5,
+  getBestRoute: 10,
+  getPriceHistory: 10,
+  pools: 5,
+  screener: 10,
+  volumes: 5,
+  spreads: 5,
+  oracle: 5,
+  listPairs: 1,
+  pairs: 1,
+}
+
+export const GRAPHQL_MAX_COST = parseInt(process.env.GRAPHQL_MAX_COST ?? '100', 10)
+
+/**
+ * Computes the total query complexity cost before execution (#361).
+ * Traverses field nodes in the AST and accumulates costs according to `GRAPHQL_FIELD_COSTS`.
+ * Repeated aliases of expensive fields multiply the cost. Introspection queries are exempt (0 cost).
+ */
+export function calculateQueryCost(
+  documentOrQuery: string | DocumentNode,
+  fieldCosts: Record<string, number> = GRAPHQL_FIELD_COSTS,
+): number {
+  const document = typeof documentOrQuery === 'string' ? parse(documentOrQuery) : documentOrQuery
+  let totalCost = 0
+
+  visit(document, {
+    Field(node) {
+      const fieldName = node.name.value
+      // Introspection fields are free
+      if (fieldName.startsWith('__')) return
+
+      if (fieldName in fieldCosts) {
+        totalCost += fieldCosts[fieldName]
+      }
+    },
+  })
+
+  return totalCost
+}
+
+/**
+ * GraphQL validation rule enforcing the query complexity cost budget (#361).
+ * Runs during AST validation before resolver execution.
+ */
+export function costLimitRule(maxCost: number = GRAPHQL_MAX_COST, fieldCosts = GRAPHQL_FIELD_COSTS): ValidationRule {
+  return function CostLimitValidation(context: ValidationContext) {
+    return {
+      Document(node: DocumentNode) {
+        const cost = calculateQueryCost(node, fieldCosts)
+        if (cost > maxCost) {
+          context.reportError(
+            new GraphQLError(
+              `Query cost of ${cost} exceeds maximum allowed cost of ${maxCost}`,
+              { extensions: { code: 'QUERY_TOO_COMPLEX', cost, maxCost } }
+            )
+          )
+        }
+      },
+    }
+  }
+}
 
 function isUserFacing(err: GraphQLError): boolean {
   // No originalError means graphql-js itself rejected the document (syntax or
@@ -246,35 +331,60 @@ const resolvers = {
 
   Subscription: {
     priceUpdated: {
-      subscribe: withFilter<
-        { priceUpdated: PricePublishedEvent },
-        unknown,
-        MercuriusContext,
-        { pair: string; network?: string | null }
-      >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
-        (payload, { pair, network }) =>
-          payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
-          (network == null || payload.priceUpdated.network === network)
-      ),
+      subscribe: (() => {
+        const filtered = withFilter<
+          { priceUpdated: PricePublishedEvent },
+          unknown,
+          MercuriusContext,
+          { pair: string; network?: string | null }
+        >(
+          (_root, { pair, network }, { pubsub }) => {
+            // Targeted topic routing by pair and network (#373).
+            // Specific network subscribes to `price_updated:${pair}:${network}`.
+            // Omitting network subscribes to `price_updated:${pair}:all`.
+            const topic = network ? `price_updated:${pair}:${network}` : `price_updated:${pair}:all`
+            return pubsub.subscribe(topic)
+          },
+          // Both loops publish to one topic, so the network filter has to happen
+          // here. Omitting `network` keeps every chain — the message carries its
+          // own `network` field, so the subscriber can still tell them apart.
+          (payload, { pair, network }) =>
+            payload.priceUpdated.pair === pair &&
+            // == null, not === undefined: a client that passes the variable
+            // explicitly sends null rather than omitting it, and both mean
+            // "every network". Comparing against undefined alone would filter
+            // out every message for those clients.
+            (network == null || payload.priceUpdated.network === network)
+        )
+
+        return async function* (root: any, args: { pair: string; network?: string | null }, context: MercuriusContext, info: any) {
+          const netLabel = args?.network ?? 'all'
+          graphql_active_subscriptions.inc({ pair: args.pair, network: netLabel })
+          try {
+            yield* filtered(root, args, context, info)
+          } finally {
+            graphql_active_subscriptions.dec({ pair: args.pair, network: netLabel })
+          }
+        }
+      })(),
     },
   },
 }
 
-export async function registerGraphQL(app: FastifyInstance) {
+export interface GraphQLOptions {
+  maxCost?: number
+}
+
+export async function registerGraphQL(app: FastifyInstance, options?: GraphQLOptions) {
+  const maxCost = options?.maxCost ?? GRAPHQL_MAX_COST
+
   await app.register(mercurius, {
     schema,
     resolvers,
     graphiql: true,
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
+    validationRules: [costLimitRule(maxCost)],
     subscription: {
       // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
       // library) rather than the legacy `subscriptions-transport-ws`.
@@ -283,13 +393,25 @@ export async function registerGraphQL(app: FastifyInstance) {
     },
   })
 
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
+  // Bridge: forward every price the ingesters emit onto the targeted GraphQL pubsub
+  // topics (#373). Mercurius wraps the payload under the subscription field name so
   // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
+    const payload = { priceUpdated: event }
+    // 1. Publish to pair + network specific topic (#373)
+    app.graphql.pubsub.publish({
+      topic: `price_updated:${event.pair}:${event.network}`,
+      payload,
+    })
+    // 2. Publish to pair-wide topic for subscribers watching every network (#373)
+    app.graphql.pubsub.publish({
+      topic: `price_updated:${event.pair}:all`,
+      payload,
+    })
+    // 3. Keep legacy general topic
     app.graphql.pubsub.publish({
       topic: PRICE_TOPIC,
-      payload: { priceUpdated: event },
+      payload,
     })
   }
   priceEmitter.on(PRICE_PUBLISHED, onPricePublished)

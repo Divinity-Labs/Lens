@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
+import { parse, visit, type DocumentNode } from 'graphql'
 import { x402_payments_received_total } from '../metrics'
 import { checkQuota, recordUsage, parseCents, getQuotaConfig } from '../x402/metering'
 import { X402_NETWORK_LABEL, paymentAddressFor, isX402Configured, getX402ResourceServer } from '../x402/network'
@@ -39,6 +40,137 @@ export const GATED_ROUTES: readonly GatedRoute[] = [
     description: 'GraphQL queries for price data and market information',
   },
 ] as const
+
+export interface GatedGraphQLField {
+  readonly field: string
+  readonly price: string
+  readonly priceCents: number
+  readonly description: string
+}
+
+/**
+ * Declared pricing for GraphQL root query fields (#358).
+ * Operations requesting gated fields must pay per field; repeated aliases scale
+ * price proportionally. Ungated fields (e.g. `listPairs`, `pairs`, `__schema`) are free.
+ *
+ * For WebSocket / GraphQL subscriptions (`graphql-transport-ws`), clients initiate
+ * connections via `connection_init` payload. Subscription metering extends this model
+ * by requiring authentication in the init payload and debiting per-event delivery or
+ * upfront credit reserve for the requested pair.
+ */
+export const GATED_GRAPHQL_FIELDS: readonly GatedGraphQLField[] = [
+  { field: 'getPrice', price: '$0.10', priceCents: 10, description: 'Unified SDEX+AMM price with VWAP and best route' },
+  { field: 'getBestRoute', price: '$0.05', priceCents: 5, description: 'Optimal route calculation' },
+  { field: 'getPriceHistory', price: '$0.05', priceCents: 5, description: 'Historical price aggregation buckets' },
+  { field: 'pools', price: '$0.05', priceCents: 5, description: 'AMM liquidity pool reserves and spot prices' },
+  { field: 'candles', price: '$0.05', priceCents: 5, description: 'Candlestick OHLCV price series' },
+  { field: 'screener', price: '$0.05', priceCents: 5, description: 'Market screener rankings' },
+  { field: 'volumes', price: '$0.05', priceCents: 5, description: 'Aggregated trading volume metrics' },
+  { field: 'spreads', price: '$0.05', priceCents: 5, description: 'Market bid-ask spread statistics' },
+  { field: 'oracle', price: '$0.05', priceCents: 5, description: 'Oracle price feed comparisons' },
+] as const
+
+export interface GraphQLPaymentRequirement {
+  isGated: boolean
+  totalCents: number
+  price: string
+  gatedFields: { field: string; count: number; cents: number }[]
+  description: string
+}
+
+export const FREE_GRAPHQL_FIELDS = new Set(['listPairs', 'pairs', '__schema', '__type'])
+
+/**
+ * Inspects a GraphQL query document and calculates total payment requirements based on
+ * requested gated fields (#358). Free/metadata queries (e.g. `listPairs`, `__schema`) return `isGated: false`.
+ */
+export function evaluateGraphQLQueryPayment(
+  queryString: string | undefined,
+  gatedFieldList: readonly GatedGraphQLField[] = GATED_GRAPHQL_FIELDS,
+): GraphQLPaymentRequirement {
+  if (!queryString || typeof queryString !== 'string') {
+    return {
+      isGated: true,
+      totalCents: 10,
+      price: '$0.10',
+      gatedFields: [{ field: 'graphql', count: 1, cents: 10 }],
+      description: 'GraphQL queries for price data and market information',
+    }
+  }
+
+  let doc: DocumentNode
+  try {
+    doc = parse(queryString)
+  } catch {
+    return {
+      isGated: false,
+      totalCents: 0,
+      price: '$0.00',
+      gatedFields: [],
+      description: 'Invalid query syntax',
+    }
+  }
+
+  const rootFields: string[] = []
+  const fieldCounts = new Map<string, number>()
+
+  visit(doc, {
+    Field(node) {
+      const fieldName = node.name.value
+      rootFields.push(fieldName)
+      const matched = gatedFieldList.find(g => g.field === fieldName)
+      if (matched) {
+        fieldCounts.set(fieldName, (fieldCounts.get(fieldName) ?? 0) + 1)
+      }
+    },
+  })
+
+  // If every field in the query is an explicitly free field, no payment is required (#358)
+  if (rootFields.length > 0 && rootFields.every(f => FREE_GRAPHQL_FIELDS.has(f))) {
+    return {
+      isGated: false,
+      totalCents: 0,
+      price: '$0.00',
+      gatedFields: [],
+      description: 'Free GraphQL query (metadata / schema)',
+    }
+  }
+
+  // If specific gated fields were identified, scale price by their configured cents (#358)
+  if (fieldCounts.size > 0) {
+    let totalCents = 0
+    const gatedFields: { field: string; count: number; cents: number }[] = []
+    const descParts: string[] = []
+
+    for (const [field, count] of fieldCounts.entries()) {
+      const config = gatedFieldList.find(g => g.field === field)!
+      const centsForField = config.priceCents * count
+      totalCents += centsForField
+      gatedFields.push({ field, count, cents: centsForField })
+      descParts.push(`${count > 1 ? `${count}x ` : ''}${field} ($${(centsForField / 100).toFixed(2)})`)
+    }
+
+    const price = `$${(totalCents / 100).toFixed(2)}`
+    const description = `GraphQL query requires payment for gated fields: ${descParts.join(', ')}`
+
+    return {
+      isGated: true,
+      totalCents,
+      price,
+      gatedFields,
+      description,
+    }
+  }
+
+  // Default fallback for general GraphQL queries (e.g. test queries)
+  return {
+    isGated: true,
+    totalCents: 10,
+    price: '$0.10',
+    gatedFields: [{ field: 'graphql', count: 1, cents: 10 }],
+    description: 'GraphQL queries for price data and market information',
+  }
+}
 
 /**
  * Checks whether `routedPath` matches `prefix` at a path-segment boundary.
@@ -103,6 +235,25 @@ async function x402Plugin(app: FastifyInstance) {
     const matchedRoute = matchGatedRoute(routedPath, req.method)
     if (!matchedRoute) return
 
+    let price = matchedRoute.price
+    let description = matchedRoute.description
+    let totalCents = parseCents(price)
+
+    // For POST /graphql: derive pricing from requested fields rather than static path (#358)
+    if (matchesPathSegment(routedPath, '/graphql') && req.method.toUpperCase() === 'POST') {
+      const bodyQuery = (req.body as any)?.query
+      if (typeof bodyQuery === 'string') {
+        const paymentReq = evaluateGraphQLQueryPayment(bodyQuery)
+        // If the query contains only ungated fields (e.g. listPairs, introspection), allow free access
+        if (!paymentReq.isGated) {
+          return
+        }
+        price = paymentReq.price
+        description = paymentReq.description
+        totalCents = paymentReq.totalCents
+      }
+    }
+
     // Falls back to testnet when the network selector plugin isn't
     // registered (e.g. isolated unit tests that build the app directly).
     const network = req.network ?? 'testnet'
@@ -112,7 +263,6 @@ async function x402Plugin(app: FastifyInstance) {
       return
     }
 
-    const { price, description } = matchedRoute
     const paymentHeader = req.headers['x-payment'] as string | undefined
 
     const requirements = {
@@ -160,7 +310,7 @@ async function x402Plugin(app: FastifyInstance) {
           const config = await getQuotaConfig(apiKeyId)
           if (config.overagePolicy === 'allow_overage') {
             // Record usage and let through (overage billing applies)
-            await recordUsage(apiKeyId, parseCents(price))
+            await recordUsage(apiKeyId, totalCents)
           } else if (config.overagePolicy === 'charge_402') {
             reply.status(402).send({
               error: 'Quota exceeded — additional payment required',
@@ -176,7 +326,7 @@ async function x402Plugin(app: FastifyInstance) {
             return
           }
         } else {
-          await recordUsage(apiKeyId, parseCents(price))
+          await recordUsage(apiKeyId, totalCents)
         }
       }
 
