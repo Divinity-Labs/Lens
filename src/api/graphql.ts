@@ -2,15 +2,25 @@ import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
 import { price_requests_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
-import { GraphQLError, type ExecutionResult } from 'graphql'
+import {
+  GraphQLError,
+  Kind,
+  type ExecutionResult,
+  type ValidationContext,
+  type ASTVisitor,
+  type OperationDefinitionNode,
+  type FragmentDefinitionNode,
+} from 'graphql'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork } from '../config'
+import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
+import type { WatchedPair } from '../types'
 import { parseAssetStr } from '../pairsRegistry'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
+import { findPair, queryPools } from './rest'
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
@@ -23,18 +33,83 @@ const PRICE_TOPIC = 'PRICE_UPDATED'
 const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
+/**
+ * Default maximum depth of arbitrary GraphQL queries to prevent resource exhaustion attacks.
+ * Configurable via GRAPHQL_MAX_DEPTH or RegisterGraphQLOptions.
+ */
+export const DEFAULT_MAX_QUERY_DEPTH = 6
+
+/**
+ * AST validation rule checking query nesting depth before execution.
+ * Introspection queries are legitimately deep and deliberately exempt.
+ */
+export function depthLimit(maxDepth: number) {
+  return (context: ValidationContext): ASTVisitor => {
+    const fragments = new Map<string, FragmentDefinitionNode>()
+
+    for (const def of context.getDocument().definitions) {
+      if (def.kind === Kind.FRAGMENT_DEFINITION) {
+        fragments.set(def.name.value, def)
+      }
+    }
+
+    function calculateDepth(node: any, currentDepth: number, visited = new Set<string>()): number {
+      if (!node.selectionSet || !node.selectionSet.selections) {
+        return currentDepth
+      }
+
+      let max = currentDepth
+      for (const selection of node.selectionSet.selections) {
+        if (selection.kind === Kind.FIELD) {
+          const fieldName = selection.name.value
+          // Legitimate introspection queries are deeply nested by design; exempt them.
+          if (fieldName === '__schema' || fieldName === '__type') {
+            continue
+          }
+          const childDepth = calculateDepth(selection, currentDepth + 1, visited)
+          if (childDepth > max) max = childDepth
+        } else if (selection.kind === Kind.INLINE_FRAGMENT) {
+          const childDepth = calculateDepth(selection, currentDepth + 1, visited)
+          if (childDepth > max) max = childDepth
+        } else if (selection.kind === Kind.FRAGMENT_SPREAD) {
+          const fragName = selection.name.value
+          if (!visited.has(fragName)) {
+            visited.add(fragName)
+            const fragDef = fragments.get(fragName)
+            if (fragDef) {
+              const childDepth = calculateDepth(fragDef, currentDepth, visited)
+              if (childDepth > max) max = childDepth
+            }
+          }
+        }
+      }
+      return max
+    }
+
+    return {
+      OperationDefinition(node: OperationDefinitionNode) {
+        const depth = calculateDepth(node, 0)
+        if (depth > maxDepth) {
+          context.reportError(
+            new GraphQLError(
+              `Query depth ${depth} exceeds maximum allowed depth of ${maxDepth}`,
+              { extensions: { code: 'INVALID_INPUT' } }
+            )
+          )
+        }
+      },
+    }
+  }
+}
+
 function isUserFacing(err: GraphQLError): boolean {
-  // No originalError means graphql-js itself rejected the document (syntax or
-  // validation), which only describes the caller's own query.
   const original = err.originalError as
-    | { extensions?: { code?: unknown }; errors?: unknown; statusCode?: unknown }
+    | { extensions?: { code?: unknown }; code?: unknown; errors?: unknown; statusCode?: unknown }
     | undefined
   if (!original) return true
-  // Mercurius wraps document validation failures (and other request-level
-  // 4xx faults) in a Fastify error before they reach the formatter.
   if (Array.isArray(original.errors)) return true
   if (typeof original.statusCode === 'number' && original.statusCode < 500) return true
-  const code = original.extensions?.code
+  const code = original.extensions?.code ?? (original as any)?.code ?? err.extensions?.code
   return typeof code === 'string' && USER_FACING_CODES.has(code)
 }
 
@@ -54,6 +129,30 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
   return defaultErrorFormatter({ ...execution, errors }, ctx)
 }
 
+function resolveNetwork(argNetwork?: string | null, ctx?: MercuriusContext): NetworkName {
+  if (argNetwork !== undefined && argNetwork !== null) {
+    if (argNetwork !== 'testnet' && argNetwork !== 'mainnet') {
+      throw new ErrorWithProps('network must be one of: testnet, mainnet', { code: 'INVALID_INPUT' })
+    }
+    return argNetwork as NetworkName
+  }
+
+  const req = (ctx?.reply as any)?.request ?? (ctx as any)?.req
+  const headerNetwork = req?.headers?.['x-network']
+  if (headerNetwork !== undefined && headerNetwork !== null && headerNetwork !== '') {
+    if (headerNetwork !== 'testnet' && headerNetwork !== 'mainnet') {
+      throw new ErrorWithProps('network must be one of: testnet, mainnet', { code: 'INVALID_INPUT' })
+    }
+    return headerNetwork as NetworkName
+  }
+
+  return activeNetwork
+}
+
+/**
+ * GraphQL SDL Schema
+ * NOTE: Query nesting is protected by a query depth ceiling (default: 6, configurable via GRAPHQL_MAX_DEPTH).
+ */
 const schema = `
   type AggregatedPrice {
     assetA: String!
@@ -108,13 +207,45 @@ const schema = `
     network: String!
   }
 
+  type PairAsset {
+    code: String!
+    issuer: String
+  }
+
+  type PairInfo {
+    pairKey: String!
+    assetA: PairAsset!
+    assetB: PairAsset!
+    network: String!
+    latestPrice: Float
+    lastUpdated: String
+  }
+
+  type PoolInfo {
+    poolId: String!
+    pool_id: String!
+    assetA: String!
+    asset_a: String!
+    assetB: String!
+    asset_b: String!
+    reserveA: Float
+    reserve_a: Float
+    reserveB: Float
+    reserve_b: Float
+    spotPrice: Float
+    spot_price: Float
+    feeBp: Int
+    fee_bp: Int
+    timestamp: String
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
 
     - Malformed asset input (an asset that is not CODE or CODE:ISSUER) fails
       with a GraphQL error whose extensions.code is INVALID_INPUT.
-    - A well-formed pair that is not tracked on the active network fails with
+    - A well-formed pair that is not tracked on the requested network fails with
       a GraphQL error whose extensions.code is PAIR_NOT_FOUND.
     - A tracked pair with no trade data yet is not an error: it resolves to an
       AggregatedPrice with zeroed figures rather than null or an error.
@@ -122,10 +253,21 @@ const schema = `
     The result is only null if the resolver itself cannot produce a payload;
     clients should branch on extensions.code, not on null.
     """
-    getPrice(assetA: String!, assetB: String!): AggregatedPrice
-    getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-    getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
-    listPairs: [String]!
+    getPrice(assetA: String!, assetB: String!, network: String): AggregatedPrice
+    getBestRoute(assetA: String!, assetB: String!, amount: Float!, network: String): RouteInfo
+    getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int, network: String): [PriceBucket]
+    listPairs(network: String): [String]!
+
+    """
+    Returns full metadata for watched pairs on the network, including codes, issuers, and latest prints.
+    """
+    pairs(network: String): [PairInfo!]!
+
+    """
+    Returns latest snapshot of AMM liquidity pools for a network, optionally filtered by pair.
+    NOTE: Under L188/x402, this query returns AMM pool reserves and spot prices and should be gated consistently with REST /pools ($0.05).
+    """
+    pools(pair: String, network: String): [PoolInfo!]!
   }
 
   type Subscription {
@@ -146,21 +288,16 @@ function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
 }
 
-function findPair(assetA: string, assetB: string) {
-  const normalize = (a: string) => a.toLowerCase() === 'native' ? 'XLM' : a.split(':')[0].toUpperCase()
-  const cA = normalize(assetA)
-  const cB = normalize(assetB)
-  return config.pairs.find(p => {
-    const pA = p.assetA.code.toUpperCase()
-    const pB = p.assetB.code.toUpperCase()
-    return (cA === pA && cB === pB) || (cA === pB && cB === pA)
-  })
-}
-
 const resolvers = {
   Query: {
-    async getPrice(_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
+    async getPrice(
+      _: unknown,
+      { assetA, assetB, network: argNetwork }: { assetA: string; assetB: string; network?: string | null },
+      ctx: MercuriusContext
+    ) {
       price_requests_total.inc()
+      const network = resolveNetwork(argNetwork, ctx)
+
       for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
         if (!parseAssetStr(value)) {
           throw new ErrorWithProps(
@@ -169,30 +306,23 @@ const resolvers = {
           )
         }
       }
-      const pair = findPair(assetA, assetB)
+      const pair = findPair(assetA, assetB, network)
       if (!pair) {
         throw new ErrorWithProps(
-          `Pair ${assetA}/${assetB} is not tracked on ${activeNetwork}`,
+          `Pair ${assetA}/${assetB} is not tracked on ${network}`,
           { code: 'PAIR_NOT_FOUND' },
         )
       }
       const pairKey = pair.pairKey
 
-      // These queries carry no network argument, so they resolve against the
-      // active network's pair list (findPair above) and read that same
-      // network's price data — scoped, not pooled across both chains.
-      // Per-request network selection on the GraphQL surface is separate work.
-      // The cache key is network-prefixed to match the REST route and the
-      // refresh worker, so no deployment can serve another network's cached
-      // payload under a network-less key.
-      const cacheKey = `${activeNetwork}:${pairKey}`
+      const cacheKey = `${network}:${pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
         try { return JSON.parse(cached) } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pairKey, activeNetwork)
-      const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
+      const agg = await getAggregatedPrice(pairKey, network)
+      const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, network)
       return {
         assetA, assetB, pairKey, ...agg,
         bestRoute: route.route,
@@ -202,17 +332,21 @@ const resolvers = {
 
     async getBestRoute(
       _: unknown,
-      { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
+      { assetA, assetB, amount, network: argNetwork }: { assetA: string; assetB: string; amount: number; network?: string | null },
+      ctx: MercuriusContext
     ) {
-      const pair = findPair(assetA, assetB)
+      const network = resolveNetwork(argNetwork, ctx)
+      const pair = findPair(assetA, assetB, network)
       if (!pair) return null
-      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
+      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
     },
 
     async getPriceHistory(
       _: unknown,
-      { assetA, assetB, window, limit = 100 }: { assetA: string; assetB: string; window: string; limit?: number }
+      { assetA, assetB, window, limit = 100, network: argNetwork }: { assetA: string; assetB: string; window: string; limit?: number; network?: string | null },
+      ctx: MercuriusContext
     ) {
+      resolveNetwork(argNetwork, ctx)
       const pairKey = makePairKey(assetA, assetB)
       const result = await pgPool.query(
         `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
@@ -239,8 +373,82 @@ const resolvers = {
       }))
     },
 
-    listPairs() {
-      return config.pairs.map(p => p.pairKey)
+    listPairs(_: unknown, { network: argNetwork }: { network?: string | null }, ctx: MercuriusContext) {
+      const network = resolveNetwork(argNetwork, ctx)
+      const pairs = (typeof getNetworkConfig === 'function' ? getNetworkConfig(network)?.pairs : undefined) ?? config?.pairs ?? []
+      return pairs.map(p => p.pairKey)
+    },
+
+    async pairs(_: unknown, { network: argNetwork }: { network?: string | null }, ctx: MercuriusContext) {
+      const network = resolveNetwork(argNetwork, ctx)
+      const watched = (typeof getNetworkConfig === 'function' ? getNetworkConfig(network)?.pairs : undefined) ?? config?.pairs ?? []
+      if (watched.length === 0) return []
+
+      const result = await pgPool.query(
+        `SELECT p.pair_key, l.price, l.timestamp
+           FROM unnest($2::text[]) AS p(pair_key)
+          CROSS JOIN LATERAL (
+                SELECT price, timestamp
+                  FROM price_points
+                 WHERE network = $1
+                   AND pair_key = p.pair_key
+                 ORDER BY timestamp DESC
+                 LIMIT 1
+               ) l`,
+        [network, watched.map(p => p.pairKey)]
+      )
+
+      const latestPrices = new Map<string, { price: number; timestamp: Date }>()
+      result.rows.forEach(r => {
+        latestPrices.set(r.pair_key, {
+          price: parseFloat(r.price),
+          timestamp: r.timestamp,
+        })
+      })
+
+      return watched.map(p => {
+        const latest = latestPrices.get(p.pairKey)
+        return {
+          pairKey: p.pairKey,
+          assetA: {
+            code: p.assetA.code,
+            issuer: p.assetA.issuer ?? null,
+          },
+          assetB: {
+            code: p.assetB.code,
+            issuer: p.assetB.issuer ?? null,
+          },
+          network,
+          latestPrice: latest?.price ?? null,
+          lastUpdated: latest?.timestamp ? new Date(latest.timestamp).toISOString() : null,
+        }
+      })
+    },
+
+    async pools(
+      _: unknown,
+      { pair, network: argNetwork }: { pair?: string | null; network?: string | null },
+      ctx: MercuriusContext
+    ) {
+      const network = resolveNetwork(argNetwork, ctx)
+      const rows = await queryPools(network, pair ?? undefined)
+      return rows.map(r => ({
+        poolId: r.pool_id,
+        pool_id: r.pool_id,
+        assetA: r.asset_a,
+        asset_a: r.asset_a,
+        assetB: r.asset_b,
+        asset_b: r.asset_b,
+        reserveA: r.reserve_a,
+        reserve_a: r.reserve_a,
+        reserveB: r.reserve_b,
+        reserve_b: r.reserve_b,
+        spotPrice: r.spot_price,
+        spot_price: r.spot_price,
+        feeBp: r.fee_bp,
+        fee_bp: r.fee_bp,
+        timestamp: r.timestamp ? new Date(r.timestamp).toISOString() : null,
+      }))
     },
   },
 
@@ -268,11 +476,18 @@ const resolvers = {
   },
 }
 
-export async function registerGraphQL(app: FastifyInstance) {
+export interface RegisterGraphQLOptions {
+  maxDepth?: number
+}
+
+export async function registerGraphQL(app: FastifyInstance, options?: RegisterGraphQLOptions) {
+  const maxDepth = options?.maxDepth ?? parseInt(process.env.GRAPHQL_MAX_DEPTH ?? String(DEFAULT_MAX_QUERY_DEPTH), 10)
+
   await app.register(mercurius, {
     schema,
     resolvers,
     graphiql: true,
+    validationRules: [depthLimit(maxDepth)],
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
