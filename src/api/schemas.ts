@@ -169,6 +169,7 @@ export const poolsResponseSchema = {
       type: 'array',
       items: {
         type: 'object',
+        required: ['venue'],
         additionalProperties: true,
         properties: {
           pool_id: { type: 'string' },
@@ -178,9 +179,12 @@ export const poolsResponseSchema = {
           reserve_b: { type: ['number', 'null'] },
           spot_price: { type: ['number', 'null'] },
           fee_bp: { type: ['integer', 'null'] },
+          venue: { type: 'string' },
         },
       },
     },
+    nextCursor: { type: ['string', 'null'] },
+    hasMore: { type: 'boolean' },
   },
 } as const
 
