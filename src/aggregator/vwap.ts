@@ -33,7 +33,7 @@ export async function calculateVWAP(
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - ($3 || ' minutes')::interval
+       AND COALESCE(observed_at, timestamp) > NOW() - ($3 || ' minutes')::interval
        ${sourceFilter}`,
     params
   )
@@ -52,20 +52,20 @@ export async function calculateOHLCV(
     `SELECT
        (SELECT price::numeric FROM price_points
         WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - ($3 || ' minutes')::interval
-        ORDER BY timestamp ASC LIMIT 1) AS open,
+          AND COALESCE(observed_at, timestamp) > NOW() - ($3 || ' minutes')::interval
+        ORDER BY COALESCE(observed_at, timestamp) ASC LIMIT 1) AS open,
        MAX(price::numeric) AS high,
        MIN(price::numeric) AS low,
        (SELECT price::numeric FROM price_points
         WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - ($3 || ' minutes')::interval
-        ORDER BY timestamp DESC LIMIT 1) AS close,
+          AND COALESCE(observed_at, timestamp) > NOW() - ($3 || ' minutes')::interval
+        ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS close,
        SUM(base_volume::numeric) AS volume,
        COUNT(*) AS trade_count
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - ($3 || ' minutes')::interval`,
+       AND COALESCE(observed_at, timestamp) > NOW() - ($3 || ' minutes')::interval`,
     [pairKey, network, windowMinutes]
   )
   const row = result.rows[0]
@@ -84,12 +84,12 @@ export async function getPriceChange24h(pairKey: string, network: NetworkName): 
     `SELECT
        (SELECT price::numeric FROM price_points
         WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - INTERVAL '24 hours'
-        ORDER BY timestamp ASC LIMIT 1) AS price_24h_ago,
+          AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
+        ORDER BY COALESCE(observed_at, timestamp) ASC LIMIT 1) AS price_24h_ago,
        (SELECT price::numeric FROM price_points
         WHERE pair_key = $1 AND network = $2
-          AND timestamp > NOW() - INTERVAL '24 hours'
-        ORDER BY timestamp DESC LIMIT 1) AS price_now`,
+          AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
+        ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS price_now`,
     [pairKey, network]
   )
   const row = result.rows[0]
@@ -136,7 +136,7 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
     ),
     // Last trade timestamp
     pgPool.query(
-      `SELECT MAX(timestamp) as last_trade FROM price_points
+      `SELECT MAX(COALESCE(observed_at, timestamp)) as last_trade /* MAX(timestamp) as last_trade */ FROM price_points
        WHERE pair_key = $1 AND network = $2`,
       [pairKey, network]
     ),
@@ -149,7 +149,7 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '24 hours'
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
      GROUP BY source`,
     [pairKey, network]
   )
@@ -166,7 +166,7 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '1 hour'`,
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '1 hour'`,
     [pairKey, network]
   )
 

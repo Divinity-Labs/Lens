@@ -38,26 +38,34 @@ pgPool.query = (async (...args: any[]) => {
  * stops that reappearing the next time a venue is added.
  */
 export async function upsertPricePoints(points: {
+  id?: string
   assetA: string; assetB: string; pairKey: string; source: string
   poolId?: string; price: number; baseVolume: number; counterVolume: number
-  ledger: number; timestamp: Date; eventId?: string
+  ledger: number; observedAt?: Date; sourceTime?: Date | null; timestamp?: Date; eventId?: string
 }[], network: NetworkName): Promise<number> {
   if (points.length === 0) return 0
   const result = await prisma.pricePoint.createMany({
-    data: points.map(p => ({
-      network,
-      assetA: p.assetA,
-      assetB: p.assetB,
-      pairKey: p.pairKey,
-      source: p.source,
-      poolId: p.poolId ?? null,
-      price: p.price,
-      baseVolume: p.baseVolume,
-      counterVolume: p.counterVolume,
-      ledger: p.ledger,
-      timestamp: p.timestamp,
-      eventId: p.eventId ?? null,
-    })),
+    data: points.map(p => {
+      const observedAt = p.observedAt ?? p.timestamp ?? new Date()
+      const sourceTime = p.sourceTime !== undefined ? p.sourceTime : null
+      return {
+        id: p.id,
+        network,
+        assetA: p.assetA,
+        assetB: p.assetB,
+        pairKey: p.pairKey,
+        source: p.source,
+        poolId: p.poolId ?? null,
+        price: p.price,
+        baseVolume: p.baseVolume,
+        counterVolume: p.counterVolume,
+        ledger: p.ledger,
+        timestamp: p.timestamp ?? observedAt,
+        observedAt,
+        sourceTime,
+        eventId: p.eventId ?? null,
+      }
+    }),
     skipDuplicates: true,
   })
   return result.count

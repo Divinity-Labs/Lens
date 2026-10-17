@@ -72,3 +72,35 @@ When a price is requested, the `bestRoute` engine compares the available liquidi
 The system exposes both REST and GraphQL interfaces. To monetize the high-fidelity data, Lens implements the **x402 protocol**.
 
 The **x402 Payment Gate** is a middleware that intercepts requests to premium endpoints (like `/price`, `/pools`, and `/candles`). If a valid `x-payment` header containing a signed Stellar transaction is not present, the server returns a `402 Payment Required` status along with the payment requirements (price, destination address, and network). This ensures that every high-value API call is backed by a micropayment, enabling a "pay-per-query" business model.
+
+## Time Model: Observation Time vs Source Time
+
+Lens explicitly separates **observation time** from **source time** to prevent conflating chain/exchange clocks with local ingestion clocks:
+
+| Field | Type | Description |
+|---|---|---|
+| `observed_at` | `DateTime` (non-null) | The UTC timestamp when Lens recorded/ingested the sample (Lens wall-clock). |
+| `source_time` | `DateTime?` (nullable) | The native timestamp provided by the source venue itself. `null` for sources with no native timestamp. |
+| `ledger` | `Int` | Stellar ledger sequence number, kept strictly separate from time fields. |
+
+### Venue Source Time Capabilities
+
+Every venue adapter explicitly declares its `sourceTimeCapability`:
+
+| Venue / Adapter | Status | Semantic | Description |
+|---|---|---|---|
+| **SDEX** | `provided` | `ledger_close` | Stellar Horizon ledger close time of the executed trade. |
+| **AMM (Trades)** | `provided` | `ledger_close` | Stellar Horizon ledger close time of the pool trade. |
+| **AMM (Reserve Snapshots)** | `unavailable` | - | State snapshot; `source_time` is `null`. |
+| **Soroswap AMM** | `unavailable` | - | Soroban contract simulation; `source_time` is `null`. Never fabricates timestamps. |
+| **Aquarius AMM** | `unavailable` | - | Pool API state snapshot; `source_time` is `null`. Never fabricates timestamps. |
+| **CEX Adapters** | `provided` | `exchange_timestamp` | Native exchange-reported ticker/trade timestamp. |
+
+### Bucketing Rationale
+
+All candle aggregation (`/candles`), time-window filtering, TWAP, and VWAP calculations key on **`observed_at`** (observation time).
+
+**Why observation time?**
+1. **Universality across venues**: Snapshot-only venues (Soroswap, Aquarius, AMM reserve snapshots) have no native trade timestamps (`source_time = null`). Bucketing on source time would drop or misrepresent state snapshots.
+2. **Single monotonic timeline**: Observation time provides a unified, monotonic reference clock across decentralized order books, AMMs, and off-chain exchanges, avoiding clock skew, Horizon polling latency skews, and historical reorg gaps.
+

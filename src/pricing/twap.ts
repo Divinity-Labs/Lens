@@ -58,14 +58,14 @@ export async function computeTWAP(
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
 
-  // Fetch price points within the window for the specific network, ordered by timestamp
+  // Fetch price points within the window for the specific network, ordered by observed_at
   const result = await pgPool.query(
-    `SELECT price::numeric as price, timestamp
+    `SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
      FROM price_points
      WHERE pair_key = $1
        AND network = $3
-       AND timestamp > NOW() - ($2 || ' minutes')::interval
-     ORDER BY timestamp ASC`,
+       AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
+     ORDER BY COALESCE(observed_at, timestamp) ASC`,
     [pairKey, windowMinutes, network]
   )
 
@@ -97,7 +97,7 @@ export async function computeTWAP(
 
   const validPoints = rows
     .map((r: any, i: number) => ({
-      ts: new Date(r.timestamp).getTime(),
+      ts: new Date(r.observed_at ?? r.timestamp).getTime(),
       price: rawPrices[i],
       rejected: rejectedIndices.has(i),
     }))
@@ -105,11 +105,14 @@ export async function computeTWAP(
     .map(({ ts, price }: any) => ({ ts, price }))
     .sort((a: any, b: any) => a.ts - b.ts)
 
+  const firstPointTime = rows[0].observed_at ?? rows[0].timestamp
+  const lastPointTime = rows[rows.length - 1].observed_at ?? rows[rows.length - 1].timestamp
+
   if (validPoints.length === 0) {
     return {
       twap: 0,
-      startTime: rows[0].timestamp,
-      endTime: rows[rows.length - 1].timestamp,
+      startTime: firstPointTime,
+      endTime: lastPointTime,
       sampleCount: rawPrices.length,
       outlierRejected: rejected,
       filterMethod: outlierMethod,
@@ -118,16 +121,16 @@ export async function computeTWAP(
   }
 
   // Build equi-spaced time grid and interpolate price at each sample point
-  const startTime = new Date(rows[0].timestamp).getTime()
-  const endTime = new Date(rows[rows.length - 1].timestamp).getTime()
+  const startTime = new Date(firstPointTime).getTime()
+  const endTime = new Date(lastPointTime).getTime()
   const totalDurationMs = endTime - startTime
 
   if (totalDurationMs <= 0) {
     // Single data point — use its price
     return {
       twap: validPoints[0].price,
-      startTime: rows[0].timestamp,
-      endTime: rows[rows.length - 1].timestamp,
+      startTime: firstPointTime,
+      endTime: lastPointTime,
       sampleCount: rawPrices.length,
       outlierRejected: rejected,
       filterMethod: outlierMethod,
@@ -200,21 +203,21 @@ export async function computeVWAP(
   let params: any[]
 
   if (options?.source) {
-    query = `SELECT price::numeric as price, base_volume::numeric as volume, timestamp
+    query = `SELECT price::numeric as price, base_volume::numeric as volume, COALESCE(observed_at, timestamp) as observed_at, timestamp
              FROM price_points
              WHERE pair_key = $1
                AND network = $4
                AND source = $3
-               AND timestamp > NOW() - ($2 || ' minutes')::interval
-             ORDER BY timestamp ASC`
+               AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
+             ORDER BY COALESCE(observed_at, timestamp) ASC`
     params = [pairKey, windowMinutes, options.source, network]
   } else {
-    query = `SELECT price::numeric as price, base_volume::numeric as volume, timestamp
+    query = `SELECT price::numeric as price, base_volume::numeric as volume, COALESCE(observed_at, timestamp) as observed_at, timestamp
              FROM price_points
              WHERE pair_key = $1
                AND network = $3
-               AND timestamp > NOW() - ($2 || ' minutes')::interval
-             ORDER BY timestamp ASC`
+               AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
+             ORDER BY COALESCE(observed_at, timestamp) ASC`
     params = [pairKey, windowMinutes, network]
   }
 
@@ -246,11 +249,14 @@ export async function computeVWAP(
   // Filter out outlier rows
   const validRows = rows.filter((_: any, i: number) => !rejectedIndices.has(i))
 
+  const firstPointTime = rows[0].observed_at ?? rows[0].timestamp
+  const lastPointTime = rows[rows.length - 1].observed_at ?? rows[rows.length - 1].timestamp
+
   if (validRows.length === 0) {
     return {
       vwap: 0,
-      startTime: rows[0].timestamp,
-      endTime: rows[rows.length - 1].timestamp,
+      startTime: firstPointTime,
+      endTime: lastPointTime,
       sampleCount: rawPrices.length,
       volumeTotal: 0,
       outlierRejected: rejectedIndices.size,
@@ -273,8 +279,8 @@ export async function computeVWAP(
 
   return {
     vwap,
-    startTime: rows[0].timestamp,
-    endTime: rows[rows.length - 1].timestamp,
+    startTime: firstPointTime,
+    endTime: lastPointTime,
     sampleCount: rawPrices.length,
     volumeTotal: totalVolume,
     outlierRejected: rejectedIndices.size,

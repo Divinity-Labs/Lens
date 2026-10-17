@@ -103,11 +103,11 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
                 MIN(price)::numeric   AS bid,
                 MAX(price)::numeric   AS ask,
                 COUNT(*)::int         AS observations,
-                MAX(timestamp)        AS last_seen
+                MAX(COALESCE(observed_at, timestamp)) AS last_seen
            FROM price_points
           WHERE (asset_a = $1 OR asset_b = $1)
             AND network = $2
-            AND timestamp >= $3
+            AND COALESCE(observed_at, timestamp) >= $3
           GROUP BY source, pair_key`,
         [asset, network, startTime],
       )

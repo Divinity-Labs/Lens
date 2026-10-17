@@ -68,7 +68,7 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
            FROM price_points
           WHERE (asset_a = $1 OR asset_b = $1)
             AND network = $2
-            AND timestamp >= $3
+            AND COALESCE(observed_at, timestamp) >= $3
           GROUP BY source`,
         [asset, network, startTime],
       )

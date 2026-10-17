@@ -84,6 +84,7 @@ export async function snapshotPool(
 
     // Also record spot price as a price point (no volume — it's a snapshot, not a trade)
     if (spotPrice > 0) {
+      const now = new Date()
       await upsertPricePoints(
         [
           {
@@ -96,7 +97,9 @@ export async function snapshotPool(
             baseVolume: 0,
             counterVolume: 0,
             ledger: pool.last_modified_ledger ?? 0,
-            timestamp: new Date(),
+            observedAt: now,
+            sourceTime: null,
+            timestamp: now,
             eventId: `amm-snapshot-${pool.id}-${Date.now()}`,
           },
         ],
@@ -163,6 +166,9 @@ export async function ingestPoolTrades(
         ? parseFloat(t.counter_amount) / parseFloat(t.base_amount)
         : parseFloat(t.base_amount) / parseFloat(t.counter_amount)
 
+      const now = new Date()
+      const sourceTime = new Date(t.ledger_close_time)
+
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
@@ -173,7 +179,9 @@ export async function ingestPoolTrades(
         baseVolume: parseFloat(t.base_amount),
         counterVolume: parseFloat(t.counter_amount),
         ledger: ledgers[i],
-        timestamp: new Date(t.ledger_close_time),
+        observedAt: now,
+        sourceTime,
+        timestamp: now,
         eventId: t.id,
       }
     })
@@ -189,9 +197,10 @@ export async function ingestPoolTrades(
     await upsertPricePoints(points, network)
 
     trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
+    const tradeTime = points[points.length - 1].sourceTime ?? points[points.length - 1].observedAt
     last_trade_timestamp.set(
       { pair: pair.pairKey, network },
-      Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
+      Math.floor(tradeTime.getTime() / 1000)
     )
 
     const lastRecord = records[records.length - 1]
@@ -201,7 +210,7 @@ export async function ingestPoolTrades(
     publishPriceUpdate({
       pair: pair.pairKey,
       price: currentPrice,
-      ts: points[points.length - 1].timestamp.toISOString(),
+      ts: points[points.length - 1].observedAt.toISOString(),
       network,
     })
 
@@ -232,6 +241,7 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
   source: 'AMM',
+  sourceTimeCapability: { status: 'provided', semantic: 'ledger_close' },
 
   isEnabled(_network: NetworkName): boolean {
     return true

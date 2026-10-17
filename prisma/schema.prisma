@@ -10,23 +10,26 @@ datasource db {
 }
 
 model PricePoint {
-  id            String   @default(uuid())
-  network       String   @default("testnet")
-  assetA        String   @map("asset_a")
-  assetB        String   @map("asset_b")
-  pairKey       String   @map("pair_key")
+  id            String    @default(uuid())
+  network       String    @default("testnet")
+  assetA        String    @map("asset_a")
+  assetB        String    @map("asset_b")
+  pairKey       String    @map("pair_key")
   source        String
-  poolId        String?  @map("pool_id")
-  price         Decimal  @db.Decimal(36, 18)
-  baseVolume    Decimal  @map("base_volume") @db.Decimal(36, 7)
-  counterVolume Decimal  @map("counter_volume") @db.Decimal(36, 7)
+  poolId        String?   @map("pool_id")
+  price         Decimal   @db.Decimal(36, 18)
+  baseVolume    Decimal   @map("base_volume") @db.Decimal(36, 7)
+  counterVolume Decimal   @map("counter_volume") @db.Decimal(36, 7)
   ledger        Int
-  timestamp     DateTime
-  eventId       String?  @map("event_id")
+  timestamp     DateTime  // Legacy timestamp column / TimescaleDB hypertable partition key
+  observedAt    DateTime  @default(now()) @map("observed_at")
+  sourceTime    DateTime? @map("source_time")
+  eventId       String?   @map("event_id")
 
   @@id([id, timestamp])
+  @@index([network, pairKey, observedAt(sort: Desc)])
   @@index([network, pairKey, timestamp(sort: Desc)])
-  @@index([network, pairKey, source, timestamp(sort: Desc)])
+  @@index([network, pairKey, source, observedAt(sort: Desc)])
   @@map("price_points")
 }
 

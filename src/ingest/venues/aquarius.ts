@@ -74,6 +74,7 @@ export function deriveAquariusPricePoints(
     const r1 = parseFloat(r1Str)
     if (r0 <= 0 || r1 <= 0) return []
 
+    const now = new Date()
     return [
       {
         assetA: pair.assetA.code,
@@ -85,7 +86,9 @@ export function deriveAquariusPricePoints(
         baseVolume: 0,
         counterVolume: 0,
         ledger: 0,
-        timestamp: new Date(),
+        observedAt: now,
+        sourceTime: null,
+        timestamp: now,
       },
     ]
   })
@@ -107,6 +110,7 @@ export async function ingestAquariusPair(
 export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
   name: 'Aquarius',
   source: 'aquarius_amm',
+  sourceTimeCapability: { status: 'unavailable' },
 
   isEnabled(network: NetworkName): boolean {
     return getNetworkConfig(network).aquarius.enabled

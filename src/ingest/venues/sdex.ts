@@ -94,6 +94,9 @@ export function deriveSdexPricePoints(
       ? parseFloat(t.price.n) / parseFloat(t.price.d)
       : parseFloat(t.price.d) / parseFloat(t.price.n)
 
+    const now = new Date()
+    const sourceTime = new Date(t.ledger_close_time)
+
     return {
       assetA: pair.assetA.code,
       assetB: pair.assetB.code,
@@ -103,7 +106,9 @@ export function deriveSdexPricePoints(
       baseVolume: parseFloat(t.base_amount),
       counterVolume: parseFloat(t.counter_amount),
       ledger: ledgers[i],
-      timestamp: new Date(t.ledger_close_time),
+      observedAt: now,
+      sourceTime,
+      timestamp: now,
       eventId: t.id,
     }
   })
@@ -131,9 +136,10 @@ export async function writeSdexPricePoints(
   await upsertPricePoints(points, network)
 
   trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
+  const tradeTime = points[points.length - 1].sourceTime ?? points[points.length - 1].observedAt
   last_trade_timestamp.set(
     { pair: pair.pairKey, network },
-    Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
+    Math.floor(tradeTime.getTime() / 1000)
   )
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
@@ -142,7 +148,7 @@ export async function writeSdexPricePoints(
   publishPriceUpdate({
     pair: pair.pairKey,
     price: currentPrice,
-    ts: points[points.length - 1].timestamp.toISOString(),
+    ts: points[points.length - 1].observedAt.toISOString(),
     network,
   })
 
@@ -168,6 +174,7 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
   name: 'SDEX',
   source: 'SDEX',
+  sourceTimeCapability: { status: 'provided', semantic: 'ledger_close' },
 
   isEnabled(_network: NetworkName): boolean {
     return true

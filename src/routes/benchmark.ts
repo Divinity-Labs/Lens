@@ -40,7 +40,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
       // Query latest price (overall) and rolling 24h stats
       const query = `
         SELECT
-          (SELECT ${priceExpr} FROM price_points WHERE pair_key = $1 ORDER BY timestamp DESC LIMIT 1) AS latest_price,
+          (SELECT ${priceExpr} FROM price_points WHERE pair_key = $1 ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS latest_price,
           MAX(${priceExpr}) AS max_price,
           MIN(${priceExpr}) AS min_price,
           AVG(${priceExpr}) AS avg_price,
@@ -50,7 +50,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
           COUNT(*) AS sample_count
         FROM price_points
         WHERE pair_key = $1
-          AND timestamp > NOW() - INTERVAL '24 hours'
+          AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
       `
 
       try {

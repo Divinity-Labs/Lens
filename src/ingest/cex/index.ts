@@ -37,6 +37,8 @@ export interface CexOrderBook {
   timestamp: Date
 }
 
+import type { SourceTimeCapability } from '../venues/types'
+
 /**
  * Every CEX adapter must implement this interface.
  *
@@ -46,6 +48,9 @@ export interface CexOrderBook {
 export interface CexAdapter {
   /** Human-readable exchange identifier used in logs and metrics labels. */
   readonly name: string
+
+  /** Declares whether the adapter can provide a native source time. */
+  readonly sourceTimeCapability: SourceTimeCapability
 
   /**
    * Fetch the latest ticker for a trading pair.

@@ -200,6 +200,34 @@ const unsubscribe = client.subscribe(
 > the exact keys being indexed. Only the pair you subscribe to is delivered;
 > updates for other pairs are filtered out server-side.
 
+## Time Model: Observation Time vs. Source Time
+
+Lens separates observation time from source time to avoid conflating local ingestion wall-clock time with native blockchain or exchange timestamps:
+
+* **`observed_at`** (`DateTime`, non-null): The UTC wall-clock timestamp when Lens recorded/ingested the sample.
+* **`source_time`** (`DateTime?`, nullable): The native timestamp reported by the source venue itself. Null when the source has no native timestamp.
+* **`ledger`** (`Int`): Stellar ledger sequence number, kept distinct from timestamp fields.
+
+### Venue Capabilities
+
+Every venue adapter explicitly declares its `sourceTimeCapability`:
+
+| Venue / Adapter | Status | Semantic | Description |
+|---|---|---|---|
+| **SDEX** | `provided` | `ledger_close` | Horizon ledger close time of the executed trade. |
+| **AMM (Trades)** | `provided` | `ledger_close` | Horizon ledger close time of the pool trade. |
+| **AMM (Snapshots)** | `unavailable` | - | State snapshot; `source_time` is `null`. |
+| **Soroswap AMM** | `unavailable` | - | Contract simulation; `source_time` is `null` (never backfilled with wall-clock). |
+| **Aquarius AMM** | `unavailable` | - | API state snapshot; `source_time` is `null` (never backfilled with wall-clock). |
+| **CEX Adapters** | `provided` | `exchange_timestamp` | Exchange-reported trade/ticker timestamp. |
+
+### Bucketing Rationale
+
+All candle aggregation (`/candles`), time windowing, TWAP, and VWAP calculations key on **`observed_at`** (observation time):
+
+* **Cross-venue completeness**: State-only venues (Soroswap, Aquarius, AMM reserve snapshots) have no trade execution timestamps (`source_time = null`). Bucketing on `source_time` would drop or misrepresent state snapshots.
+* **Monotonic reference clock**: `observed_at` provides a single monotonic time reference across all venues, preventing clock skew, reorg gaps, and polling latency skews from distorting aggregate candles.
+
 ## Usage Examples
 
 Lens gates `/price`, `/pools`, and `/candles` behind x402 micropayments on Stellar (testnet by default). The `/status` endpoint is free.

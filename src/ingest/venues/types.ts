@@ -1,6 +1,12 @@
 import type { NetworkName } from '../../config'
 import type { WatchedPair } from '../../types'
 
+export type SourceTimeSemantic = 'ledger_close' | 'exchange_timestamp' | 'contract_timestamp'
+
+export type SourceTimeCapability =
+  | { readonly status: 'provided'; readonly semantic: SourceTimeSemantic }
+  | { readonly status: 'unavailable'; readonly semantic?: never }
+
 export interface VenuePricePoint {
   assetA: string
   assetB: string
@@ -11,7 +17,10 @@ export interface VenuePricePoint {
   baseVolume: number
   counterVolume: number
   ledger: number
-  timestamp: Date
+  observedAt: Date
+  sourceTime: Date | null
+  /** @deprecated use observedAt or sourceTime */
+  timestamp?: Date
   eventId?: string
 }
 
@@ -27,6 +36,7 @@ export interface VenuePricePoint {
 export interface VenueAdapter<TTarget = any, TRaw = any> {
   readonly name: string
   readonly source: string
+  readonly sourceTimeCapability: SourceTimeCapability
 
   /**
    * Whether this venue adapter is enabled on the given network.

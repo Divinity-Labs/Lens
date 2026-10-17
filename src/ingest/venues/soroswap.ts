@@ -233,6 +233,7 @@ export async function ingestPool(
       return
     }
 
+    const now = new Date()
     await upsertPricePoints(
       [
         {
@@ -245,7 +246,9 @@ export async function ingestPool(
           baseVolume: 0,
           counterVolume: 0,
           ledger: 0,
-          timestamp: new Date(),
+          observedAt: now,
+          sourceTime: null,
+          timestamp: now,
           eventId: `soroswap-${poolEntry.poolAddress}-${Date.now()}`,
         },
       ],
@@ -344,6 +347,7 @@ export async function ingestPair(
 export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   name: 'Soroswap',
   source: 'soroswap_amm',
+  sourceTimeCapability: { status: 'unavailable' },
 
   isEnabled(network: NetworkName): boolean {
     return getNetworkConfig(network).soroswap.enabled
@@ -378,6 +382,7 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
     const spotPrice = calcSpotPrice(reserveA, reserveB)
     if (spotPrice === 0) return []
 
+    const now = new Date()
     return [
       {
         assetA: pair.assetA.code,
@@ -389,7 +394,9 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
         baseVolume: 0,
         counterVolume: 0,
         ledger: 0,
-        timestamp: new Date(),
+        observedAt: now,
+        sourceTime: null,
+        timestamp: now,
         eventId: `soroswap-${target.poolAddress}-${Date.now()}`,
       },
     ]

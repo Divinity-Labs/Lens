@@ -30,7 +30,7 @@ export async function aggregatePrice(
        SUM(base_volume::numeric) AS volume
      FROM price_points
      WHERE pair_key = $1
-       AND timestamp > NOW() - INTERVAL '1 hour'
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '1 hour'
      GROUP BY source`,
     [pairKey]
   )

@@ -8,7 +8,7 @@ async function fetchAssetVWAP(asset: string): Promise<number | null> {
        / NULLIF(SUM(base_volume::numeric), 0) AS vwap
      FROM price_points
      WHERE (asset_a = $1 OR asset_b = $1)
-       AND timestamp > NOW() - INTERVAL '5 minutes'`,
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '5 minutes'`,
     [asset.toUpperCase()]
   )
   const vwap = result.rows[0]?.vwap
