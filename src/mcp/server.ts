@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { fetchWithTimeout } from '../fetch.js';
+import { checkToolLimits, markToolCallComplete } from './rateLimiter.js';
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
@@ -72,11 +73,31 @@ export class BazaarMcpServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === 'bazaar_search') {
-        const url = String(request.params.arguments?.url);
-        const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
+      const toolName = request.params.name;
+      
+      // Check rate and concurrency limits before executing
+      const limitCheck = await checkToolLimits(toolName);
+      if (!limitCheck.allowed) {
+        const errorCode = limitCheck.scope === 'rate' 
+          ? 'ERR_RATE_LIMIT_EXCEEDED' 
+          : limitCheck.scope === 'concurrency'
+          ? 'ERR_CONCURRENCY_LIMIT_EXCEEDED'
+          : 'ERR_SERVICE_UNREACHABLE';
         
-        try {
+        const reason = limitCheck.scope === 'rate'
+          ? `Rate limit exceeded. Retry after ${limitCheck.retryAfterSeconds}s.`
+          : limitCheck.scope === 'concurrency'
+          ? `Too many concurrent tool calls. Retry after ${limitCheck.retryAfterSeconds}s.`
+          : 'Rate limiting service unavailable.';
+        
+        return this.createErrorResponse(errorCode, reason);
+      }
+
+      try {
+        if (toolName === 'bazaar_search') {
+          const url = String(request.params.arguments?.url);
+          const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
+          
           const endpoint = query 
             ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
             : `${url.replace(/\/$/, '')}/discovery/resources`;
@@ -99,16 +120,12 @@ export class BazaarMcpServer {
           return {
             content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
           };
-        } catch (e: any) {
-          return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
         }
-      }
 
-      if (request.params.name === 'paid_call') {
-        const url = String(request.params.arguments?.url);
-        const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
-        
-        try {
+        if (toolName === 'paid_call') {
+          const url = String(request.params.arguments?.url);
+          const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
+          
           const res = await this.fetchWithPayment(url, { method });
           
           if (!res.ok) {
@@ -129,12 +146,13 @@ export class BazaarMcpServer {
           return {
             content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
           };
-        } catch (e: any) {
-          return this.handlePaidCallError(e);
         }
-      }
 
-      throw new Error(`Unknown tool: ${request.params.name}`);
+        throw new Error(`Unknown tool: ${toolName}`);
+      } finally {
+        // Always mark the tool call as complete to free the concurrency slot
+        await markToolCallComplete();
+      }
     });
   }
 
