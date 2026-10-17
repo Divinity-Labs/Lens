@@ -3,6 +3,7 @@ import { getActivePairs } from '../../pairsRegistry'
 import { upsertPricePoints } from '../../db'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { runCycleWithDeadline } from '../cycleDeadline'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 
@@ -44,9 +45,17 @@ export async function writeVenuePricePoints(
   venue: string,
   points: VenuePricePoint[],
   pair: WatchedPair,
-  network: NetworkName
+  network: NetworkName,
+  signal?: AbortSignal
 ): Promise<void> {
   if (points.length === 0) return
+
+  // Cycle-deadline checkpoint (#351): an abandoned cycle skips the write it
+  // has not started yet. The checkpoint is before the unit's only statement,
+  // never between statements — `upsertPricePoints` is a single
+  // `createMany(skipDuplicates)`, so it writes all of these points or none of
+  // them, and the events below fire only for points that actually landed.
+  if (signal?.aborted) return
 
   await upsertPricePoints(points as any, network)
 
@@ -78,17 +87,32 @@ export async function sleep(ms: number): Promise<void> {
 // ── Scheduling, Retry & Error Handling Runner ─────────────────────────────────
 
 /**
+ * Options for a venue adapter's polling loop.
+ */
+export interface VenueAdapterLoopOptions {
+  /**
+   * Stops the loop cleanly at the next cycle boundary instead of running
+   * forever. Production leaves it unset (loops live until the process exits);
+   * tests use it to return from the otherwise-infinite loop.
+   */
+  stopSignal?: AbortSignal
+}
+
+/**
  * Runs an individual venue adapter polling loop.
  *
  * Implements:
  * - Network-enable checking
  * - Scheduling loop based on adapter's getPollIntervalMs()
+ * - A per-cycle deadline: a cycle over its deadline is aborted, abandoned and
+ *   counted (#351) rather than stalling the loop until the upstream recovers
  * - Exponential backoff retry on cycle failure
  * - Fault isolation: errors are caught, logged, and backed off without crashing the host
  */
 export async function startVenueAdapter(
   adapter: VenueAdapter,
-  network: NetworkName = activeNetwork
+  network: NetworkName = activeNetwork,
+  options: VenueAdapterLoopOptions = {}
 ): Promise<void> {
   if (!adapter.isEnabled(network)) {
     console.log(`[${adapter.name}] ${adapter.name} is disabled on ${network} — ingester not started`)
@@ -98,12 +122,28 @@ export async function startVenueAdapter(
   console.log(`[${adapter.name}] Starting ${adapter.name} venue adapter on ${network}`)
 
   let consecutiveErrors = 0
-  while (true) {
+  while (!options.stopSignal?.aborted) {
     try {
-      const pairs = getActivePairs()
-      for (const pair of pairs) {
-        await adapter.ingestPair(pair, network)
-      }
+      // One cycle = one round over every active pair, bounded by the venue's
+      // per-cycle deadline (#351). See src/ingest/cycleDeadline.ts: on
+      // expiry the cycle is aborted and counted, and the next cycle starts
+      // only after this one has unwound, so two cycles against the same venue
+      // can never overlap.
+      await runCycleWithDeadline({
+        venue: adapter.name,
+        network,
+        cycle: async (signal) => {
+          const pairs = getActivePairs()
+          for (const pair of pairs) {
+            // Abandonment checkpoint (#351): the deadline has fired — do not
+            // start another pair. Pairs already in flight keep their own
+            // checkpoints inside the adapter (one write unit each), so the
+            // cycle stops at a unit boundary and no write is left half-done.
+            if (signal.aborted) break
+            await adapter.ingestPair(pair, network, signal)
+          }
+        },
+      })
       consecutiveErrors = 0
     } catch (err) {
       consecutiveErrors++

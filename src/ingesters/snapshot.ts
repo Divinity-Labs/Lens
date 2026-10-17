@@ -2,6 +2,7 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getActivePairs } from '../pairsRegistry'
 import { price_snapshots_total } from '../metrics'
+import { runCycleWithDeadline } from '../ingest/cycleDeadline'
 
 /**
  * Floors a Date down to the start of its minute (seconds/millis zeroed).
@@ -86,8 +87,23 @@ export async function startSnapshotIngester(network: NetworkName = activeNetwork
     await sleep(msToNextMinute)
 
     try {
-      const n = await appendSnapshots(new Date(), network)
-      if (n > 0) console.log(`[snapshot] appended ${n} snapshot(s) on ${network}`)
+      // Sleep to the minute boundary is not part of the cycle — the deadline
+      // bounds the append itself, exactly like one venue-adapter round.
+      //
+      // On expiry (#351) the append is counted as abandoned and the loop
+      // resumes. `appendSnapshots` is a single `INSERT … ON CONFLICT … DO
+      // NOTHING`, so the worst an abandoned snapshot cycle can leave behind
+      // is that fully-committed statement or nothing at all: there is no
+      // sequence of writes for a checkpoint to land in the middle of.
+      await runCycleWithDeadline({
+        venue: 'Snapshot',
+        network,
+        cycle: async (signal) => {
+          if (signal.aborted) return
+          const n = await appendSnapshots(new Date(), network)
+          if (n > 0) console.log(`[snapshot] appended ${n} snapshot(s) on ${network}`)
+        },
+      })
     } catch (err) {
       console.error(`[snapshot] Error appending snapshots on ${network}:`, (err as Error).message)
     }
