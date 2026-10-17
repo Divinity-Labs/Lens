@@ -40,6 +40,20 @@ export const price_snapshots_total = new Counter({
   registers: [register]
 })
 
+export const price_points_pruned_total = new Counter({
+  name: 'price_points_pruned_total',
+  help: 'Total number of old price points pruned from the database',
+  labelNames: ['network'],
+  registers: [register]
+})
+
+export const price_points_rolled_up_total = new Counter({
+  name: 'price_points_rolled_up_total',
+  help: 'Total number of old price points rolled up into aggregates before pruning',
+  labelNames: ['network'],
+  registers: [register]
+})
+
 export const price_requests_total = new Counter({
   name: 'price_requests_total',
   help: 'Total number of price API requests served',

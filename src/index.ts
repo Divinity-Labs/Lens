@@ -15,6 +15,13 @@ import { venueAdapters, startVenueAdapter } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import {
+  createPricePointsRetentionQueue,
+  startPricePointsRetentionWorker,
+  schedulePricePointsRetention,
+  pruneAllNetworks as pruneAllPricePointsNetworks,
+  PRICE_POINTS_RETENTION_DAYS,
+} from './jobs/pricePointsRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
 
 async function main() {
@@ -132,6 +139,44 @@ async function main() {
       console.warn('[lens] Falling back to an in-process hourly prune')
       await Promise.allSettled([retentionQueue?.close(), retentionWorker?.close()])
       setInterval(() => { void safePrune() }, 60 * 60 * 1000).unref()
+    }
+  }
+
+  // ── Price points retention ────────────────────────────────────────────────
+  // price_points receives ticks on every trade across every venue and network.
+  // Without retention, the table grows without bound and exhausts Supabase storage.
+  // Points older than PRICE_POINTS_RETENTION_DAYS are rolled into 1h price_aggregates
+  // before deletion, preserving history while keeping table size bounded.
+  const safePrunePricePoints = async () => {
+    try {
+      const results = await pruneAllPricePointsNetworks()
+      for (const [network, res] of Object.entries(results)) {
+        if (res && (res.pruned > 0 || res.rolledUp > 0)) {
+          console.log(
+            `[lens] Rolled up ${res.rolledUp} points, pruned ${res.pruned} ${network} price point(s) older than ${PRICE_POINTS_RETENTION_DAYS}d`
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[lens] Price points prune failed:', (err as Error).message)
+    }
+  }
+
+  await safePrunePricePoints()
+
+  {
+    let ppRetentionQueue: ReturnType<typeof createPricePointsRetentionQueue> | undefined
+    let ppRetentionWorker: ReturnType<typeof startPricePointsRetentionWorker> | undefined
+    try {
+      ppRetentionQueue = createPricePointsRetentionQueue()
+      ppRetentionWorker = startPricePointsRetentionWorker()
+      await schedulePricePointsRetention(ppRetentionQueue)
+      console.log('[lens] Price points retention worker started')
+    } catch (err) {
+      console.warn('[lens] Price points retention worker skipped (Redis unavailable):', (err as Error).message)
+      console.warn('[lens] Falling back to an in-process hourly price points prune')
+      await Promise.allSettled([ppRetentionQueue?.close(), ppRetentionWorker?.close()])
+      setInterval(() => { void safePrunePricePoints() }, 60 * 60 * 1000).unref()
     }
   }
 
