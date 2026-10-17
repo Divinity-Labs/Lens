@@ -33,6 +33,31 @@ export const statusResponseSchema = {
     // Seconds since the last ingester write for this network, null before the
     // first one. Lets `/status` reveal a stalled ingester on its own.
     ingestLagSeconds: { type: ['integer', 'null'] },
+    ingestionHealth: { type: 'string', enum: ['healthy', 'degraded', 'unhealthy'] },
+    venues: { type: 'object', additionalProperties: true },
+    schemaReadiness: { type: 'string', enum: ['valid', 'mismatch'] },
+  },
+} as const
+
+/** GET /ready */
+export const readyResponseSchema = {
+  type: 'object',
+  required: ['ready', 'status', 'schema'],
+  additionalProperties: false,
+  properties: {
+    ready: { type: 'boolean' },
+    status: { type: 'string', enum: ['ready', 'not_ready'] },
+    schema: {
+      type: 'object',
+      required: ['status'],
+      additionalProperties: true,
+      properties: {
+        status: { type: 'string', enum: ['valid', 'mismatch'] },
+        missingTables: { type: 'array', items: { type: 'string' } },
+        missingColumns: { type: 'array', items: { type: 'string' } },
+        checkedAt: { type: 'string' },
+      },
+    },
   },
 } as const
 

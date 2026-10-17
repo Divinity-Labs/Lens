@@ -59,6 +59,40 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+// ── Ingestion Telemetry & Health (#340, #351) ─────────────────────────────────
+
+export const ingestion_lag_seconds = new Gauge({
+  name: 'ingestion_lag_seconds',
+  help: 'Seconds elapsed since the last successful write for a venue on a network',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
+export const ingestion_cycle_duration_seconds = new Histogram({
+  name: 'ingestion_cycle_duration_seconds',
+  help: 'Duration of venue ingestion cycles in seconds, by venue and network',
+  labelNames: ['venue', 'network'],
+  // Buckets tuned for venue ingestion: fast poll cycles (Horizon ledger cache hits)
+  // are 50ms–250ms, multi-pair Horizon orderbook scans are 500ms–2.5s, while Soroban RPC
+  // or heavy load tests run 5s–15s. The 30s bucket marks the cycle timeout threshold.
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30],
+  registers: [register]
+})
+
+export const ingestion_errors_total = new Counter({
+  name: 'ingestion_errors_total',
+  help: 'Total count of ingestion cycle errors by venue, network, and bounded category',
+  labelNames: ['venue', 'network', 'category'],
+  registers: [register]
+})
+
+export const ingestion_cycles_abandoned_total = new Counter({
+  name: 'ingestion_cycles_abandoned_total',
+  help: 'Total number of ingestion cycles abandoned due to exceeding deadline timeout',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
