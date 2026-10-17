@@ -16,6 +16,7 @@ import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+import { registerShutdownHandlers } from './shutdown'
 
 async function main() {
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
@@ -66,6 +67,10 @@ async function main() {
     console.warn('[lens] WebSocket fan-out init skipped:', (err as Error).message)
   }
 
+  // ── Background queues & workers registry for graceful shutdown (#330) ───
+  const activeQueuesAndWorkers: Array<{ close: () => Promise<unknown> }> = []
+  let isShuttingDown = false
+
   // ── Aggregate refresh worker (non-blocking — requires Redis) ─────────────
   // BullMQ opens its own ioredis connections, separate from ./redis and
   // without our error handler on them. If scheduling fails they are still
@@ -85,6 +90,7 @@ async function main() {
         worker = startAggregateWorker(network)
         await scheduleAggregateRefresh(queue, network)
         started.push(network)
+        activeQueuesAndWorkers.push(queue, worker)
       } catch (err) {
         console.warn(`[lens] Aggregate refresh worker skipped for ${network} (Redis unavailable):`, (err as Error).message)
         await Promise.allSettled([queue?.close(), worker?.close()])
@@ -127,6 +133,7 @@ async function main() {
       retentionWorker = startSnapshotRetentionWorker()
       await scheduleSnapshotRetention(retentionQueue)
       console.log('[lens] Snapshot retention worker started')
+      activeQueuesAndWorkers.push(retentionQueue, retentionWorker)
     } catch (err) {
       console.warn('[lens] Snapshot retention worker skipped (Redis unavailable):', (err as Error).message)
       console.warn('[lens] Falling back to an in-process hourly prune')
@@ -142,8 +149,11 @@ async function main() {
   // ingesters running on testnet.
   const restartIngester = (name: string, network: NetworkName, fn: () => Promise<void>) => {
     fn().catch(err => {
+      if (isShuttingDown) return
       console.error(`[lens] ${name}/${network} ingester crashed, restarting in 10s:`, err.message)
-      setTimeout(() => restartIngester(name, network, fn), 10_000)
+      setTimeout(() => {
+        if (!isShuttingDown) restartIngester(name, network, fn)
+      }, 10_000)
     })
   }
 
@@ -155,6 +165,18 @@ async function main() {
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))
   }
+
+  // ── Register graceful shutdown handlers (#330, #347) ──────────────────────
+  registerShutdownHandlers({
+    app,
+    stopIngesters: () => {
+      isShuttingDown = true
+    },
+    fanOut: fanOutManager,
+    queuesAndWorkers: activeQueuesAndWorkers,
+    pgPool,
+    redis,
+  })
 
   console.log(`[lens] Watching ${getActivePairs().length} pairs: ${getActivePairs().map(p => p.pairKey).join(', ')}`)
 }

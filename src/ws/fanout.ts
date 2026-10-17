@@ -4,11 +4,17 @@ import { activeNetwork } from '../config'
 import { priceEmitter, PRICE_UPDATE, PriceUpdateEvent } from '../events'
 import { register, Gauge, Counter } from 'prom-client'
 
-// ─── Metrics ──────────────────────────────────────────────────────────────────
+// ─── Metrics (#336, #335) ─────────────────────────────────────────────────────
 export const ws_clients_total = new Gauge({
   name: 'ws_clients_total',
-  help: 'Current number of connected WebSocket clients',
+  help: 'Current number of connected WebSocket clients by pair label',
   labelNames: ['pair'],
+  registers: [register],
+})
+
+export const ws_connected_clients = new Gauge({
+  name: 'ws_connected_clients',
+  help: 'Total number of active connected WebSocket clients',
   registers: [register],
 })
 
@@ -21,14 +27,43 @@ export const ws_messages_sent_total = new Counter({
 
 export const ws_messages_dropped_total = new Counter({
   name: 'ws_messages_dropped_total',
-  help: 'Total number of price updates dropped due to client backpressure',
+  help: 'Total number of price updates dropped due to client backpressure or buffer threshold',
+  labelNames: ['pair'],
+  registers: [register],
+})
+
+export const ws_slow_clients_total = new Counter({
+  name: 'ws_slow_clients_total',
+  help: 'Total number of slow clients dropped due to buffer overflow',
   labelNames: ['pair'],
   registers: [register],
 })
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 const REDIS_CHANNEL = `lens:${activeNetwork}:price:updates`
-const DEFAULT_COALESCE_INTERVAL_MS = 100 // max 10 updates/sec per client
+export const DEFAULT_COALESCE_INTERVAL_MS = 100 // max 10 updates/sec per client
+
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000 // ping interval (#336)
+export const DEFAULT_MAX_MISSED_PINGS = 2 // max missed pings before reaping (#336)
+
+export const DEFAULT_BUFFER_THRESHOLD_BYTES = 64 * 1024 // 64 KB soft coalescing threshold (#335)
+export const DEFAULT_BUFFER_MAX_BYTES = 256 * 1024 // 256 KB hard limit before dropping client (#335)
+
+export function getHeartbeatIntervalMs(): number {
+  return parseInt(process.env.WS_HEARTBEAT_INTERVAL_MS ?? '', 10) || DEFAULT_HEARTBEAT_INTERVAL_MS
+}
+
+export function getMaxMissedPings(): number {
+  return parseInt(process.env.WS_MAX_MISSED_PINGS ?? '', 10) || DEFAULT_MAX_MISSED_PINGS
+}
+
+export function getBufferThresholdBytes(): number {
+  return parseInt(process.env.WS_BUFFER_THRESHOLD_BYTES ?? '', 10) || DEFAULT_BUFFER_THRESHOLD_BYTES
+}
+
+export function getBufferMaxBytes(): number {
+  return parseInt(process.env.WS_BUFFER_MAX_BYTES ?? '', 10) || DEFAULT_BUFFER_MAX_BYTES
+}
 
 /**
  * Pair names can contain arbitrary asset codes and issuer identifiers supplied
@@ -43,7 +78,10 @@ function pairMetricLabel(pairKey: string): 'other' | null {
 export interface FanOutClient {
   id: string
   send: (data: string) => void
-  close: () => void
+  close: (code?: number, reason?: string) => void
+  ping?: () => void
+  terminate?: () => void
+  bufferedAmount?: number
 }
 
 interface InternalClient {
@@ -54,10 +92,12 @@ interface InternalClient {
   pendingUpdate: string | null
   timer: ReturnType<typeof setTimeout> | null
   destroyed: boolean
+  isAlive: boolean
+  missedPings: number
 }
 
 // ─── Fan-Out Manager ──────────────────────────────────────────────────────────
-class FanOutManager {
+export class FanOutManager {
   private clients = new Map<string, InternalClient>() // clientId -> client
   private pairClients = new Map<string, Set<string>>() // pairKey -> Set<clientId>
 
@@ -66,7 +106,17 @@ class FanOutManager {
   private publisher: typeof redis = redis
   private redisConnected = false
 
+  // Heartbeat state (#336)
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+  // Shutdown lifecycle state (#347)
+  private isDestroying = false
+  private isDestroyed = false
+
   async initialize(): Promise<void> {
+    // Start periodic heartbeat watchdog
+    this.startHeartbeat()
+
     // Subscribe to local price emitter (always works)
     priceEmitter.on(PRICE_UPDATE, (event: PriceUpdateEvent) => {
       this.onPriceUpdate(event)
@@ -110,6 +160,8 @@ class FanOutManager {
       pendingUpdate: null,
       timer: null,
       destroyed: false,
+      isAlive: true,
+      missedPings: 0,
     }
 
     this.clients.set(id, client)
@@ -123,12 +175,13 @@ class FanOutManager {
     const metricPair = pairMetricLabel(pairKey)
     if (metricPair) ws_clients_total.labels(metricPair).inc()
     ws_clients_total.labels('*').inc()
+    ws_connected_clients.inc()
 
     // Return unsubscribe function
     return () => this.unregister(id)
   }
 
-  private unregister(id: string): void {
+  unregister(id: string): void {
     const client = this.clients.get(id)
     if (!client) return
     if (client.timer) clearTimeout(client.timer)
@@ -146,7 +199,77 @@ class FanOutManager {
     const metricPair = pairMetricLabel(client.pairKey)
     if (metricPair) ws_clients_total.labels(metricPair).dec()
     ws_clients_total.labels('*').dec()
+    ws_connected_clients.dec()
   }
+
+  // ─── Heartbeat Management (#336) ───────────────────────────────────────────
+
+  startHeartbeat(intervalMs?: number): void {
+    this.stopHeartbeat()
+    const interval = intervalMs ?? getHeartbeatIntervalMs()
+    this.heartbeatTimer = setInterval(() => {
+      this.checkHeartbeats()
+    }, interval)
+    if (this.heartbeatTimer && typeof this.heartbeatTimer === 'object' && 'unref' in this.heartbeatTimer) {
+      this.heartbeatTimer.unref()
+    }
+  }
+
+  stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
+  checkHeartbeats(): void {
+    const maxMissed = getMaxMissedPings()
+    const clientList = Array.from(this.clients.values())
+
+    for (const client of clientList) {
+      if (client.destroyed) continue
+
+      if (!client.isAlive) {
+        client.missedPings++
+        if (client.missedPings >= maxMissed) {
+          // Client stopped responding — terminate/close and reap cleanly
+          try {
+            if (client.socket.terminate) {
+              client.socket.terminate()
+            } else {
+              client.socket.close(1006, 'Ping timeout')
+            }
+          } catch {
+            // ignore
+          }
+          this.unregister(client.id)
+          continue
+        }
+      } else {
+        // Expect pong response before next cycle
+        client.isAlive = false
+      }
+
+      // Send ping probe
+      try {
+        if (client.socket.ping) {
+          client.socket.ping()
+        }
+      } catch {
+        this.unregister(client.id)
+      }
+    }
+  }
+
+  recordPong(id: string): void {
+    const client = this.clients.get(id)
+    if (client) {
+      client.isAlive = true
+      client.missedPings = 0
+    }
+  }
+
+  // ─── Price Update Broadcasting ──────────────────────────────────────────────
 
   /**
    * Called when a price update is received from the local emitter.
@@ -200,9 +323,11 @@ class FanOutManager {
 
       if (elapsed >= DEFAULT_COALESCE_INTERVAL_MS) {
         // Client is ready to receive
-        this.sendToClient(client, payload)
-        client.lastSent = now
-        client.pendingUpdate = null
+        const sent = this.sendToClient(client, payload)
+        if (sent) {
+          client.lastSent = now
+          client.pendingUpdate = null
+        }
       } else {
         // Client is too fast — coalesce: buffer the latest update
         client.pendingUpdate = payload
@@ -212,9 +337,11 @@ class FanOutManager {
             client.timer = null
             if (client.destroyed) return
             if (client.pendingUpdate) {
-              this.sendToClient(client, client.pendingUpdate)
-              client.lastSent = Date.now()
-              client.pendingUpdate = null
+              const sent = this.sendToClient(client, client.pendingUpdate)
+              if (sent) {
+                client.lastSent = Date.now()
+                client.pendingUpdate = null
+              }
             }
           }, timeout)
         }
@@ -222,22 +349,62 @@ class FanOutManager {
     }
   }
 
-  private sendToClient(client: InternalClient, payload: string): void {
+  /**
+   * Sends payload to a client enforcing backpressure and buffer threshold checks (#335).
+   * Returns true only when socket.send actually executes successfully.
+   */
+  private sendToClient(client: InternalClient, payload: string): boolean {
+    if (client.destroyed) return false
+
+    const buffered = client.socket.bufferedAmount ?? 0
+    const hardLimit = getBufferMaxBytes()
+    const softThreshold = getBufferThresholdBytes()
+    const metricPair = pairMetricLabel(client.pairKey)
+
+    // Hard ceiling: client is stalled and accumulating unbounded memory (#335)
+    if (buffered >= hardLimit) {
+      if (metricPair) ws_slow_clients_total.labels(metricPair).inc()
+      ws_slow_clients_total.labels('*').inc()
+      try {
+        client.socket.close(1008, 'Buffer overflow')
+      } catch {
+        // ignore
+      }
+      this.unregister(client.id)
+      return false
+    }
+
+    // Soft threshold: socket is lagging behind; drop intermediate updates and coalesce (#335)
+    if (buffered >= softThreshold) {
+      if (metricPair) ws_messages_dropped_total.labels(metricPair).inc()
+      ws_messages_dropped_total.labels('*').inc()
+      client.pendingUpdate = payload
+      return false
+    }
+
     try {
       client.socket.send(payload)
-      const metricPair = pairMetricLabel(client.pairKey)
       if (metricPair) ws_messages_sent_total.labels(metricPair).inc()
       ws_messages_sent_total.labels('*').inc()
+      return true
     } catch {
       // Client likely disconnected
       this.unregister(client.id)
+      return false
     }
   }
 
   /**
-   * Dispose all clients and clean up.
+   * Graceful Shutdown & Cleanup (#347)
+   * Sends close frames with code 1001 ('Server shutting down') and allows a flush window.
+   * Completely idempotent and safe against mid-fanout calls.
    */
-  async destroy(): Promise<void> {
+  async destroy(closeCode = 1001, reason = 'Server shutting down', flushWindowMs = 0): Promise<void> {
+    if (this.isDestroyed || this.isDestroying) return
+    this.isDestroying = true
+
+    this.stopHeartbeat()
+
     if (this.subscriber) {
       try {
         await this.subscriber.unsubscribe(REDIS_CHANNEL)
@@ -245,10 +412,60 @@ class FanOutManager {
         // subscriber may not have connected — ignore
       }
       this.subscriber.disconnect()
+      this.subscriber = null
     }
-    for (const [id] of this.clients) {
-      this.unregister(id)
+
+    // Allow in-flight sends / queued coalesced messages a brief window to flush (#347)
+    if (flushWindowMs > 0 && this.clients.size > 0) {
+      await new Promise(resolve => setTimeout(resolve, flushWindowMs))
     }
+
+    const clientList = Array.from(this.clients.values())
+    for (const client of clientList) {
+      try {
+        if (client.timer) {
+          clearTimeout(client.timer)
+          client.timer = null
+        }
+        client.destroyed = true
+        client.socket.close(closeCode, reason)
+      } catch {
+        // do not throw
+      }
+      this.unregister(client.id)
+    }
+
+    this.clients.clear()
+    this.pairClients.clear()
+    this.isDestroying = false
+    this.isDestroyed = true
+  }
+
+  // ─── Inspection Helpers for Testing & Health Checks (#336) ───────────────────
+
+  getClientCount(): number {
+    return this.clients.size
+  }
+
+  getSubscriptionCount(pairKey?: string): number {
+    if (pairKey) return this.pairClients.get(pairKey)?.size ?? 0
+    return this.pairClients.size
+  }
+
+  getClientsMap(): ReadonlyMap<string, InternalClient> {
+    return this.clients
+  }
+
+  getPairClientsMap(): ReadonlyMap<string, ReadonlySet<string>> {
+    return this.pairClients
+  }
+
+  resetForTesting(): void {
+    this.stopHeartbeat()
+    this.clients.clear()
+    this.pairClients.clear()
+    this.isDestroyed = false
+    this.isDestroying = false
   }
 }
 
