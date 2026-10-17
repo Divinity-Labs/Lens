@@ -39,6 +39,16 @@ export interface NetworkConfig {
     /** Reflector oracle contract ID for this network. */
     reflectorContractId: string
   }
+  blend: {
+    /** Whether Blend lending rate ingestion is enabled on this network. */
+    enabled: boolean
+    /** Blend pool contract addresses for this network. */
+    pools: string[]
+    /** Blend backstop contract address for this network. */
+    backstopContractId: string
+    /** How often to poll Blend pool reserves in ms. */
+    pollIntervalMs: number
+  }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
   facilitator: {
@@ -185,6 +195,48 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (process.env[`REFLECTOR_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(reflectorContractId, `REFLECTOR_CONTRACT_ID_${suffix}`)
 
+  // ── Blend lending protocol ────────────────────────────────────────────────
+  const MAINNET_BLEND_POOLS = [
+    'CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD', // Fixed Pool v2
+    'CCCCIQSDILITHMM7PBSLVDT5MISSY7R26MNZXCX4H7J5JQ5FPIYOGYFS', // YieldBlox Pool v2
+    'CDVQVKOY2YSXS2IC7KN6MNASSHPAO7UN2UR2ON4OI2SKMFJNVAMDX6DP', // Fixed Pool v1
+    'CBP7NO6F7FRDHSOFQBT2L2UWYIZ2PU76JKVRYAQTG3KZSQLYAOKIF2WB', // YieldBlox Pool v1
+  ]
+  const MAINNET_BLEND_BACKSTOP = 'CAQQR5SWBXKIGZKPBZDH3KM5GQ5GUTPKB7JAFCINLZBC5WXPJKRG3IM7'
+
+  const TESTNET_BLEND_POOLS = [
+    'CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF', // TestnetV2 Pool
+  ]
+  const TESTNET_BLEND_BACKSTOP = 'CBDVWXT433PRVTUNM56C3JREF3HIZHRBA64NB2C3B2UNCKIS65ZYCLZA'
+
+  const blendBackstop =
+    process.env[`BLEND_BACKSTOP_${suffix}`] ||
+    (network === 'testnet' ? process.env.BLEND_BACKSTOP : undefined) ||
+    (network === 'mainnet' ? MAINNET_BLEND_BACKSTOP : TESTNET_BLEND_BACKSTOP)
+
+  const rawBlendPools =
+    process.env[`BLEND_POOLS_${suffix}`] ||
+    (network === 'testnet' ? process.env.BLEND_POOLS : undefined)
+
+  const parsedBlendPools: string[] = rawBlendPools
+    ? rawBlendPools
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => isUsableContractId(p, `BLEND_POOLS_${suffix}`))
+    : (network === 'mainnet' ? MAINNET_BLEND_POOLS : TESTNET_BLEND_POOLS)
+
+  const blendEnabled =
+    (process.env[`BLEND_ENABLED_${suffix}`] ?? (network === 'testnet' ? (process.env.BLEND_ENABLED ?? 'true') : 'true')).toLowerCase() !== 'false' &&
+    parsedBlendPools.length > 0 &&
+    isUsableContractId(blendBackstop, `BLEND_BACKSTOP_${suffix}`)
+
+  const blendPollMs = parseInt(
+    process.env[`BLEND_POLL_INTERVAL_MS_${suffix}`] ||
+    process.env.BLEND_POLL_INTERVAL_MS ||
+    '60000',
+    10
+  )
+
   // ── Watched pairs ─────────────────────────────────────────────────────────
   // Mainnet gets a default for the same reason every field above does: turning
   // it on should not require knowing an issuer address by heart. USDC/XLM is
@@ -225,6 +277,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
       apiUrl: aquariusApiUrl,
     },
     oracle: { enabled: oracleEnabled, reflectorContractId },
+    blend: {
+      enabled: blendEnabled,
+      pools: parsedBlendPools,
+      backstopContractId: blendBackstop,
+      pollIntervalMs: blendPollMs,
+    },
     pairs: parseWatchedPairs(rawPairs),
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
@@ -324,6 +382,7 @@ export const config = {
   get soroswap() { return resolveNetwork(activeNetwork).soroswap },
   get aquarius() { return resolveNetwork(activeNetwork).aquarius },
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
+  get blend()    { return resolveNetwork(activeNetwork).blend },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 

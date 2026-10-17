@@ -11,10 +11,11 @@ import { pgPool } from './db'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
-import { venueAdapters, startVenueAdapter } from './ingest/venues'
+import { venueAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
 
 async function main() {
@@ -135,6 +136,38 @@ async function main() {
     }
   }
 
+  // ── Lending rate retention ────────────────────────────────────────────────
+  const safeRatePrune = async () => {
+    try {
+      const counts = await pruneAllRateNetworks()
+      for (const [network, pruned] of Object.entries(counts)) {
+        if (pruned > 0) {
+          console.log(`[lens] Pruned ${pruned} ${network} lending rate(s) older than ${RATE_RETENTION_DAYS}d`)
+        }
+      }
+    } catch (err) {
+      console.error('[lens] Lending rate prune failed:', (err as Error).message)
+    }
+  }
+
+  await safeRatePrune()
+
+  {
+    let rateRetentionQueue: ReturnType<typeof createRateRetentionQueue> | undefined
+    let rateRetentionWorker: ReturnType<typeof startRateRetentionWorker> | undefined
+    try {
+      rateRetentionQueue = createRateRetentionQueue()
+      rateRetentionWorker = startRateRetentionWorker()
+      await scheduleRateRetention(rateRetentionQueue)
+      console.log('[lens] Lending rate retention worker started')
+    } catch (err) {
+      console.warn('[lens] Lending rate retention worker skipped (Redis unavailable):', (err as Error).message)
+      console.warn('[lens] Falling back to an in-process hourly rate prune')
+      await Promise.allSettled([rateRetentionQueue?.close(), rateRetentionWorker?.close()])
+      setInterval(() => { void safeRatePrune() }, 60 * 60 * 1000).unref()
+    }
+  }
+
   // ── Ingesters (run in background — infinite loops) ────────────────────────
   // Each ingester is independently fault-isolated via restartIngester, keyed by
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
@@ -154,6 +187,7 @@ async function main() {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))
+    restartIngester('Blend', network, () => startBlendIngester(network))
   }
 
   console.log(`[lens] Watching ${getActivePairs().length} pairs: ${getActivePairs().map(p => p.pairKey).join(', ')}`)

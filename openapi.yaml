@@ -1197,6 +1197,96 @@ paths:
         '402':
           $ref: '#/components/responses/PaymentRequired'
 
+  /rates:
+    get:
+      operationId: getLendingRates
+      summary: Query latest lending and borrow rates across pools
+      description: Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.
+      security: []
+      parameters:
+        - name: asset
+          in: query
+          required: false
+          description: Filter by asset symbol (e.g. USDC, XLM)
+          schema:
+            type: string
+        - name: poolId
+          in: query
+          required: false
+          description: Filter by pool contract ID
+          schema:
+            type: string
+        - name: network
+          in: query
+          required: false
+          description: Stellar network to query (testnet or mainnet)
+          schema:
+            type: string
+            enum: [testnet, mainnet]
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of rate records to return
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Latest lending rates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LendingRatesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /rates/{asset}:
+    get:
+      operationId: getLendingRatesForAsset
+      summary: Query latest lending and borrow rates for a specific asset
+      description: Returns the latest supply and borrow rates, utilisation, and reserves for a specific asset (e.g. USDC, XLM).
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          description: Asset symbol (e.g. USDC, XLM)
+          schema:
+            type: string
+        - name: poolId
+          in: query
+          required: false
+          description: Filter by pool contract ID
+          schema:
+            type: string
+        - name: network
+          in: query
+          required: false
+          description: Stellar network to query (testnet or mainnet)
+          schema:
+            type: string
+            enum: [testnet, mainnet]
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of rate records to return
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Latest lending rates for the requested asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetLendingRatesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
 components:
   securitySchemes:
     x402:
@@ -1283,6 +1373,80 @@ components:
                 type: string
 
   schemas:
+    LendingRateEntry:
+      type: object
+      required: [id, venue, source, network, poolId, asset, supplyApy, borrowApy, utilization, timestamp]
+      properties:
+        id:
+          type: string
+        venue:
+          type: string
+          example: blend
+        source:
+          type: string
+          example: blend
+        network:
+          type: string
+          example: mainnet
+        poolId:
+          type: string
+        asset:
+          type: string
+          example: USDC
+        assetAddress:
+          type: string
+          nullable: true
+        supplyApy:
+          type: number
+        borrowApy:
+          type: number
+        supplyApr:
+          type: number
+          nullable: true
+        borrowApr:
+          type: number
+          nullable: true
+        utilization:
+          type: number
+        totalSupply:
+          type: number
+          nullable: true
+        totalBorrowed:
+          type: number
+          nullable: true
+        reserves:
+          type: number
+          nullable: true
+        ledger:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    LendingRatesResponse:
+      type: object
+      required: [network, rates]
+      properties:
+        network:
+          type: string
+        rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/LendingRateEntry'
+
+    AssetLendingRatesResponse:
+      type: object
+      required: [asset, network, rates]
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+        rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/LendingRateEntry'
+
     Asset:
       type: object
       properties:

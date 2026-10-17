@@ -10,6 +10,7 @@ export { sdexAdapter, startSDEXIngester } from './sdex'
 export { ammAdapter, startAMMIngester } from './amm'
 export { soroswapAdapter, startSoroswapIngester } from './soroswap'
 export { aquariusAdapter, startAquariusIngester } from './aquarius'
+export { blendAdapter, startBlendIngester } from './blend'
 
 /**
  * Registry of all available venue adapters.

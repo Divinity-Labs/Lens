@@ -85,3 +85,77 @@ export async function setIndexerCursor(id: string, cursor: string, network: Netw
     update: { lastCursor: cursor, lastLedger: ledger, lastProcessedAt: new Date() },
   })
 }
+
+export interface LendingRateInput {
+  poolId: string
+  asset: string
+  assetAddress?: string
+  source?: string
+  supplyApy: number
+  borrowApy: number
+  supplyApr?: number
+  borrowApr?: number
+  utilization: number
+  totalSupply?: number
+  totalBorrowed?: number
+  reserves?: number
+  ledger?: number
+  timestamp?: Date
+}
+
+export async function insertLendingRates(
+  rates: LendingRateInput[],
+  network: NetworkName
+): Promise<number> {
+  if (rates.length === 0) return 0
+  const result = await prisma.lendingRate.createMany({
+    data: rates.map(r => ({
+      network,
+      source: r.source ?? 'blend',
+      poolId: r.poolId,
+      asset: r.asset,
+      assetAddress: r.assetAddress ?? null,
+      supplyApy: r.supplyApy,
+      borrowApy: r.borrowApy,
+      supplyApr: r.supplyApr ?? null,
+      borrowApr: r.borrowApr ?? null,
+      utilization: r.utilization,
+      totalSupply: r.totalSupply ?? null,
+      totalBorrowed: r.totalBorrowed ?? null,
+      reserves: r.reserves ?? null,
+      ledger: r.ledger ?? 0,
+      timestamp: r.timestamp ?? new Date(),
+    })),
+  })
+  return result.count
+}
+
+export async function getLatestLendingRates(
+  network: NetworkName,
+  options?: { asset?: string; poolId?: string; limit?: number }
+) {
+  const limit = options?.limit ?? 100
+  let query = `
+    SELECT DISTINCT ON (pool_id, asset)
+      id, network, source, pool_id, asset, asset_address,
+      supply_apy::float, borrow_apy::float, supply_apr::float, borrow_apr::float,
+      utilization::float, total_supply::float, total_borrowed::float, reserves::float,
+      ledger, timestamp
+    FROM lending_rates
+    WHERE network = $1
+  `
+  const params: any[] = [network]
+  if (options?.asset) {
+    params.push(options.asset.toUpperCase())
+    query += ` AND UPPER(asset) = $${params.length}`
+  }
+  if (options?.poolId) {
+    params.push(options.poolId)
+    query += ` AND pool_id = $${params.length}`
+  }
+  query += ` ORDER BY pool_id, asset, timestamp DESC LIMIT $${params.length + 1}`
+  params.push(limit)
+
+  const result = await pgPool.query(query, params)
+  return result.rows
+}

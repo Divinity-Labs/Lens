@@ -40,6 +40,20 @@ export const price_snapshots_total = new Counter({
   registers: [register]
 })
 
+export const blend_pool_errors_total = new Counter({
+  name: 'blend_pool_errors_total',
+  help: 'Total number of Blend pool read failures',
+  labelNames: ['pool', 'network'],
+  registers: [register],
+})
+
+export const blend_rates_ingested_total = new Counter({
+  name: 'blend_rates_ingested_total',
+  help: 'Total number of Blend pool rate records ingested',
+  labelNames: ['pool', 'network'],
+  registers: [register],
+})
+
 export const price_requests_total = new Counter({
   name: 'price_requests_total',
   help: 'Total number of price API requests served',

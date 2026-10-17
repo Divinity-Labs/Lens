@@ -270,3 +270,28 @@ model ApiKey {
 
   @@map("api_keys")
 }
+
+model LendingRate {
+  id            String   @default(uuid())
+  network       String   @default("testnet")
+  source        String   @default("blend")
+  poolId        String   @map("pool_id")
+  asset         String
+  assetAddress  String?  @map("asset_address")
+  supplyApy     Decimal  @map("supply_apy") @db.Decimal(36, 18)
+  borrowApy     Decimal  @map("borrow_apy") @db.Decimal(36, 18)
+  supplyApr     Decimal? @map("supply_apr") @db.Decimal(36, 18)
+  borrowApr     Decimal? @map("borrow_apr") @db.Decimal(36, 18)
+  utilization   Decimal  @db.Decimal(36, 18)
+  totalSupply   Decimal? @map("total_supply") @db.Decimal(36, 7)
+  totalBorrowed Decimal? @map("total_borrowed") @db.Decimal(36, 7)
+  reserves      Decimal? @db.Decimal(36, 7)
+  ledger        Int      @default(0)
+  timestamp     DateTime
+
+  @@id([id, timestamp])
+  @@index([network, poolId, timestamp(sort: Desc)])
+  @@index([network, asset, timestamp(sort: Desc)])
+  @@index([network, poolId, asset, timestamp(sort: Desc)])
+  @@map("lending_rates")
+}
