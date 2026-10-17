@@ -30,6 +30,24 @@ export interface ReflectorPrice {
   timestamp: number
 }
 
+/**
+ * Error thrown when Reflector cannot be read at all (RPC unavailable,
+ * simulation failed, etc.) as opposed to the contract returning no
+ * price for a genuinely unknown asset.
+ */
+export class ReflectorFetchError extends Error {
+  constructor(
+    public readonly assetCode: string,
+    public readonly network: NetworkName,
+    public readonly cause: unknown
+  ) {
+    super(
+      `Reflector fetch failed for ${assetCode} on ${network}: ${cause instanceof Error ? cause.message : String(cause)}`
+    )
+    this.name = 'ReflectorFetchError'
+  }
+}
+
 /** Reflector implementation of the shared oracle adapter contract. */
 export const reflectorOracleAdapter: OracleAdapter = {
   name: 'reflector',
@@ -37,14 +55,19 @@ export const reflectorOracleAdapter: OracleAdapter = {
     return getNetworkConfig(network).oracle.enabled
   },
   getPrice(asset, network) {
+    // Propagates ReflectorFetchError on failure; null means genuinely empty.
     return getCachedReflectorPrice(asset, network)
   },
 }
 
 /**
  * Fetch the latest price for a given asset code from the Reflector oracle on
- * the given network. Returns null when the contract is unreachable, the
- * network has no Reflector deployment configured, or the asset is unknown.
+ * the given network.
+ *
+ * Returns null only when the network has no Reflector deployment
+ * configured or the contract reports no price for the asset (a genuinely
+ * empty result). When the oracle cannot be read at all an error is
+ * thrown so the caller can distinguish failure from emptiness.
  */
 export async function fetchReflectorPrice(
   assetCode: string,
@@ -71,13 +94,23 @@ export async function fetchReflectorPrice(
       .build()
 
     const result = await rpc.simulateTransaction(tx)
-    if (!SorobanRpc.Api.isSimulationSuccess(result)) return null
+    if (!SorobanRpc.Api.isSimulationSuccess(result)) {
+      // A failed simulation means the oracle could not be read, not that the
+      // asset has no price.
+      throw new ReflectorFetchError(
+        assetCode,
+        network,
+        new Error(`simulation failed: ${JSON.stringify(result)}`)
+      )
+    }
 
     const raw = scValToNative((result as any).result?.retval) as {
       price?: bigint
       timestamp?: bigint
     } | null
 
+    // A missing price in a successful simulation is a genuinely empty
+    // result (unknown asset), not a failure.
     if (!raw || raw.price === undefined) return null
 
     // Reflector uses 14 decimal places of precision
@@ -88,8 +121,13 @@ export async function fetchReflectorPrice(
       price,
       timestamp: Number(raw.timestamp ?? 0),
     }
-  } catch {
-    return null
+  } catch (err) {
+    if (err instanceof ReflectorFetchError) throw err
+    console.error(
+      `[reflector] failed to fetch price for ${assetCode} on ${network}:`,
+      err
+    )
+    throw new ReflectorFetchError(assetCode, network, err)
   }
 }
 
@@ -106,6 +144,8 @@ export async function getCachedReflectorPrice(
   if (entry && Date.now() - entry.fetchedAt < CACHE_TTL_MS) {
     return entry.quote
   }
+  // A thrown error propagates to the caller so failure is not conflated
+  // with an empty quote.
   const fresh = await fetchReflectorPrice(asset, network)
   if (fresh) {
     const quote = { price: fresh.price, timestamp: fresh.timestamp }
