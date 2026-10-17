@@ -15,7 +15,7 @@ vi.mock('../db', () => ({
 
 import { prisma } from '../db'
 import { registerWebhookRoutes } from '../routes/webhooks'
-import { dispatchPriceUpdate } from '../webhookDispatcher'
+import { dispatchPriceUpdate, setRandomSource } from '../webhookDispatcher'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function buildApp() {
@@ -226,6 +226,7 @@ describe('dispatchPriceUpdate', () => {
 
   it('retries on 5xx and stops retrying on 4xx', async () => {
     vi.useFakeTimers()
+    setRandomSource(() => 0)
 
     vi.mocked(prisma.webhook.findMany).mockResolvedValue([
       { id: 'wh-4', url: 'https://hook.example.com', assetA: 'XLM', assetB: 'USD',
@@ -249,6 +250,7 @@ describe('dispatchPriceUpdate', () => {
     expect(global.fetch).toHaveBeenCalledTimes(3)
 
     vi.useRealTimers()
+    setRandomSource(Math.random)
   })
 
   it('does not retry on 4xx client errors', async () => {
@@ -263,6 +265,48 @@ describe('dispatchPriceUpdate', () => {
 
     // Should NOT have retried — only 1 call
     expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('jitters retry delays so simultaneous failures do not synchronise', async () => {
+    vi.useFakeTimers()
+
+    vi.mocked(prisma.webhook.findMany).mockResolvedValue([
+      { id: 'wh-6', url: 'https://hook.example.com', assetA: 'XLM', assetB: 'USD',
+        threshold: 0.10, direction: 'above', secret: 'sec', createdAt: new Date() },
+    ] as any)
+
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+
+    // First delivery: randomness returns 0 → no delay added on first retry.
+    setRandomSource(() => 0)
+    const first = dispatchPriceUpdate({
+      assetA: 'XLM', assetB: 'USD', previousPrice: 0.09, currentPrice: 0.11,
+    })
+    await vi.runAllTimersAsync()
+    await first
+    const firstCallCount = vi.mocked(global.fetch).mock.calls.length
+
+    // Second delivery: randomness returns 0.5 → retries are offset from the first.
+    vi.mocked(global.fetch).mockClear()
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+    setRandomSource(() => 0.5)
+    const second = dispatchPriceUpdate({
+      assetA: 'XLM', assetB: 'USD', previousPrice: 0.09, currentPrice: 0.11,
+    })
+    await vi.runAllTimersAsync()
+    await second
+
+    expect(firstCallCount).toBe(3)
+    expect(vi.mocked(global.fetch).mock.calls.length).toBe(3)
+
+    vi.useRealTimers()
+    setRandomSource(Math.random)
   })
 
   it('filters webhooks by the provided network and ignores other networks', async () => {

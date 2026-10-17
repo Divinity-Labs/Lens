@@ -1,8 +1,12 @@
 import { createHmac } from 'crypto'
 import { fetchWithTimeout } from '../fetch'
 
-function retryDelayMs(attempt: number): number {
-  return Math.pow(2, attempt - 1) * 1000
+export type RandomSource = () => number
+
+function retryDelayMs(attempt: number, random: RandomSource = Math.random): number {
+  const cap = Math.pow(2, attempt - 1) * 1000
+  // Full jitter: uniformly distributed in [0, cap]
+  return Math.floor(random() * cap)
 }
 
 function signPayload(payload: string, secret: string): string {
@@ -14,6 +18,7 @@ export async function deliverJsonWithRetries(
   body: object,
   secret: string,
   attempt = 1,
+  random: RandomSource = Math.random,
 ): Promise<void> {
   const payload = JSON.stringify(body)
   const signature = signPayload(payload, secret)
@@ -31,8 +36,8 @@ export async function deliverJsonWithRetries(
     })
   } catch (err) {
     if (attempt < 3) {
-      await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt)))
-      return deliverJsonWithRetries(url, body, secret, attempt + 1)
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt, random)))
+      return deliverJsonWithRetries(url, body, secret, attempt + 1, random)
     }
 
     console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}:`, (err as Error).message)
@@ -47,8 +52,8 @@ export async function deliverJsonWithRetries(
   }
 
   if (attempt < 3) {
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt)))
-    return deliverJsonWithRetries(url, body, secret, attempt + 1)
+    await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt, random)))
+    return deliverJsonWithRetries(url, body, secret, attempt + 1, random)
   }
 
   console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}: HTTP ${res.status}`)
