@@ -1,18 +1,44 @@
 import { pgPool } from '../db'
+import { getPoolFee, PoolFeeOptions } from './pool-fee'
 
 export interface DepthLevel {
   price: number
   size: number
 }
 
+export interface ExcludedPool {
+  poolId: string
+  reason: string
+}
+
 export interface DepthResult {
+  status: 'ok'
+  network: string
+  pairKey: string
   spotPrice: number
   executionPrice: number
   slippagePct: number
   asks: DepthLevel[]
   bids: DepthLevel[]
-  source: 'AMM' | 'SDEX' | 'BOTH'
+  source: 'AMM'
+  pool: {
+    poolId: string
+    feeBp: number
+    feeReadAt: string
+    reservesObservedAt: string
+  }
+  excludedPools: ExcludedPool[]
 }
+
+export interface DepthUnavailable {
+  status: 'unavailable'
+  network: string
+  pairKey: string
+  reason: string
+  excludedPools: ExcludedPool[]
+}
+
+export type DepthOutcome = DepthResult | DepthUnavailable
 
 export function calculateAMMOutput(reserveA: number, reserveB: number, amount: number, feeBp: number): number {
   const fee = 1 - feeBp / 10000
@@ -34,27 +60,24 @@ export function generateAMMDepthLevels(
   reserveB: number,
   feeBp: number,
   numLevels: number = 10,
-  stepSize: number = 0.01
+  stepSize: number = 0.01,
 ): { asks: DepthLevel[]; bids: DepthLevel[] } {
   const asks: DepthLevel[] = []
   const bids: DepthLevel[] = []
 
-  // Generate asks (selling asset A for B) — price is B per A
+  // Asks: selling asset A for B. Price is B per A.
   for (let i = 1; i <= numLevels; i++) {
     const amountA = reserveA * stepSize * i
     const price = calculateAMMPrice(reserveA, reserveB, amountA, feeBp)
     asks.push({ price, size: amountA })
   }
 
-  // Generate bids (buying asset A with B) — price is A per B, but we want B per A (inverse)
+  // Bids: buying asset A with B. Price is B paid per A received.
   for (let i = 1; i <= numLevels; i++) {
     const amountB = reserveB * stepSize * i
     const fee = 1 - feeBp / 10000
     const effectiveInput = amountB * fee
     const amountA = (reserveA * effectiveInput) / (reserveB + effectiveInput)
-    // Price is amount of A we get per B → but we usually display bids as amount of B per A (inverse)
-    // Wait no: actually for pair A/B, bids are orders to buy A with B, so the price is how much B you pay per A
-    // So price = amountB / amountA
     const price = amountB / amountA
     bids.push({ price, size: amountA })
   }
@@ -62,53 +85,117 @@ export function generateAMMDepthLevels(
   return { asks, bids }
 }
 
-export async function getAMMDepth(pairKey: string, amount: number): Promise<DepthResult | null> {
-  const result = await pgPool.query(
-    `SELECT DISTINCT ON (ps.pool_id) ps.reserve_a, ps.reserve_b, ps.fee_bp
-     FROM pool_snapshots ps
-     WHERE ps.pool_id IN (
-       SELECT DISTINCT pool_id FROM price_points
-       WHERE pair_key = $1 AND source = 'AMM' AND pool_id IS NOT NULL
-     )
-     ORDER BY ps.pool_id, ps.timestamp DESC
-     LIMIT 1`,
-    [pairKey]
-  )
-  if (!result.rows[0]) return null
-
-  const { reserve_a, reserve_b, fee_bp } = result.rows[0]
-  const rA = parseFloat(reserve_a)
-  const rB = parseFloat(reserve_b)
-  const feeBp = parseInt(fee_bp)
-
-  const spotPrice = calculateAMMSpotPrice(rA, rB)
-  const executionPrice = calculateAMMPrice(rA, rB, amount, feeBp)
-  const slippagePct = spotPrice > 0 ? Math.abs((executionPrice - spotPrice) / spotPrice * 100) : 0
-  const { asks, bids } = generateAMMDepthLevels(rA, rB, feeBp)
-
-  return {
-    spotPrice,
-    executionPrice,
-    slippagePct,
-    asks,
-    bids,
-    source: 'AMM',
-  }
+interface AmmPoolRow {
+  poolId: string
+  reserveA: number
+  reserveB: number
+  observedAt: Date
 }
 
-export async function getDepth(pairKey: string, amount: number): Promise<DepthResult> {
-  const ammDepth = await getAMMDepth(pairKey, amount)
-  
-  if (ammDepth) {
-    return ammDepth
+/** Latest reserve snapshot per AMM pool for the pair, on one network only. */
+async function loadLatestAmmPools(network: string, pairKey: string): Promise<AmmPoolRow[]> {
+  const result = await pgPool.query(
+    `SELECT DISTINCT ON (ps.pool_id) ps.pool_id, ps.reserve_a, ps.reserve_b, ps.timestamp
+     FROM pool_snapshots ps
+     WHERE ps.network = $2
+       AND ps.pool_id IN (
+         SELECT DISTINCT pool_id FROM price_points
+         WHERE pair_key = $1 AND network = $2 AND source = 'AMM' AND pool_id IS NOT NULL
+       )
+     ORDER BY ps.pool_id, ps.timestamp DESC`,
+    [pairKey, network],
+  )
+  return result.rows
+    .map((r: { pool_id: string; reserve_a: string; reserve_b: string; timestamp: Date }) => ({
+      poolId: r.pool_id,
+      reserveA: parseFloat(r.reserve_a),
+      reserveB: parseFloat(r.reserve_b),
+      observedAt: r.timestamp,
+    }))
+    .sort((a, b) => (a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0))
+}
+
+/**
+ * Prices an AMM swap using each pool's own fee, read from the venue.
+ *
+ * Pools whose fee cannot be read, or whose reserves are empty, are excluded and
+ * listed with the reason. If no pool survives, the result is "unavailable" with
+ * no numbers, never zeros.
+ */
+export async function getDepth(
+  network: string,
+  pairKey: string,
+  amount: number,
+  feeOpts: PoolFeeOptions,
+): Promise<DepthOutcome> {
+  if (!(amount > 0)) {
+    throw new RangeError('amount must be greater than 0')
+  }
+
+  const pools = await loadLatestAmmPools(network, pairKey)
+  const excludedPools: ExcludedPool[] = []
+
+  if (pools.length === 0) {
+    return {
+      status: 'unavailable',
+      network,
+      pairKey,
+      reason: 'no AMM pool snapshots for this pair on this network',
+      excludedPools,
+    }
+  }
+
+  let chosen: DepthResult | null = null
+
+  for (const pool of pools) {
+    const feeRes = await getPoolFee(network, pool.poolId, feeOpts)
+    if (!feeRes.ok) {
+      excludedPools.push({ poolId: pool.poolId, reason: feeRes.reason })
+      continue
+    }
+    if (!(pool.reserveA > 0 && pool.reserveB > 0)) {
+      excludedPools.push({ poolId: pool.poolId, reason: 'pool has no reserves in its latest snapshot' })
+      continue
+    }
+    if (chosen) continue // keep checking fees so every excluded pool is reported
+
+    const { feeBp, feeReadAt } = feeRes.fee
+    const spotPrice = calculateAMMSpotPrice(pool.reserveA, pool.reserveB)
+    const executionPrice = calculateAMMPrice(pool.reserveA, pool.reserveB, amount, feeBp)
+    const slippagePct =
+      spotPrice > 0 ? Math.abs(((executionPrice - spotPrice) / spotPrice) * 100) : 0
+    const { asks, bids } = generateAMMDepthLevels(pool.reserveA, pool.reserveB, feeBp)
+
+    chosen = {
+      status: 'ok',
+      network,
+      pairKey,
+      spotPrice,
+      executionPrice,
+      slippagePct,
+      asks,
+      bids,
+      source: 'AMM',
+      pool: {
+        poolId: pool.poolId,
+        feeBp,
+        feeReadAt,
+        reservesObservedAt: pool.observedAt.toISOString(),
+      },
+      excludedPools,
+    }
+  }
+
+  if (chosen) {
+    chosen.excludedPools = excludedPools
+    return chosen
   }
 
   return {
-    spotPrice: 0,
-    executionPrice: 0,
-    slippagePct: 0,
-    asks: [],
-    bids: [],
-    source: 'AMM',
+    status: 'unavailable',
+    network,
+    pairKey,
+    reason: 'every AMM pool for this pair was excluded',
+    excludedPools,
   }
 }
