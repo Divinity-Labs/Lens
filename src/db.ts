@@ -18,9 +18,30 @@ export const pgPool = new Pool({
   ssl: config.db.url.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
 })
 
+/** Tables that carry a network column and must never be queried across networks without filtering. */
+export const NETWORK_FILTERED_TABLES = ['price_points', 'pool_snapshots', 'price_aggregates']
+
+export function assertNetworkPredicate(sql: string): void {
+  if (process.env.STRICT_NETWORK_CHECK === 'false') return
+  const lower = sql.toLowerCase()
+  for (const table of NETWORK_FILTERED_TABLES) {
+    if (lower.includes(table)) {
+      // Allow schema/DDL queries or inserts
+      if (lower.includes('create ') || lower.includes('alter ') || lower.includes('insert into') || lower.includes('truncate ')) {
+        continue
+      }
+      if (!lower.includes('network')) {
+        throw new Error(`[db:network-predicate-guard] Query on network-scoped table '${table}' is missing a 'network' predicate: ${sql.slice(0, 120)}...`)
+      }
+    }
+  }
+}
+
 // Instrument raw pg queries
 const originalQuery = pgPool.query.bind(pgPool)
 pgPool.query = (async (...args: any[]) => {
+  const sql = typeof args[0] === 'string' ? args[0] : args[0]?.text
+  if (sql) assertNetworkPredicate(sql)
   const end = db_query_duration_seconds.startTimer()
   try {
     return await (originalQuery as any)(...args)
@@ -41,10 +62,22 @@ export async function upsertPricePoints(points: {
   assetA: string; assetB: string; pairKey: string; source: string
   poolId?: string; price: number; baseVolume: number; counterVolume: number
   ledger: number; timestamp: Date; eventId?: string
+  chainTimestamp?: Date; observedAt?: Date
 }[], network: NetworkName): Promise<number> {
   if (points.length === 0) return 0
+
+  // Deduplicate points within the batch on (network, source, eventId) when eventId is present (#237)
+  const seen = new Set<string>()
+  const deduplicated = points.filter(p => {
+    if (!p.eventId) return true
+    const key = `${network}:${p.source}:${p.eventId}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
   const result = await prisma.pricePoint.createMany({
-    data: points.map(p => ({
+    data: deduplicated.map(p => ({
       network,
       assetA: p.assetA,
       assetB: p.assetB,
@@ -55,7 +88,7 @@ export async function upsertPricePoints(points: {
       baseVolume: p.baseVolume,
       counterVolume: p.counterVolume,
       ledger: p.ledger,
-      timestamp: p.timestamp,
+      timestamp: p.chainTimestamp ?? p.timestamp,
       eventId: p.eventId ?? null,
     })),
     skipDuplicates: true,

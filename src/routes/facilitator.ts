@@ -185,6 +185,38 @@ export async function registerSettleRoute(app: FastifyInstance) {
       )
     }
 
+    // Spend ceiling check (#147)
+    const spendCeiling = parseFloat(process.env.FACILITATOR_SPEND_CEILING ?? '1000000')
+    const requestedAmount = parseFloat(typeof body.paymentRequirements?.amount === 'string' ? body.paymentRequirements.amount : '0')
+    if (spendCeiling > 0 && requestedAmount > spendCeiling) {
+      return reply.code(400).send(
+        settleFailure(
+          txHash,
+          caip2,
+          'spend_ceiling_exceeded',
+          `Payment amount ${requestedAmount} exceeds facilitator spend ceiling of ${spendCeiling}.`,
+        )
+      )
+    }
+
+    // Caller allow-list check (#147)
+    const allowlist = process.env.FACILITATOR_CALLER_ALLOWLIST
+    if (allowlist) {
+      const allowedCallers = allowlist.split(',').map(s => s.trim().toLowerCase())
+      const payTo = String(body.paymentRequirements?.payTo ?? '').toLowerCase()
+      const callerHeader = String(req.headers['x-caller-id'] ?? '').toLowerCase()
+      if (!allowedCallers.includes(payTo) && !allowedCallers.includes(callerHeader)) {
+        return reply.code(403).send(
+          settleFailure(
+            txHash,
+            caip2,
+            'caller_not_allowed',
+            'Caller or recipient is not on the facilitator allow-list.',
+          )
+        )
+      }
+    }
+
     // The record is written BEFORE submission, not after: a timeout must leave
     // behind something a retry can recognise. The unique constraint on
     // (network, txHash) is the lock, so two concurrent settles for the same
@@ -236,6 +268,18 @@ export async function registerSettleRoute(app: FastifyInstance) {
       }
 
       await finalise(attemptId, normalised.success ? 'settled' : 'failed', normalised)
+
+      // Automatic cataloging from discovery/bazaar payload extension (#130)
+      if (normalised.success && body.paymentPayload) {
+        const ext = (body.paymentPayload as any).extensions?.discovery ?? (body.paymentPayload as any).extensions?.bazaar
+        if (ext && typeof ext === 'object') {
+          import('../bazaar/catalog').then(({ submitCatalogListing }) => {
+            const payTo = typeof body.paymentRequirements?.payTo === 'string' ? body.paymentRequirements.payTo : ''
+            submitCatalogListing(ext, { payTo, network }).catch(() => {})
+          }).catch(() => {})
+        }
+      }
+
       return normalised
     } catch (err) {
       const response = settleFailure(txHash, caip2, SETTLE_ERROR_REASONS.unexpected, (err as Error).message)

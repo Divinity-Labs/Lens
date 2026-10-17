@@ -37,7 +37,9 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     expect(venueAdapters).toContain(ammAdapter)
     expect(venueAdapters).toContain(soroswapAdapter)
     expect(venueAdapters).toContain(aquariusAdapter)
-    expect(venueAdapters.length).toBe(4)
+    expect(venueAdapters.some(a => a.name === 'Phoenix')).toBe(true)
+    expect(venueAdapters.some(a => a.name === 'Blend')).toBe(true)
+    expect(venueAdapters.length).toBe(6)
   })
 
   it('ensures each adapter implements the VenueAdapter contract', () => {
@@ -59,6 +61,8 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     expect(ammAdapter.source).toBe('AMM')
     expect(soroswapAdapter.source).toBe('soroswap_amm')
     expect(aquariusAdapter.source).toBe('aquarius_amm')
+    expect(venueAdapters.find(a => a.name === 'Phoenix')?.source).toBe('phoenix_amm')
+    expect(venueAdapters.find(a => a.name === 'Blend')?.source).toBe('blend_lending')
   })
 
   it('manages last-price tracking with network and pairKey isolation in runner', () => {

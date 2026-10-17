@@ -93,31 +93,51 @@ export async function getBestRoute(
   let estimatedOutput = 0
   let recommendation = 'Insufficient liquidity data'
 
+  let splits: RouteInfo['splits'] = []
+
   if (sdexPrice === 0 && ammPrice === 0) {
     throw new Error("No pricing data available")
   } else if (sdexPrice === 0) {
     route = 'AMM'
     estimatedOutput = ammPrice * amount
     recommendation = 'Only AMM liquidity available'
+    splits = [{ venue: 'AMM', portion: 1.0, inputAmount: amount, outputAmount: estimatedOutput, executionPrice: ammPrice }]
   } else if (ammPrice === 0) {
     route = 'SDEX'
     estimatedOutput = sdexPrice * amount
     recommendation = 'Only SDEX liquidity available'
+    splits = [{ venue: 'SDEX', portion: 1.0, inputAmount: amount, outputAmount: estimatedOutput, executionPrice: sdexPrice }]
   } else {
     const diff = Math.abs(sdexPrice - ammPrice) / Math.max(sdexPrice, ammPrice)
     if (diff < 0.001) {
       // Within 0.1% — suggest split for large orders
-      route = amount > 10000 ? 'SPLIT' : (sdexPrice >= ammPrice ? 'SDEX' : 'AMM')
-      estimatedOutput = Math.max(sdexPrice, ammPrice) * amount
-      recommendation = 'Prices within 0.1% — either route suitable'
+      if (amount > 10000) {
+        route = 'SPLIT'
+        const splitAmount = amount * 0.5
+        const sdexOutput = splitAmount * sdexPrice
+        const ammOutput = splitAmount * ammPrice
+        estimatedOutput = sdexOutput + ammOutput
+        recommendation = 'Prices within 0.1% — splitting 50/50 across SDEX and AMM minimizes slippage'
+        splits = [
+          { venue: 'SDEX', portion: 0.5, inputAmount: splitAmount, outputAmount: sdexOutput, executionPrice: sdexPrice },
+          { venue: 'AMM', portion: 0.5, inputAmount: splitAmount, outputAmount: ammOutput, executionPrice: ammPrice },
+        ]
+      } else {
+        route = sdexPrice >= ammPrice ? 'SDEX' : 'AMM'
+        estimatedOutput = Math.max(sdexPrice, ammPrice) * amount
+        recommendation = 'Prices within 0.1% — either route suitable'
+        splits = [{ venue: route, portion: 1.0, inputAmount: amount, outputAmount: estimatedOutput, executionPrice: route === 'SDEX' ? sdexPrice : ammPrice }]
+      }
     } else if (sdexPrice > ammPrice) {
       route = 'SDEX'
       estimatedOutput = sdexPrice * amount
       recommendation = `SDEX offers ${((sdexPrice - ammPrice) / ammPrice * 100).toFixed(2)}% better rate`
+      splits = [{ venue: 'SDEX', portion: 1.0, inputAmount: amount, outputAmount: estimatedOutput, executionPrice: sdexPrice }]
     } else {
       route = 'AMM'
       estimatedOutput = ammPrice * amount
       recommendation = `AMM offers ${((ammPrice - sdexPrice) / sdexPrice * 100).toFixed(2)}% better rate`
+      splits = [{ venue: 'AMM', portion: 1.0, inputAmount: amount, outputAmount: estimatedOutput, executionPrice: ammPrice }]
     }
   }
 
@@ -134,5 +154,5 @@ export async function getBestRoute(
   const slippagePct =
     spotPrice > 0 ? Math.max(0, ((spotPrice - executionPrice) / spotPrice) * 100) : 0
 
-  return { route, sdexPrice, ammPrice, estimatedOutput, slippagePct, recommendation }
+  return { route, sdexPrice, ammPrice, estimatedOutput, slippagePct, recommendation, splits }
 }

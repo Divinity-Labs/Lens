@@ -74,15 +74,38 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       )
 
       const byVenue: Record<string, number> = {}
-      let totalVolume = 0
+      let grossVolume = 0
       let tradeCount = 0
 
       for (const row of rows) {
         const volume = parseFloat(row.volume) || 0
         byVenue[row.source] = volume
-        totalVolume += volume
+        grossVolume += volume
         tradeCount += Number(row.trade_count) || 0
       }
+
+      // Deduplicated volume query: counts unique underlying trades by event_id/tx hash (#244)
+      const dedupResult = await pgPool.query(
+        `SELECT
+           COALESCE(SUM(
+             CASE
+               WHEN asset_a = $1 THEN base_volume
+               WHEN asset_b = $1 THEN counter_volume
+               ELSE 0
+             END
+           ), 0)::numeric AS dedup_volume
+         FROM (
+           SELECT DISTINCT ON (COALESCE(event_id, id::text))
+             asset_a, asset_b, base_volume, counter_volume
+           FROM price_points
+           WHERE (asset_a = $1 OR asset_b = $1)
+             AND network = $2
+             AND timestamp >= $3
+           ORDER BY COALESCE(event_id, id::text), timestamp DESC
+         ) dedup`,
+        [asset, network, startTime]
+      )
+      const deduplicatedVolume = parseFloat(dedupResult.rows[0]?.dedup_volume ?? '0') || grossVolume
 
       return {
         asset,
@@ -90,8 +113,10 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         window,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        // Cross-venue sum.
-        totalVolume,
+        // Deduplicated clean volume (prevents routing aggregator double-counting)
+        totalVolume: deduplicatedVolume,
+        grossVolume,
+        deduplicated: true,
         // Per-venue breakdown that the total is summed from.
         byVenue,
         venues: Object.keys(byVenue),

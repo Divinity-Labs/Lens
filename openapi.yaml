@@ -49,6 +49,22 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /venues/status:
+    get:
+      operationId: getVenuesStatus
+      summary: Get live health status of all ingestion venues
+      responses:
+        '200':
+          description: Health and heartbeat status for all registered venues
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /price/{assetA}/{assetB}:
     get:
       operationId: getPrice
@@ -171,6 +187,32 @@ paths:
                       $ref: '#/components/schemas/PriceBucket'
         '400':
           description: Invalid parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /price/{assetA}/{assetB}/reconciliation:
+    get:
+      operationId: getPriceReconciliation
+      summary: Cross-venue price reconciliation and divergence monitoring
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Price reconciliation comparison across venues
+          content:
+            application/json:
+              schema:
+                type: object
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -930,6 +972,27 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /blend/rates/{asset}:
+    get:
+      operationId: getBlendRates
+      summary: Get Blend lending and borrowing rates for an asset
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Blend lending market rates
+          content:
+            application/json:
+              schema:
+                type: object
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /discovery/resources:
     get:
       operationId: listDiscoveryResources
@@ -984,6 +1047,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DiscoveryResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /discovery/search:
+    get:
+      operationId: searchDiscoveryResources
+      summary: Full-text and metadata search for discoverable resources
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results with relevance ranking and metadata quality
+          content:
+            application/json:
+              schema:
+                type: object
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
