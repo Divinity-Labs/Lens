@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getPools } from './pools'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -214,29 +215,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // network. A quiet pool is kept with its real `timestamp`, never dropped.
   app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
     const network = req.network ?? activeNetwork
-    const result = await pgPool.query(
-      `WITH RECURSIVE ids AS (
-         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
-         UNION ALL
-         SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
-           FROM ids
-          WHERE ids.pool_id IS NOT NULL
-       )
-       SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
-         FROM ids
-        CROSS JOIN LATERAL (
-              SELECT * FROM pool_snapshots s
-               WHERE s.network = $1 AND s.pool_id = ids.pool_id
-               ORDER BY s.timestamp DESC
-               LIMIT 1
-             ) l
-        WHERE ids.pool_id IS NOT NULL`,
-      [network]
-    )
-    return { pools: result.rows }
+    return { pools: await getPools(network) }
   })
 
   // GET /price/:assetA/:assetB/depth?amount=1000

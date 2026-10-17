@@ -8,9 +8,12 @@ import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork } from '../config'
+import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../config'
 import { parseAssetStr } from '../pairsRegistry'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
+import { getPools } from './pools'
+import { resolveNetworkName } from '../middleware/network'
+import type { AssetId } from '../types'
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
@@ -108,6 +111,17 @@ const schema = `
     network: String!
   }
 
+  type Pool {
+    pool_id: String!
+    asset_a: String!
+    asset_b: String!
+    reserve_a: Float
+    reserve_b: Float
+    spot_price: Float
+    fee_bp: Int
+    timestamp: String!
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -126,6 +140,12 @@ const schema = `
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
     getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
     listPairs: [String]!
+    """
+    Latest AMM pool snapshots, optionally narrowed to a watched pair.
+    This query is covered by the paid /graphql route in GATED_ROUTES; keep it
+    behind payment if GraphQL route pricing or gating is changed.
+    """
+    pools(pair: String, network: String): [Pool!]!
   }
 
   type Subscription {
@@ -159,6 +179,62 @@ function findPair(assetA: string, assetB: string) {
 
 const resolvers = {
   Query: {
+    async pools(
+      _: unknown,
+      { pair, network }: { pair?: string | null; network?: string | null },
+      context: MercuriusContext
+    ) {
+      const requestNetwork = (context.reply.request as typeof context.reply.request & { network?: string }).network
+      const resolved = resolveNetworkName(network ?? requestNetwork)
+      if (!resolved.ok) {
+        throw new ErrorWithProps(resolved.error, { code: 'INVALID_INPUT', field: 'network' })
+      }
+
+      const selectedNetwork: NetworkName = resolved.network
+      let pairFilter: { assetA: string; assetB: string } | undefined
+      if (pair != null) {
+        const assets = pair.split('/')
+        if (assets.length !== 2) {
+          throw new ErrorWithProps(
+            'Invalid pair: expected ASSET_A/ASSET_B, with each asset in CODE or CODE:ISSUER format',
+            { code: 'INVALID_INPUT', field: 'pair' },
+          )
+        }
+        const requestedA = parseAssetStr(assets[0])
+        const requestedB = parseAssetStr(assets[1])
+        if (!requestedA || !requestedB) {
+          throw new ErrorWithProps(
+            'Invalid pair: expected ASSET_A/ASSET_B, with each asset in CODE or CODE:ISSUER format',
+            { code: 'INVALID_INPUT', field: 'pair' },
+          )
+        }
+
+        const matches = getNetworkConfig(selectedNetwork).pairs.filter(configured => {
+          const matchesAsset = (
+            requested: AssetId,
+            actual: typeof configured.assetA,
+          ) => requested.code === actual.code.toUpperCase() &&
+            (requested.issuer == null || requested.issuer === actual.issuer)
+          return (
+            (matchesAsset(requestedA, configured.assetA) && matchesAsset(requestedB, configured.assetB)) ||
+            (matchesAsset(requestedA, configured.assetB) && matchesAsset(requestedB, configured.assetA))
+          )
+        })
+        if (matches.length !== 1) {
+          throw new ErrorWithProps(
+            `Pair ${pair} is not uniquely watched on ${selectedNetwork}`,
+            { code: 'PAIR_NOT_FOUND' },
+          )
+        }
+        pairFilter = {
+          assetA: matches[0].assetA.code,
+          assetB: matches[0].assetB.code,
+        }
+      }
+
+      return getPools(selectedNetwork, pairFilter)
+    },
+
     async getPrice(_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
       for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
