@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getStalenessAwareMedianPrice } from '../pricing/median'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -255,14 +256,39 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
       if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
 
-      // NOTE: getDepth reads order-book data with no network column yet — see L048.
-      const depthResult = await getDepth(pair.pairKey, amount)
+      const depthResult = await getDepth(pair.pairKey, amount, network)
       
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
         pairKey: pair.pairKey,
         ...depthResult
+      }
+    }
+  )
+
+  // GET /price/:assetA/:assetB/median?freshness=300
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { freshness?: string }
+  }>(
+    '/price/:assetA/:assetB/median',
+    async (req, reply) => {
+      const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
+      const pair = findPair(assetA, assetB, network)
+
+      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      const freshnessSec = parseInt(req.query.freshness ?? '300', 10)
+      if (isNaN(freshnessSec) || freshnessSec <= 0) {
+        return reply.status(400).send({ error: 'freshness must be a positive integer in seconds' })
+      }
+
+      const result = await getStalenessAwareMedianPrice(pair.pairKey, network, freshnessSec)
+      return {
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        ...result,
       }
     }
   )
