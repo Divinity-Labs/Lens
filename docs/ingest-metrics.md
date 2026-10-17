@@ -15,16 +15,40 @@ nonsense on any deployment with more than one.**
 | `amm_snapshots_total` | Counter | `pool`, `network` |
 | `price_snapshots_total` | Counter | `network` |
 | `last_trade_timestamp` | Gauge | `pair`, `network` |
+| `venue_last_success_timestamp` | Gauge | `venue`, `network` |
+| `venue_last_write_timestamp` | Gauge | `venue`, `network` |
+| `venue_consecutive_failures` | Gauge | `venue`, `network` |
 
 | Label | Values | Notes |
 | --- | --- | --- |
 | `network` | `testnet`, `mainnet` | The `NetworkName` of the ingester loop that produced the sample, not the process-wide `STELLAR_NETWORK`. |
 | `pair` | `XLM/USDC`, … | The `pairKey` already used everywhere else in Lens. |
 | `pool` | Horizon liquidity-pool id | Pre-existing label, only on `amm_snapshots_total`. |
+| `venue` | `SDEX`, `AMM`, `aquarius_amm`, `soroswap_amm` | The `source` a venue adapter writes to `price_points`. Matches the value used to exclude a stale venue from aggregation. |
 
-All four are also emitted with the registry-wide `app="lens"` default label.
+All of these are also emitted with the registry-wide `app="lens"` default label.
 
-## Why `network` is on all four
+## Per-venue heartbeat gauges (Issue #219)
+
+The three `venue_*` gauges back the per-venue heartbeat registry in
+[`src/venueHeartbeat.ts`](../src/venueHeartbeat.ts). A dead adapter and a quiet
+venue both stop producing rows; the heartbeat tells them apart:
+
+- `venue_last_success_timestamp` — the last successful upstream **read**. Moves on
+  every poll that reaches the venue, even when it returns nothing new.
+- `venue_last_write_timestamp` — the last successful **write** to `price_points`.
+  This is the price's age; a venue whose `last_write` is older than its staleness
+  bound is excluded from every aggregate (VWAP, `/price`, the refresh worker, and
+  the rows it feeds `price_aggregates`).
+- `venue_consecutive_failures` — failed reads in a row, reset to 0 on a successful
+  read. Non-zero while `last_success` ages is the signal that the adapter is
+  down, not merely quiet.
+
+The same state is exposed on `/status` as `venueHeartbeats`, and the exclusion is
+visible in the `/price` response as `excludedVenues`.
+
+
+## Why `network` is on every ingest metric
 
 Before this change, the ingest metrics were network-blind. On a dual-network
 deployment the two loops wrote to the same series.
@@ -63,6 +87,10 @@ Series count is `pairs x networks`:
 - `amm_snapshots_total` — `pools x networks`. Pools are discovered from Horizon
   for the configured pairs only, so this stays bounded by the same watch list.
 - `price_snapshots_total` — `networks`. One series per network, full stop.
+- `venue_last_success_timestamp`, `venue_last_write_timestamp` and
+  `venue_consecutive_failures` — `venues x networks`. Both factors are bounded by
+  configuration (the adapters in `src/ingest/venues/` and `src/ingesters/`), so
+  this is a handful of series, not a pair- or pool-scaled one.
 
 **Do not add `issuer` to any of these.** It would multiply the series count by
 every distinct token in the config for no gain: `pair` is the `pairKey` and

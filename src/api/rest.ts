@@ -5,6 +5,7 @@ import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
+import { getStaleVenues, getAllHeartbeats } from '../venueHeartbeat'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
   statusResponseSchema,
@@ -92,6 +93,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       ingestLagSeconds: lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
         : null,
+      // Per-venue heartbeats — shows last-success (last read), last-write, and
+      // consecutive failures for every adapter that has polled at least once. A
+      // venue whose lastWrite is older than its stalenessThresholdMs is excluded
+      // from aggregation; this field, plus excludedVenues on /price, makes that
+      // exclusion visible rather than silent.
+      venueHeartbeats: getAllHeartbeats().filter(h => h.network === network),
     }
   })
 
@@ -118,7 +125,13 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pair.pairKey, network)
+      // Exclude venues whose most recent written price is older than their
+      // staleness window. Prices from a dead (or quiet) adapter are NOT dropped
+      // from the DB — they are simply not counted in the aggregate until the
+      // adapter writes again, at which point they flow back in naturally.
+      const excludedVenues = getStaleVenues(network)
+
+      const agg = await getAggregatedPrice(pair.pairKey, network, excludedVenues)
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
       const result = {
         assetA: pair.assetA.code,

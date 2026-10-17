@@ -4,6 +4,7 @@ import { prisma } from '../db'
 import { setCachedPrice } from '../redis'
 import { calculateVWAP, calculateOHLCV, getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
+import { getStaleVenues } from '../venueHeartbeat'
 
 /**
  * One queue, worker and job stream per network. Everything a job touches —
@@ -32,7 +33,14 @@ export function startAggregateWorker(network: NetworkName) {
     async (job) => {
       const { pairKey, pair } = job.data
       try {
-        const agg = await getAggregatedPrice(pairKey, network)
+        // A venue whose last written price is older than its staleness bound
+        // is dropped from every aggregate computed here, exactly as the live
+        // /price route does. Without this the refresh worker would keep blending
+        // a dead adapter's last price into the cached payload and into the
+        // price_aggregates rows that history and the screener read.
+        const excludedVenues = getStaleVenues(network)
+
+        const agg = await getAggregatedPrice(pairKey, network, excludedVenues)
         const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, network)
 
         const result = {
@@ -66,9 +74,9 @@ export function startAggregateWorker(network: NetworkName) {
 
         for (const w of windows) {
           const [vwap, sdexVwap, ammVwap, ohlcv] = await Promise.all([
-            calculateVWAP(pairKey, w.minutes, network),
-            calculateVWAP(pairKey, w.minutes, network, 'SDEX'),
-            calculateVWAP(pairKey, w.minutes, network, 'AMM'),
+            calculateVWAP(pairKey, w.minutes, network, undefined, excludedVenues),
+            calculateVWAP(pairKey, w.minutes, network, 'SDEX', excludedVenues),
+            calculateVWAP(pairKey, w.minutes, network, 'AMM', excludedVenues),
             calculateOHLCV(pairKey, w.minutes, network),
           ])
 

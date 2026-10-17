@@ -4,6 +4,7 @@ import mercurius, { withFilter, type MercuriusContext } from 'mercurius'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
+import { getStaleVenues } from '../venueHeartbeat'
 import { pgPool } from '../db'
 import { config, activeNetwork } from '../config'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
@@ -34,6 +35,8 @@ const schema = `
     sources: Int!
     confidence: String!
     lastTradeAgeSeconds: Int
+    """Venues excluded from this aggregate because their last written price is stale."""
+    excludedVenues: [String!]!
   }
 
   type RouteInfo {
@@ -124,7 +127,7 @@ const resolvers = {
         try { return JSON.parse(cached) } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pairKey, activeNetwork)
+      const agg = await getAggregatedPrice(pairKey, activeNetwork, getStaleVenues(activeNetwork))
       const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
       return {
         assetA, assetB, pairKey, ...agg,
