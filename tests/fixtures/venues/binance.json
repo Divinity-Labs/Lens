@@ -1,0 +1,22 @@
+{
+  "venue": "binance",
+  "sourceUrl": "https://api.binance.com/api/v3/ticker/24hr?symbol=XLMUSDC",
+  "capturedAt": "2026-10-15T12:00:00.000Z",
+  "data": {
+    "symbol": "XLMUSDC",
+    "priceChange": "0.0020",
+    "priceChangePercent": "1.94",
+    "prevClosePrice": "0.1030",
+    "lastPrice": "0.1050",
+    "bidPrice": "0.1049",
+    "askPrice": "0.1051",
+    "openPrice": "0.1030",
+    "highPrice": "0.1065",
+    "lowPrice": "0.1025",
+    "volume": "15420000.00",
+    "quoteVolume": "1619100.00",
+    "openTime": 1792070400000,
+    "closeTime": 1792156800000,
+    "count": 4820
+  }
+}

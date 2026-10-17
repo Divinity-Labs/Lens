@@ -98,6 +98,42 @@ export const db_query_duration_seconds = new Histogram({
   registers: [register]
 })
 
+export const price_points_ingested_total = new Counter({
+  name: 'price_points_ingested_total',
+  help: 'Total number of price points evaluated at ingest, partitioned by source and acceptance status',
+  labelNames: ['source', 'status'],
+  registers: [register]
+})
+
+export const price_points_pruned_total = new Counter({
+  name: 'price_points_pruned_total',
+  help: 'Total number of raw price_points pruned',
+  labelNames: ['network'],
+  registers: [register]
+})
+
+export const price_points_rolled_up_total = new Counter({
+  name: 'price_points_rolled_up_total',
+  help: 'Total number of price_points rolled into aggregates before pruning',
+  labelNames: ['network'],
+  registers: [register]
+})
+
+export const pools_discovered_total = new Counter({
+  name: 'pools_discovered_total',
+  help: 'Total number of pools discovered or removed per venue',
+  labelNames: ['venue', 'network', 'status'],
+  registers: [register]
+})
+
+export const discovery_cycle_duration_seconds = new Histogram({
+  name: 'discovery_cycle_duration_seconds',
+  help: 'Duration of pool discovery cycles in seconds',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
 export async function getMetrics() {
   return await register.metrics()
 }
+

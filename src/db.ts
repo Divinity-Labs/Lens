@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import { Pool } from 'pg'
-import { db_query_duration_seconds } from './metrics'
+import { db_query_duration_seconds, price_points_ingested_total } from './metrics'
 import { config, type NetworkName } from './config'
 
 // Prisma for schema management + simple queries
@@ -15,7 +15,7 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 // (their pooler uses a self-signed cert in the chain — this is safe for Supabase specifically)
 export const pgPool = new Pool({
   connectionString: config.db.url,
-  ssl: config.db.url.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
+  ssl: config.db.url?.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
 })
 
 // Instrument raw pg queries
@@ -28,6 +28,44 @@ pgPool.query = (async (...args: any[]) => {
     end()
   }
 }) as any
+
+export interface QuarantinedPoint {
+  network: NetworkName
+  assetA: string
+  assetB: string
+  pairKey: string
+  source: string
+  price: number
+  recentMedian: number
+  deviationPct: number
+  reason: string
+  timestamp: Date
+}
+
+export const quarantinedPricePoints: QuarantinedPoint[] = []
+
+/** In-memory ring buffer of recent accepted prices per network & pair */
+const recentPairPrices = new Map<string, number[]>()
+
+export function getQuarantinedPoints(pairKey?: string): QuarantinedPoint[] {
+  if (!pairKey) return [...quarantinedPricePoints]
+  return quarantinedPricePoints.filter(p => p.pairKey === pairKey)
+}
+
+export function clearQuarantinedPoints(): void {
+  quarantinedPricePoints.length = 0
+}
+
+export function setPairBaselinePrices(pairKey: string, network: NetworkName, prices: number[]): void {
+  recentPairPrices.set(`${network}:${pairKey}`, [...prices])
+}
+
+function computeMedian(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
 
 /**
  * `network` is required rather than defaulting to the active one. Ingesters are
@@ -43,8 +81,48 @@ export async function upsertPricePoints(points: {
   ledger: number; timestamp: Date; eventId?: string
 }[], network: NetworkName): Promise<number> {
   if (points.length === 0) return 0
+
+  const boundPct = parseFloat(process.env.INGEST_OUTLIER_BOUND_PCT ?? '40') / 100
+  const acceptedPoints: typeof points = []
+
+  for (const point of points) {
+    const key = `${network}:${point.pairKey}`
+    const recents = recentPairPrices.get(key) ?? []
+
+    if (recents.length >= 3) {
+      const med = computeMedian(recents)
+      const deviation = Math.abs(point.price - med) / med
+      if (deviation > boundPct) {
+        // Plausibility check failed: Quarantine the point (#238)
+        quarantinedPricePoints.push({
+          network,
+          assetA: point.assetA,
+          assetB: point.assetB,
+          pairKey: point.pairKey,
+          source: point.source,
+          price: point.price,
+          recentMedian: med,
+          deviationPct: parseFloat((deviation * 100).toFixed(2)),
+          reason: `Price ${point.price} deviates by ${(deviation * 100).toFixed(1)}% from median ${med} (bound: ${(boundPct * 100).toFixed(0)}%)`,
+          timestamp: point.timestamp,
+        })
+        price_points_ingested_total.inc({ source: point.source, status: 'rejected' })
+        continue
+      }
+    }
+
+    // Accepted point
+    acceptedPoints.push(point)
+    price_points_ingested_total.inc({ source: point.source, status: 'accepted' })
+    const updated = [...recents, point.price]
+    if (updated.length > 20) updated.shift()
+    recentPairPrices.set(key, updated)
+  }
+
+  if (acceptedPoints.length === 0) return 0
+
   const result = await prisma.pricePoint.createMany({
-    data: points.map(p => ({
+    data: acceptedPoints.map(p => ({
       network,
       assetA: p.assetA,
       assetB: p.assetB,

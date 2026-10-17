@@ -76,12 +76,23 @@ async function getSDEXPrice(
   }
 }
 
+export interface BestRouteOptions {
+  intermediateAssets?: AssetId[]
+  maxHops?: number
+}
+
+const DEFAULT_INTERMEDIATES: AssetId[] = [
+  { code: 'XLM', issuer: null },
+  { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' },
+]
+
 export async function getBestRoute(
   assetA: AssetId,
   assetB: AssetId,
   pairKey: string,
   amount: number = 1000,
-  network: NetworkName = activeNetwork
+  network: NetworkName = activeNetwork,
+  options: BestRouteOptions = {}
 ): Promise<RouteInfo> {
   const [sdexPrice, amm] = await Promise.all([
     getSDEXPrice(assetA, assetB, amount, network),
@@ -134,5 +145,79 @@ export async function getBestRoute(
   const slippagePct =
     spotPrice > 0 ? Math.max(0, ((spotPrice - executionPrice) / spotPrice) * 100) : 0
 
-  return { route, sdexPrice, ammPrice, estimatedOutput, slippagePct, recommendation }
+  let hops: RouteInfo['hops'] = [
+    {
+      from: assetA.code,
+      to: assetB.code,
+      venue: route,
+      rate: executionPrice,
+      slippagePct,
+    },
+  ]
+  let path: string[] = [assetA.code, assetB.code]
+
+  // Multi-hop routing (#295): check whether routing through intermediate bridge assets yields better output
+  const maxHops = options.maxHops ?? 2
+  if (maxHops >= 2) {
+    const intermediates = options.intermediateAssets ?? DEFAULT_INTERMEDIATES
+    for (const mid of intermediates) {
+      if (
+        mid.code.toUpperCase() === assetA.code.toUpperCase() ||
+        mid.code.toUpperCase() === assetB.code.toUpperCase()
+      ) {
+        continue
+      }
+
+      try {
+        const pairKey1 = [assetA.code, mid.code].sort().join('/')
+        const pairKey2 = [mid.code, assetB.code].sort().join('/')
+
+        const [leg1Sdex, leg1Amm, leg2Sdex, leg2Amm] = await Promise.all([
+          getSDEXPrice(assetA, mid, amount, network).catch(() => 0),
+          getAMMPrice(pairKey1, amount, network).catch(() => ({ price: 0, spotPrice: 0 })),
+          getSDEXPrice(mid, assetB, amount, network).catch(() => 0),
+          getAMMPrice(pairKey2, amount, network).catch(() => ({ price: 0, spotPrice: 0 })),
+        ])
+
+        const leg1Rate = Math.max(leg1Sdex, leg1Amm.price)
+        const leg1Venue = leg1Sdex >= leg1Amm.price ? 'SDEX' : 'AMM'
+        if (leg1Rate <= 0) continue
+
+        const midAmount = amount * leg1Rate
+        const leg2Rate = Math.max(leg2Sdex, leg2Amm.price)
+        const leg2Venue = leg2Sdex >= leg2Amm.price ? 'SDEX' : 'AMM'
+        if (leg2Rate <= 0) continue
+
+        const multiHopOutput = midAmount * leg2Rate
+        // If multi-hop beats direct route by at least 0.2%
+        if (multiHopOutput > estimatedOutput * 1.002) {
+          const directOutput = estimatedOutput
+          estimatedOutput = multiHopOutput
+          route = 'MULTI_HOP'
+          path = [assetA.code, mid.code, assetB.code]
+          hops = [
+            {
+              from: assetA.code,
+              to: mid.code,
+              venue: leg1Venue,
+              rate: leg1Rate,
+              slippagePct: 0.05,
+            },
+            {
+              from: mid.code,
+              to: assetB.code,
+              venue: leg2Venue,
+              rate: leg2Rate,
+              slippagePct: 0.05,
+            },
+          ]
+          recommendation = `Multi-hop route via ${mid.code} offers ${(((multiHopOutput - directOutput) / directOutput) * 100).toFixed(2)}% better output than direct`
+        }
+      } catch {
+        // Skip candidate intermediate on error
+      }
+    }
+  }
+
+  return { route, sdexPrice, ammPrice, estimatedOutput, slippagePct, recommendation, hops, path }
 }

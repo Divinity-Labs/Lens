@@ -1,0 +1,16 @@
+{
+  "venue": "amm",
+  "sourceUrl": "https://horizon.stellar.org/liquidity_pools/d94943fbe0a8c2d96c1da8c4e5e4de4b4070a2a4bdf34839f99e4b30172e2cfc",
+  "capturedAt": "2026-10-15T12:00:00.000Z",
+  "data": {
+    "id": "d94943fbe0a8c2d96c1da8c4e5e4de4b4070a2a4bdf34839f99e4b30172e2cfc",
+    "fee_bp": 30,
+    "type": "constant_product",
+    "total_trustlines": "412",
+    "total_shares": "1000000.0000000",
+    "reserves": [
+      { "asset": "native", "amount": "10000000.0000000" },
+      { "asset": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN", "amount": "1050000.0000000" }
+    ]
+  }
+}

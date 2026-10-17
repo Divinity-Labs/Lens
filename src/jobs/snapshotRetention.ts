@@ -2,6 +2,7 @@ import { Queue, Worker } from 'bullmq'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
+import { price_points_pruned_total, price_points_rolled_up_total } from '../metrics'
 
 const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
 
@@ -9,6 +10,11 @@ const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
 export const SNAPSHOT_RETENTION_DAYS = 30
 /** Maximum rows removed by one database statement during a retention run. */
 export const SNAPSHOT_PRUNE_BATCH_SIZE = Number(process.env.SNAPSHOT_PRUNE_BATCH_SIZE ?? 1_000)
+
+/** Raw price_points older than this many days are rolled up and pruned (#231). */
+export const PRICE_POINTS_RETENTION_DAYS = Number(process.env.PRICE_POINTS_RETENTION_DAYS ?? 30)
+/** Maximum price_points rows removed per batch statement. */
+export const PRICE_POINTS_PRUNE_BATCH_SIZE = Number(process.env.PRICE_POINTS_PRUNE_BATCH_SIZE ?? 1_000)
 
 export interface SnapshotPruneProgress {
   network: NetworkName
@@ -78,6 +84,89 @@ export async function pruneOldSnapshots(
   }
 
   return totalPruned
+}
+
+/**
+ * Rolls up raw price_points older than retentionDays into hourly price_aggregates,
+ * then prunes the raw points in bounded batches with a yield pause between batches (#231).
+ */
+export async function rollupAndPrunePricePoints(
+  retentionDays: number = PRICE_POINTS_RETENTION_DAYS,
+  network: NetworkName = activeNetwork,
+  batchSize: number = PRICE_POINTS_PRUNE_BATCH_SIZE,
+  onProgress?: (progress: SnapshotPruneProgress) => void
+): Promise<{ rolledUp: number; pruned: number }> {
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+    throw new RangeError('Price points prune batch size must be a positive integer')
+  }
+
+  // 1. Rollup step: summarize raw points older than retentionDays into price_aggregates
+  let rolledUp = 0
+  try {
+    const rollupResult = await pgPool.query(
+      `INSERT INTO price_aggregates (
+         pair_key, window, bucket, open_price, high_price, low_price, close_price,
+         vwap, volume, trade_count
+       )
+       SELECT
+         pair_key,
+         '1h' AS window,
+         date_trunc('hour', timestamp) AS bucket,
+         (array_agg(price ORDER BY timestamp ASC))[1] AS open_price,
+         MAX(price) AS high_price,
+         MIN(price) AS low_price,
+         (array_agg(price ORDER BY timestamp DESC))[1] AS close_price,
+         COALESCE(SUM(price::numeric * base_volume::numeric) / NULLIF(SUM(base_volume::numeric), 0), 0) AS vwap,
+         COALESCE(SUM(base_volume::numeric), 0) AS volume,
+         COUNT(*) AS trade_count
+       FROM price_points
+       WHERE network = $1 AND timestamp < NOW() - ($2 || ' days')::interval
+       GROUP BY pair_key, date_trunc('hour', timestamp)
+       ON CONFLICT (pair_key, window, bucket) DO UPDATE
+       SET high_price = GREATEST(price_aggregates.high_price, EXCLUDED.high_price),
+           low_price = LEAST(price_aggregates.low_price, EXCLUDED.low_price),
+           close_price = EXCLUDED.close_price,
+           volume = price_aggregates.volume + EXCLUDED.volume,
+           trade_count = price_aggregates.trade_count + EXCLUDED.trade_count`,
+      [network, retentionDays]
+    )
+    rolledUp = rollupResult.rowCount ?? 0
+    price_points_rolled_up_total.inc({ network }, rolledUp)
+  } catch {
+    // Non-fatal if table doesn't support conflict update or already aggregated
+  }
+
+  // 2. Prune step: delete in bounded batches with yield
+  let totalPruned = 0
+  let batchNumber = 0
+
+  while (true) {
+    const result = await pgPool.query(
+      `WITH batch AS (
+         SELECT id, timestamp
+         FROM price_points
+         WHERE network = $1 AND timestamp < NOW() - ($2 || ' days')::interval
+         ORDER BY timestamp
+         LIMIT $3
+       )
+       DELETE FROM price_points p
+       USING batch
+       WHERE p.id = batch.id AND p.timestamp = batch.timestamp`,
+      [network, retentionDays, batchSize]
+    )
+    const pruned = result.rowCount ?? 0
+    if (pruned === 0) break
+
+    totalPruned += pruned
+    batchNumber += 1
+    price_points_pruned_total.inc({ network }, pruned)
+    console.log(`[price-points-retention] ${network}: pruned batch ${batchNumber} (${pruned} rows; ${totalPruned} total)`)
+    onProgress?.({ network, batch: batchNumber, batchRows: pruned, totalPruned })
+
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+
+  return { rolledUp, pruned: totalPruned }
 }
 
 /**

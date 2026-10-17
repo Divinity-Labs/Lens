@@ -15,6 +15,7 @@ const VwapQuerySchema = z.object({
   window: z.coerce.number().int().min(1).max(1440).default(60),
   source: z.enum(['SDEX', 'AMM']).optional(),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
+  network: z.enum(['testnet', 'mainnet']).optional(),
 })
 
 /**
@@ -83,6 +84,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       window?: string
       source?: 'SDEX' | 'AMM'
       method?: 'iqr' | 'modified_zscore'
+      network?: string
     }
   }>(
     '/price/vwap/:assetA/:assetB',
@@ -92,14 +94,18 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.status(400).send({ error: parsed.error.issues[0].message || 'Invalid parameters' })
       }
-      const { window: windowMinutes, source, method } = parsed.data
+      const { window: windowMinutes, source, method, network } = parsed.data
 
       const pairKey = [assetA, assetB].sort().join('/')
 
       try {
+        const effectiveNetwork: NetworkName =
+          (network as NetworkName) ?? req.network ?? activeNetwork
+
         const result = await computeVWAP(pairKey, windowMinutes, {
           source,
           outlierMethod: method,
+          network: effectiveNetwork,
         })
 
         return {
@@ -115,6 +121,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           volumeTotal: result.volumeTotal,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          network: effectiveNetwork,
         }
       } catch (err) {
         // Same as TWAP above: the driver message can contain credentials.

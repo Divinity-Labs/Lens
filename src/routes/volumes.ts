@@ -98,9 +98,10 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         tradeCount,
       }
     } catch (err) {
+      req.log.error(err)
       return reply
         .status(500)
-        .send({ error: `Volume aggregation failed: ${(err as Error).message}` })
+        .send({ error: 'Volume aggregation failed' })
     }
   })
 }

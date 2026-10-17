@@ -1,0 +1,12 @@
+{
+  "venue": "aquarius",
+  "sourceUrl": "https://api.aquarius.loan/api/v1/pools/aquarius-amm-xlm-usdc",
+  "capturedAt": "2026-10-15T12:00:00.000Z",
+  "data": {
+    "poolId": "aquarius-amm-xlm-usdc",
+    "baseReserve": "1500000.0000000",
+    "quoteReserve": "157500.0000000",
+    "feeBp": 30,
+    "lastLedger": 51234567
+  }
+}

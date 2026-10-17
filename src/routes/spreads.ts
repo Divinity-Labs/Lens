@@ -157,9 +157,10 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
         tightest: venues[0] ?? null,
       }
     } catch (err) {
+      req.log.error(err)
       return reply
         .status(500)
-        .send({ error: `Spread aggregation failed: ${(err as Error).message}` })
+        .send({ error: 'Spread aggregation failed' })
     }
   })
 }

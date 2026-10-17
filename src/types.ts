@@ -36,13 +36,23 @@ export interface AggregatedPrice {
   stale: boolean
 }
 
+export interface RouteHop {
+  from: string
+  to: string
+  venue: string
+  rate: number
+  slippagePct: number
+}
+
 export interface RouteInfo {
-  route: 'SDEX' | 'AMM' | 'SPLIT' | 'UNKNOWN'
+  route: 'SDEX' | 'AMM' | 'SPLIT' | 'MULTI_HOP' | 'UNKNOWN'
   sdexPrice: number
   ammPrice: number
   estimatedOutput: number
   slippagePct: number
   recommendation: string
+  hops?: RouteHop[]
+  path?: string[]
 }
 
 export interface WatchedPair {

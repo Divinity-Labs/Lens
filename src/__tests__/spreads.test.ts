@@ -164,7 +164,7 @@ describe('GET /spreads/:asset', () => {
     const res = await app.inject({ method: 'GET', url: '/spreads/XLM' })
 
     expect(res.statusCode).toBe(500)
-    expect(res.json().error).toMatch(/connection refused/)
+    expect(res.json().error).toBe('Spread aggregation failed')
   })
   it('exposes spreadPct as spreadBps / 100', async () => {
     // bid 99, ask 101 → spreadBps 200 → spreadPct 2.000000

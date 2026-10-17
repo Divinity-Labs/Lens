@@ -81,7 +81,8 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
           rolling24h,
         }
       } catch (err) {
-        return reply.status(500).send({ error: `Benchmark computation failed: ${(err as Error).message}` })
+        req.log.error(err)
+        return reply.status(500).send({ error: 'Benchmark computation failed' })
       }
     }
   )
