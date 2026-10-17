@@ -5,7 +5,10 @@ import ts from 'typescript'
 
 const rootDir = resolve(__dirname, '../..')
 const srcDir = resolve(rootDir, 'src')
+const examplesDir = resolve(rootDir, 'examples')
+const scriptsDir = resolve(rootDir, 'scripts')
 const envExamplePath = resolve(rootDir, '.env.example')
+
 
 /**
  * Explicit allow-list for environment variables that are deliberately
@@ -156,7 +159,11 @@ describe('.env.example drift guard', () => {
   // vitest's 5s default and makes this guard flaky. Give it real headroom.
   it('asserts each process.env read in source appears in .env.example or the allow-list', { timeout: 60_000 }, () => {
     const documentedVars = parseEnvExample(envExamplePath)
-    const sourceFiles = getSourceFiles(srcDir)
+    const sourceFiles = [
+      ...getSourceFiles(srcDir),
+      ...getSourceFiles(examplesDir),
+      ...getSourceFiles(scriptsDir),
+    ]
     const allReads: EnvRead[] = []
 
     for (const file of sourceFiles) {
@@ -203,6 +210,25 @@ describe('.env.example drift guard', () => {
     expect(missing).toHaveLength(1)
     expect(missing[0].name).toBe('SOME_BRAND_NEW_SECRET_VAR')
   })
+
+  it('fails when an un-documented process.env read is encountered in examples/', () => {
+    const sampleCode = `
+      export function runExample() {
+        const secret = process.env.MCP_SOME_NEW_UNDOCUMENTED_KEY
+        return secret
+      }
+    `
+    const reads = extractEnvReadsFromSource(sampleCode, 'examples/mcp-server/sample.ts')
+    const documentedVars = parseEnvExample(envExamplePath)
+
+    const missing = reads.filter(
+      (read) => !documentedVars.has(read.name) && !(read.name in UNDOCUMENTED_ENV_ALLOW_LIST)
+    )
+
+    expect(missing).toHaveLength(1)
+    expect(missing[0].name).toBe('MCP_SOME_NEW_UNDOCUMENTED_KEY')
+  })
+
 
   it('requires every allow-list entry to have an explicit rationale', () => {
     const entries = Object.entries(UNDOCUMENTED_ENV_ALLOW_LIST)
