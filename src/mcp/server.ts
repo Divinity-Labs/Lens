@@ -3,21 +3,57 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { fetchWithTimeout } from '../fetch.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
 }
 
+export function getMcpServerMetadata(): { name: string; version: string } {
+  try {
+    const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    const candidates = [
+      join(dir, '../../package.json'),
+      join(dir, '../package.json'),
+      join(process.cwd(), 'package.json'),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, 'utf8'));
+        if (parsed.version) {
+          return {
+            name: 'lens-mcp-server',
+            version: parsed.version,
+          };
+        }
+      }
+    }
+  } catch {
+    // fallback if file cannot be read
+  }
+  return {
+    name: 'lens-mcp-server',
+    version: '0.2.0',
+  };
+}
+
 export class BazaarMcpServer {
   private server: Server;
   private fetchWithPayment: typeof fetch;
+  public readonly serverName: string;
+  public readonly serverVersion: string;
 
   constructor(config: McpServerConfig) {
     this.fetchWithPayment = config.fetchWithPayment;
+    const meta = getMcpServerMetadata();
+    this.serverName = meta.name;
+    this.serverVersion = meta.version;
+
     this.server = new Server(
       {
-        name: 'bazaar-mcp-server',
-        version: '1.0.0',
+        name: this.serverName,
+        version: this.serverVersion,
       },
       {
         capabilities: {
@@ -34,17 +70,22 @@ export class BazaarMcpServer {
       tools: [
         {
           name: 'bazaar_search',
-          description: 'Search for resources in a Stellar Bazaar node',
+          description:
+            'Search for resources in a Stellar Bazaar node. ' +
+            'Purpose: discover available API endpoints and datasets. ' +
+            'Cost: free (zero transaction fees, no funds move). ' +
+            'Preconditions: requires a valid HTTP or HTTPS base URL of an accessible Bazaar API node. ' +
+            'When NOT to use: do not use to execute paid API requests, transfer funds on the Stellar network, or fetch price history directly.',
           inputSchema: {
             type: 'object',
             properties: {
               url: {
                 type: 'string',
-                description: 'The base URL of the Bazaar API',
+                description: 'The base URL of the Bazaar API (format: http://... or https://...)',
               },
               query: {
                 type: 'string',
-                description: 'Optional search query',
+                description: 'Optional search keyword or category query string (format: plain text string)',
               },
             },
             required: ['url'],
@@ -52,17 +93,21 @@ export class BazaarMcpServer {
         },
         {
           name: 'paid_call',
-          description: 'Make a paid API call to a Bazaar resource, handling the 402 loop automatically.',
+          description:
+            'Make a paid HTTP API call to an approved Bazaar resource, automatically handling the x402 payment challenge. ' +
+            'CRITICAL: this tool moves real funds on the Stellar network (bounded by the configured per-call limit maxPrice, default $1.00). ' +
+            'Preconditions: requires an approved resource URL and a valid HTTP method. Only permitted hosts can be paid. ' +
+            'When NOT to use: do not use for free discovery, general internet browsing, or unsupported non-Bazaar hosts.',
           inputSchema: {
             type: 'object',
             properties: {
               url: {
                 type: 'string',
-                description: 'The full URL of the resource to fetch',
+                description: 'The full URL of the paid resource to fetch (format: https://host/path)',
               },
               method: {
                 type: 'string',
-                description: 'HTTP method (default: GET)',
+                description: 'HTTP request method (format: GET, POST, PUT, DELETE; default: GET)',
               },
             },
             required: ['url'],

@@ -120,4 +120,71 @@ describe('BazaarMcpServer', () => {
     const parsedText = JSON.parse(response.content[0].text);
     expect(parsedText.success).toBe(true);
   });
+
+  it('should advertise server version matching package.json and accurate server name (Issue #420)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    expect(server.serverName).toBe('lens-mcp-server');
+    expect(server.serverVersion).toBe(pkg.version);
+
+    // Verify ServerInfo object on internal server instance matches package.json
+    const internalServer = (server as any).server;
+    expect(internalServer._serverInfo.name).toBe('lens-mcp-server');
+    expect(internalServer._serverInfo.version).toBe(pkg.version);
+    expect(internalServer._serverInfo.version).not.toBe('1.0.0');
+  });
+
+  it('should fail test if advertised version disagrees with package.json (Issue #420)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const wrongVersion = '999.999.999';
+    expect(() => {
+      if (server.serverVersion === wrongVersion) {
+        throw new Error('Version matches wrong version');
+      }
+      expect(server.serverVersion).toBe(pkg.version);
+    }).not.toThrow();
+
+    // Verify assertion fails if mock version differs
+    expect(pkg.version).not.toBe(wrongVersion);
+  });
+
+  it('should provide complete tool descriptions with cost, preconditions, and negative guidance (Issue #424)', async () => {
+    const { ListToolsRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+
+    let listToolsHandler: any = null;
+    (server as any).server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === ListToolsRequestSchema) {
+        listToolsHandler = fn;
+      }
+    };
+    (server as any).setupHandlers();
+
+    const result = await listToolsHandler();
+    expect(result.tools).toHaveLength(2);
+
+    const bazaarSearch = result.tools.find((t: any) => t.name === 'bazaar_search');
+    expect(bazaarSearch).toBeDefined();
+    expect(bazaarSearch.description).toContain('Purpose:');
+    expect(bazaarSearch.description).toContain('Cost: free');
+    expect(bazaarSearch.description).toContain('When NOT to use:');
+    expect(bazaarSearch.inputSchema.properties.url.description).toContain('format:');
+
+    const paidCall = result.tools.find((t: any) => t.name === 'paid_call');
+    expect(paidCall).toBeDefined();
+    expect(paidCall.description).toContain('moves real funds');
+    expect(paidCall.description).toContain('maxPrice');
+    expect(paidCall.description).toContain('$1.00');
+    expect(paidCall.description).toContain('When NOT to use:');
+    expect(paidCall.inputSchema.properties.url.description).toContain('format:');
+    expect(paidCall.inputSchema.properties.method.description).toContain('format:');
+  });
 });
+
