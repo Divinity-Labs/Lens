@@ -50,7 +50,7 @@ export async function registerCandleRoutes(app: FastifyInstance) {
        FROM price_points
        WHERE pair_key = $2
          AND timestamp >= $3
-         AND timestamp <= $4
+         AND timestamp < $4
        GROUP BY floor(EXTRACT(EPOCH FROM timestamp) / $1)
        ORDER BY time ASC`,
       [intervalSecs, pairKey, from, to]

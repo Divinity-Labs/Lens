@@ -80,15 +80,21 @@ export const priceResponseSchema = {
     vwap24h: { type: 'number' },
     priceChange24h: { type: 'number' },
     sources: { type: 'integer' },
+    inputCount: { type: 'integer' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
     lastTradeAgeSeconds: { type: ['integer', 'null'] },
+    newestInputObservedAt: { type: ['string', 'null'] },
+    stalenessThresholdSeconds: { type: 'integer' },
     stale: { type: 'boolean' },
-    bestRoute: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'UNKNOWN'] },
+    bestRoute: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'MULTI_HOP', 'UNKNOWN'] },
     lastUpdated: { type: 'string' },
+    priceStr: { type: 'string' },
+    sdexPriceStr: { type: 'string' },
+    ammPriceStr: { type: 'string' },
   },
 } as const
 
-/** GET /price/:assetA/:assetB/route — matches RouteInfo */
+/** GET /price/:assetA/:assetB/route — matches RouteInfo (#295) */
 export const routeResponseSchema = {
   type: 'object',
   required: [
@@ -101,12 +107,27 @@ export const routeResponseSchema = {
   ],
   additionalProperties: false,
   properties: {
-    route: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'UNKNOWN'] },
+    route: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'MULTI_HOP', 'UNKNOWN'] },
     sdexPrice: { type: 'number' },
     ammPrice: { type: 'number' },
     estimatedOutput: { type: 'number' },
     slippagePct: { type: 'number' },
     recommendation: { type: 'string' },
+    path: { type: 'array', items: { type: 'string' } },
+    hops: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['from', 'to', 'venue', 'rate', 'slippagePct'],
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          venue: { type: 'string' },
+          rate: { type: 'number' },
+          slippagePct: { type: 'number' },
+        },
+      },
+    },
   },
 } as const
 

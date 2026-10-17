@@ -26,6 +26,9 @@ import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerPremiumRoutes } from './routes/premium'
+import { registerVenuesRoutes } from './routes/venues'
+import { registerTvlRoutes } from './routes/tvl'
 import { getMetrics } from './metrics'
 
 export interface BuildAppOptions {
@@ -139,6 +142,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerBasketRoutes(app)
   await registerDiscoveryRoutes(app)
   await registerSettleRoute(app)
+  await registerPremiumRoutes(app)
+  await registerVenuesRoutes(app)
+  await registerTvlRoutes(app)
   await registerGraphQL(app)
   await registerWebSocket(app)
 

@@ -103,9 +103,11 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
   price: number; sdexPrice: number; ammPrice: number
   volume24h: number; sdexVolume24h: number; ammVolume24h: number
   vwap1m: number; vwap5m: number; vwap1h: number; vwap24h: number
-  priceChange24h: number; sources: number
+  priceChange24h: number; sources: number; inputCount?: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
+  newestInputObservedAt?: string | null
+  stalenessThresholdSeconds?: number
   stale: boolean
 }> {
   const [vwap1m, vwap5m, vwap1h, vwap24h, sdexVwap24h, priceChange24h, ammSpotResult, lastTradeResult] = await Promise.all([
@@ -188,7 +190,8 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
     confidence = 'low'
   }
 
-  const stale = lastTradeAgeSeconds !== null && lastTradeAgeSeconds >= 300
+  const staleThreshold = parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? '300', 10)
+  const stale = lastTradeAgeSeconds !== null && lastTradeAgeSeconds >= staleThreshold
 
   return {
     price: vwap1h || vwap24h || ammPrice || 0,
@@ -203,8 +206,11 @@ export async function getAggregatedPrice(pairKey: string, network: NetworkName):
     vwap24h,
     priceChange24h,
     sources,
+    inputCount: sources,
     confidence,
     lastTradeAgeSeconds,
+    newestInputObservedAt: lastTrade ? new Date(lastTrade).toISOString() : null,
+    stalenessThresholdSeconds: staleThreshold,
     stale,
   }
 }

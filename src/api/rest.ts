@@ -120,7 +120,11 @@ export async function registerRESTRoutes(app: FastifyInstance) {
 
       const agg = await getAggregatedPrice(pair.pairKey, network)
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
-      const result = {
+      const formatStringDecimals =
+        req.headers['x-format-decimals'] === 'string' ||
+        (req.query as any)?.decimals === 'string'
+
+      const result: Record<string, any> = {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
         pairKey: pair.pairKey,
@@ -128,6 +132,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         ...agg,
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
+      }
+
+      if (formatStringDecimals) {
+        result.priceStr = String(agg.price)
+        result.sdexPriceStr = String(agg.sdexPrice)
+        result.ammPriceStr = String(agg.ammPrice)
       }
 
       await setCachedPrice(cacheKey, result, config.cache.priceTtl)

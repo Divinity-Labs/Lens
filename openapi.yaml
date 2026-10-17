@@ -772,8 +772,145 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompareResponse'
+  /premium/{assetA}/{assetB}:
+    get:
+      operationId: getPremium
+      summary: Get CEX vs on-chain price premium and spread in basis points
+      security: []
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+          example: USDC
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: stalenessBound
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Max allowed age in seconds before price is rejected as stale
+      responses:
+        '200':
+          description: Premium and spread in basis points
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pair:
+                    type: string
+                  network:
+                    type: string
+                  onChainPrice:
+                    type: number
+                  onChainSource:
+                    type: string
+                  onChainTimestamp:
+                    type: string
+                    format: date-time
+                  cexPrice:
+                    type: number
+                  cexSource:
+                    type: string
+                  cexTimestamp:
+                    type: string
+                    format: date-time
+                  spreadBps:
+                    type: integer
+                  stalenessBoundSeconds:
+                    type: integer
         '404':
-          description: No price data found for the asset
+          description: Missing price data
+        '422':
+          description: Stale price refusal
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /venues:
+    get:
+      operationId: getVenues
+      summary: Get cross-venue traded volume, market share percentages and period change
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 24h
+          description: Rolling volume window
+      responses:
+        '200':
+          description: Venue market share
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  window:
+                    type: string
+                  network:
+                    type: string
+                  totalVolume:
+                    type: number
+                  venues:
+                    type: array
+                    items:
+                      type: object
+                  excludedVenues:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid window or network
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /tvl:
+    get:
+      operationId: getTvl
+      summary: Get venue-level Total Value Locked with unpriceable pool reporting
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Total Value Locked breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network:
+                    type: string
+                  valuationSource:
+                    type: string
+                  totalTvlUsd:
+                    type: number
+                  venues:
+                    type: object
+                  assets:
+                    type: object
+                  pricedPoolsCount:
+                    type: integer
+                  unpricedPoolsCount:
+                    type: integer
+                  unpricedPools:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid network
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
