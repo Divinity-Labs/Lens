@@ -280,6 +280,64 @@
         }
       }
     },
+    "/price/{assetA}/{assetB}/median": {
+      "get": {
+        "operationId": "getMedianPrice",
+        "summary": "Get staleness-aware median price across fresh sources with priority fallback",
+        "parameters": [
+          {
+            "name": "assetA",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assetB",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "freshness",
+            "in": "query",
+            "required": false,
+            "description": "Freshness threshold in seconds (default: 300)",
+            "schema": {
+              "type": "integer",
+              "default": 300
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Staleness-aware median price result with included and excluded sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Pair not watched"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/pools": {
       "get": {
         "operationId": "getPools",
