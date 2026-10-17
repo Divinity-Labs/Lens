@@ -4,6 +4,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { fetchWithTimeout } from '../fetch.js';
 
+export const VALID_MCP_TOOLS = ['bazaar_search', 'paid_call'] as const;
+export type ValidMcpToolName = typeof VALID_MCP_TOOLS[number];
+
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
 }
@@ -72,69 +75,93 @@ export class BazaarMcpServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === 'bazaar_search') {
-        const url = String(request.params.arguments?.url);
-        const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
-        
-        try {
-          const endpoint = query 
-            ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
-            : `${url.replace(/\/$/, '')}/discovery/resources`;
-            
-          const res = await fetchWithTimeout(endpoint);
+      try {
+        if (request.params.name === 'bazaar_search') {
+          const url = String(request.params.arguments?.url);
+          const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
           
-          if (!res.ok) {
-            return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Service returned ${res.status}`);
-          }
-          
-          const data = await res.json();
-          
-          const hasResources = (d: unknown): d is { resources: unknown[] } => 
-            typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
-
-          if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
-            return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
-          }
-          
-          return {
-            content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-          };
-        } catch (e: any) {
-          return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
-        }
-      }
-
-      if (request.params.name === 'paid_call') {
-        const url = String(request.params.arguments?.url);
-        const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
-        
-        try {
-          const res = await this.fetchWithPayment(url, { method });
-          
-          if (!res.ok) {
-            if (res.status === 402) {
-              return this.createErrorResponse('ERR_PAYMENT_REJECTED', 'Payment required but was rejected or failed.');
-            }
-            return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
-          }
-          
-          const text = await res.text();
-          let parsed;
           try {
-            parsed = JSON.parse(text);
-          } catch {
-            parsed = text;
-          }
-          
-          return {
-            content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
-          };
-        } catch (e: any) {
-          return this.handlePaidCallError(e);
-        }
-      }
+            const endpoint = query 
+              ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
+              : `${url.replace(/\/$/, '')}/discovery/resources`;
+              
+            const res = await fetchWithTimeout(endpoint);
+            
+            if (!res.ok) {
+              return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Service returned ${res.status}`);
+            }
+            
+            const data = await res.json();
+            
+            const hasResources = (d: unknown): d is { resources: unknown[] } => 
+              typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
 
-      throw new Error(`Unknown tool: ${request.params.name}`);
+            if (Array.isArray(data) && data.length === 0) {
+              return {
+                content: [{ type: 'text', text: JSON.stringify({ count: 0, resources: [] }, null, 2) }],
+              };
+            }
+
+            if (hasResources(data) && data.resources.length === 0) {
+              const emptyResult = {
+                count: 0,
+                resources: [],
+                ...(typeof data === 'object' && data !== null ? data : {}),
+              };
+              emptyResult.count = 0;
+              emptyResult.resources = [];
+              return {
+                content: [{ type: 'text', text: JSON.stringify(emptyResult, null, 2) }],
+              };
+            }
+            
+            return {
+              content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+            };
+          } catch (e: any) {
+            return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
+          }
+        }
+
+        if (request.params.name === 'paid_call') {
+          const url = String(request.params.arguments?.url);
+          const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
+          
+          try {
+            const res = await this.fetchWithPayment(url, { method });
+            
+            if (!res.ok) {
+              if (res.status === 402) {
+                return this.createErrorResponse('ERR_PAYMENT_REJECTED', 'Payment required but was rejected or failed.');
+              }
+              return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
+            }
+            
+            const text = await res.text();
+            let parsed;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = text;
+            }
+            
+            return {
+              content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
+            };
+          } catch (e: any) {
+            return this.handlePaidCallError(e);
+          }
+        }
+
+        const rawName = String(request.params?.name ?? '');
+        const sanitizedName = rawName.replace(/[\x00-\x1F\x7F]/g, '').slice(0, 64);
+        return this.createErrorResponse(
+          'ERR_UNKNOWN_TOOL',
+          `Unknown tool "${sanitizedName}". Valid tools are: ${VALID_MCP_TOOLS.join(', ')}`
+        );
+      } catch (err: any) {
+        return this.createErrorResponse('ERR_INTERNAL_FAILURE', err?.message || 'An internal error occurred during tool execution.');
+      }
     });
   }
 
