@@ -25,7 +25,7 @@ function makePairKey(a: string, b: string): string {
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
- * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
+ * outright — `a.split(':')[0]' — so every asset called USDC was the same asset,
  * and a request for Circle's mainnet USDC was answered with testnet USDC's
  * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
  *
@@ -64,8 +64,8 @@ function findPair(assetA: string, assetB: string, network: NetworkName) {
 
 export async function registerRESTRoutes(app: FastifyInstance) {
   // Validate every response against its declared schema in dev/test (no-op in
-  // production). Must run before the routes below are registered so they pick
-  // up the validating serializer.
+  // production). Must run before the routes below are registered so they pick up
+  // the validating serializer.
   installResponseValidation(app)
 
   // GET /status — public health/monitoring endpoint (no API key required)
@@ -107,10 +107,11 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const pair = findPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
 
-      // Cache key is network-scoped so testnet/mainnet prices for the same
-      // asset codes never collide.
-      const cacheKey = `${network}:${pair.pairKey}`
-      const cached = await getCachedPrice(cacheKey)
+      // The cache key is owned entirely by the redis helpers, which take
+      // (network, pairKey) and apply the `price:` prefix internally. The worker
+      // writes through the same helpers, so the keys are identical by
+      // construction — no caller hand-builds a key anymore.
+      const cached = await getCachedPrice(network, pair.pairKey)
       if (cached) {
         try {
           reply.header('X-Cache', 'HIT')
@@ -130,7 +131,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         lastUpdated: new Date().toISOString(),
       }
 
-      await setCachedPrice(cacheKey, result, config.cache.priceTtl)
+      await setCachedPrice(network, pair.pairKey, result, config.cache.priceTtl)
       reply.header('X-Cache', 'MISS')
       return result
     }
@@ -210,17 +211,17 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // ids are discovered with a recursive "skip scan" over the
   // (network, pool_id, timestamp DESC) index (jump to the next distinct pool_id
   // each step), then one LIMIT 1 index probe per pool fetches its newest row.
-  // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
+  // Cost is O(pools x log n); the old DISTICT ON sorted every row of every
   // network. A quiet pool is kept with its real `timestamp`, never dropped.
   app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
     const network = req.network ?? activeNetwork
     const result = await pgPool.query(
       `WITH RECURSIVE ids AS (
-         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
+         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id ASC LIMIT 1)
          UNION ALL
          SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
+                      WHERE s.network = $1 AND s.pool_id > ids.pool_id
+                      ORDER BY s.pool_id LIMIT 1)
            FROM ids
           WHERE ids.pool_id IS NOT NULL
        )
@@ -233,7 +234,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
                ORDER BY s.timestamp DESC
                LIMIT 1
              ) l
-        WHERE ids.pool_id IS NOT NULL`,
+        WHERE ids.pool_id IS NOT NULL;`,
       [network]
     )
     return { pools: result.rows }

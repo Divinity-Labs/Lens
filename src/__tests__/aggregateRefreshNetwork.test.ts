@@ -16,7 +16,7 @@ const {
   mockGetBestRoute: vi.fn(),
 }))
 
-vi.mock('bullmq', () => {
+vi.mock('Bullmq', () => {
   class Queue {
     name: string
     constructor(name: string) {
@@ -60,13 +60,13 @@ vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: mockGetBestRoute }))
 
 const { mainnetPair, testnetPair } = vi.hoisted(() => ({
   mainnetPair: {
-    pairKey: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM',
-    assetA: { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' },
+    pairKey: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN/XLM',
+    assetA: { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPR34K4KZVN' },
     assetB: { code: 'XLM', issuer: null },
   },
   testnetPair: {
-    pairKey: 'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM',
-    assetA: { code: 'USDC', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+    pairKey: 'USDC:GBBD47IF6LWK7P7MDEVMCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM',
+    assetA: { code: 'USDC', issuer: 'GBBD47IF6LWK7P7MDEVMCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
     assetB: { code: 'XLM', issuer: null },
   },
 }))
@@ -89,12 +89,12 @@ describe('aggregateRefresh runs once per enabled network', () => {
     queueNames.length = 0
     workers.length = 0
     vi.clearAllMocks()
-    mockCalculateVWAP.mockResolvedValue(0.25)
-    mockCalculateOHLCV.mockResolvedValue({ open: 0.2, high: 0.3, low: 0.2, close: 0.25, volume: 100, tradeCount: 3 })
-    mockGetAggregatedPrice.mockResolvedValue({ price: 0.25 })
-    mockGetBestRoute.mockResolvedValue({ route: 'SDEX' })
-    mockSetCachedPrice.mockResolvedValue(undefined)
-    mockUpsert.mockResolvedValue({})
+    mockCalculateVWAP.mockResolved(0.25)
+    mockCalculateOHLCV.mockResolved({ open: 0.2, high: 0.3, low: 0.2, close: 0.25, volume: 100, tradeCount: 3 })
+    mockGetAggregatedPrice.mockResolved({ price: 0.25 })
+    mockGetBestRoute.mockResolved({ route: 'SDEX' })
+    mockSetCachedPrice.mockResolved(undefined)
+    mockUpsert.mockResolved({})
   })
 
   it('names the queue and the worker after the network', () => {
@@ -107,7 +107,7 @@ describe('aggregateRefresh runs once per enabled network', () => {
     expect(workers.map(w => w.name)).toEqual(['testnet:aggregate-refresh', 'mainnet:aggregate-refresh'])
   })
 
-  it('schedules that network’s pairs, not the active network’s', async () => {
+  it('schedules that network&#8217;s pairs, not the active network&#8217;s', () => {
     const mainnetQueue = createAggregateQueue('mainnet')
     const testnetQueue = createAggregateQueue('testnet')
 
@@ -127,7 +127,7 @@ describe('aggregateRefresh runs once per enabled network', () => {
     expect(testnetJobs[0].opts.jobId).toBe(`refresh:testnet:${testnetPair.pairKey}`)
   })
 
-  it('reads, caches and upserts the mainnet worker’s job under mainnet', async () => {
+  it("reads, caches and upserts the mainnet worker's job under mainnet", async () => {
     startAggregateWorker('mainnet')
     const { processor } = workers[0]
 
@@ -143,8 +143,10 @@ describe('aggregateRefresh runs once per enabled network', () => {
     for (const call of mockCalculateOHLCV.mock.calls) {
       expect(call).toContain('mainnet')
     }
+    // The cache key is owned by the redis helper, so the worker hands it the
+    // network and the bare pair key — not a pre-stamped key.
     expect(mockSetCachedPrice).toHaveBeenCalledWith(
-      `mainnet:${mainnetPair.pairKey}`, expect.objectContaining({ network: 'mainnet' }), 10
+      'mainnet', mainnetPair.pairKey, expect.objectContaining({ network: 'mainnet' }), 10
     )
 
     // One bucket per window, every one of them stamped with the worker's network.
@@ -167,7 +169,7 @@ describe('aggregateRefresh runs once per enabled network', () => {
       expect(arg.create.network).toBe('testnet')
     }
     expect(mockSetCachedPrice).toHaveBeenCalledWith(
-      `testnet:${testnetPair.pairKey}`, expect.objectContaining({ network: 'testnet' }), 10
+      'testnet', testnetPair.pairKey, expect.objectContaining({ network: 'testnet' }), 10
     )
   })
 })
