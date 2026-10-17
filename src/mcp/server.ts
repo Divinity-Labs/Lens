@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
+import { callLensTool, isLensToolName, lensToolDefinitions } from './lensTools.js';
 import { fetchWithTimeout } from '../fetch.js';
 
 export interface McpServerConfig {
@@ -68,10 +69,17 @@ export class BazaarMcpServer {
             required: ['url'],
           },
         },
+        // Lens's own data — pairs, pools and the screener, served from the same
+        // implementations as the REST routes (see ./lensTools.ts).
+        ...lensToolDefinitions(),
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      if (isLensToolName(request.params.name)) {
+        return callLensTool(request.params.name, request.params.arguments);
+      }
+
       if (request.params.name === 'bazaar_search') {
         const url = String(request.params.arguments?.url);
         const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;

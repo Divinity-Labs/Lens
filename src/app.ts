@@ -7,6 +7,7 @@ import { registerGraphQL } from './api/graphql'
 import { registerWebhookRoutes } from './routes/webhooks'
 import { registerCandleRoutes } from './routes/candles'
 import { registerPairsRoutes } from './routes/pairs'
+import { registerPoolsRoutes } from './routes/pools'
 import { registerScreenerRoutes } from './routes/screener'
 import { registerHistoryRoutes } from './api/history'
 import { registerX402 } from './middleware/x402'
@@ -128,6 +129,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerWebhookRoutes(app)
   await registerCandleRoutes(app)
   await registerPairsRoutes(app)
+  await registerPoolsRoutes(app)
   await registerScreenerRoutes(app)
   await registerHistoryRoutes(app)
   await registerPriceRoutes(app)

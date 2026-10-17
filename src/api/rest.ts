@@ -11,7 +11,6 @@ import {
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
-  poolsResponseSchema,
   depthResponseSchema,
   installResponseValidation,
 } from './schemas'
@@ -203,41 +202,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       }
     }
   )
-
-  // GET /pools
-  //
-  // Latest snapshot per pool for one network, without reading history. The pool
-  // ids are discovered with a recursive "skip scan" over the
-  // (network, pool_id, timestamp DESC) index (jump to the next distinct pool_id
-  // each step), then one LIMIT 1 index probe per pool fetches its newest row.
-  // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
-  // network. A quiet pool is kept with its real `timestamp`, never dropped.
-  app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
-    const network = req.network ?? activeNetwork
-    const result = await pgPool.query(
-      `WITH RECURSIVE ids AS (
-         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
-         UNION ALL
-         SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
-           FROM ids
-          WHERE ids.pool_id IS NOT NULL
-       )
-       SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
-         FROM ids
-        CROSS JOIN LATERAL (
-              SELECT * FROM pool_snapshots s
-               WHERE s.network = $1 AND s.pool_id = ids.pool_id
-               ORDER BY s.timestamp DESC
-               LIMIT 1
-             ) l
-        WHERE ids.pool_id IS NOT NULL`,
-      [network]
-    )
-    return { pools: result.rows }
-  })
 
   // GET /price/:assetA/:assetB/depth?amount=1000
   app.get<{
