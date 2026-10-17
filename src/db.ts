@@ -4,11 +4,9 @@ import { db_query_duration_seconds } from './metrics'
 import { config, type NetworkName } from './config'
 
 // Prisma for schema management + simple queries
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
-export const prisma = globalForPrisma.prisma ?? new PrismaClient({
+export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer
@@ -65,8 +63,8 @@ export async function upsertPricePoints(points: {
 
 /**
  * The cursor and the ledger it reached, read in one round trip. Ingesters need
- * both: the cursor resumes pagination, and the ledger is the fallback when a
- * trade's TOID can't be parsed (see ingesters/toid.ts).
+ * both: the cursor resumes pagination, and the ledger is the fallback when
+ * a trade's TOID can't be parsed (see ingesters/toid.ts).
  */
 export interface IndexerState {
   cursor: string | null

@@ -8,6 +8,7 @@
     "build": "node node_modules/prisma/build/index.js generate && tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:network-scope": "vitest run tests/network-scope.test.ts",
     "openapi:gen": "tsx scripts/generate-openapi.ts",
     "changeset": "changeset",
     "version-packages": "changeset version",

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
 import { activeNetwork, type NetworkName } from '../config'
+import { NETWORK_SCOPED_TABLES, NETWORK_PREDICATE_ALLOWLIST } from '../config/networkScopedTables'
 
 const VALID_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
 
@@ -68,3 +69,27 @@ async function networkSelectorPlugin(app: FastifyInstance) {
 }
 
 export const registerNetworkSelector = fp(networkSelectorPlugin, { name: 'network-selector' })
+
+/**
+ * Raw SQL queries that touch a network-scoped table but deliberately read
+ * across networks. Each entry must state a reason; anything not listed here
+ * is required to carry a network predicate (see `test/network-scope.test.ts`).
+ */
+export const NETWORK_SCOPE_EXCEPTIONS: readonly {
+  query: string
+  reason: string
+}[] = NETWORK_PREDICATE_ALLOWLIST
+
+/**
+ * Returns true when `sql` mentions a network-scoped table without also
+ * constraining on `network`. Used by the CI guard that fails the build when a
+ * new unscoped query is introduced.
+ */
+export function isNetworkScopedQueryUnscoped(sql: string): boolean {
+  const normalized = sql.toLowerCase()
+  const touchesScopedTable = NETWORK_SCOPED_TABLES.some((table) =>
+    new RegExp(`\\b${table}\\b`).test(normalized)
+  )
+  if (!touchesScopedTable) return false
+  return !/\bnetwork\b\s*(=|in\b|is\b)/.test(normalized)
+}

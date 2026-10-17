@@ -21,3 +21,8 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
       - run: npm test --if-present
+      # Network-scope guard: fails the build if any raw SQL query touches a
+      # network-scoped table (e.g. price_points) without a network predicate,
+      # unless it is listed with a reason in the test's allow-list.
+      - name: Network scope guard
+        run: npx vitest run tests/network-scope.test.ts
