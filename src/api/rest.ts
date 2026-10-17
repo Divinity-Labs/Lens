@@ -35,7 +35,7 @@ function makePairKey(a: string, b: string): string {
  * identifies an asset. A bare code still matches on code alone, since callers
  * quoting XLM or a single-issuer asset rely on that.
  */
-function findPair(assetA: string, assetB: string, network: NetworkName) {
+export function findPair(assetA: string, assetB: string, network: NetworkName) {
   const parse = (a: string) => {
     if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
     const [code, issuer] = a.split(':')
@@ -54,12 +54,75 @@ function findPair(assetA: string, assetB: string, network: NetworkName) {
     if (!q.issuer || !side.issuer) return true
     return q.issuer === side.issuer
   }
+  let pairs: any[] = []
+  try {
+    if (typeof getNetworkConfig === 'function') {
+      const netCfg = getNetworkConfig(network)
+      if (netCfg && netCfg.pairs) {
+        pairs = netCfg.pairs
+      }
+    }
+  } catch {
+    // getNetworkConfig is not defined in mock
+  }
 
-  return getNetworkConfig(network).pairs.find(
+  if (pairs.length === 0 && config && config.pairs) {
+    pairs = config.pairs
+  }
+
+  return pairs.find(
     p =>
       (matches(qA, p.assetA) && matches(qB, p.assetB)) ||
       (matches(qA, p.assetB) && matches(qB, p.assetA)),
   )
+}
+
+export interface PoolSnapshotRow {
+  pool_id: string
+  asset_a: string
+  asset_b: string
+  reserve_a: number | null
+  reserve_b: number | null
+  spot_price: number | null
+  fee_bp: number | null
+  timestamp: string | Date
+}
+
+export async function queryPools(network: NetworkName, pairFilter?: string): Promise<PoolSnapshotRow[]> {
+  const result = await pgPool.query(
+    `WITH RECURSIVE ids AS (
+       (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
+       UNION ALL
+       SELECT (SELECT s.pool_id FROM pool_snapshots s
+                WHERE s.network = $1 AND s.pool_id > ids.pool_id
+                ORDER BY s.pool_id LIMIT 1)
+         FROM ids
+        WHERE ids.pool_id IS NOT NULL
+     )
+     SELECT l.pool_id, l.asset_a, l.asset_b,
+            l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
+       FROM ids
+      CROSS JOIN LATERAL (
+            SELECT * FROM pool_snapshots s
+             WHERE s.network = $1 AND s.pool_id = ids.pool_id
+             ORDER BY s.timestamp DESC
+             LIMIT 1
+           ) l
+      WHERE ids.pool_id IS NOT NULL`,
+    [network]
+  )
+  let rows: PoolSnapshotRow[] = result.rows
+  if (pairFilter) {
+    const [pA, pB] = pairFilter.split('/').map(s => s.trim().toUpperCase())
+    if (pA && pB) {
+      rows = rows.filter(r => {
+        const a = (r.asset_a || '').toUpperCase()
+        const b = (r.asset_b || '').toUpperCase()
+        return (a === pA && b === pB) || (a === pB && b === pA)
+      })
+    }
+  }
+  return rows
 }
 
 export async function registerRESTRoutes(app: FastifyInstance) {
@@ -211,32 +274,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // (network, pool_id, timestamp DESC) index (jump to the next distinct pool_id
   // each step), then one LIMIT 1 index probe per pool fetches its newest row.
   // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
-  // network. A quiet pool is kept with its real `timestamp`, never dropped.
   app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
     const network = req.network ?? activeNetwork
-    const result = await pgPool.query(
-      `WITH RECURSIVE ids AS (
-         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
-         UNION ALL
-         SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
-           FROM ids
-          WHERE ids.pool_id IS NOT NULL
-       )
-       SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
-         FROM ids
-        CROSS JOIN LATERAL (
-              SELECT * FROM pool_snapshots s
-               WHERE s.network = $1 AND s.pool_id = ids.pool_id
-               ORDER BY s.timestamp DESC
-               LIMIT 1
-             ) l
-        WHERE ids.pool_id IS NOT NULL`,
-      [network]
-    )
-    return { pools: result.rows }
+    const pools = await queryPools(network)
+    return { pools }
   })
 
   // GET /price/:assetA/:assetB/depth?amount=1000
