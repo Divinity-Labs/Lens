@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { fetchWithTimeout } from '../fetch.js';
+import { mcp_tool_calls_total, mcp_tool_duration_seconds, mcp_errors_total } from '../metrics.js';
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
@@ -72,69 +73,87 @@ export class BazaarMcpServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === 'bazaar_search') {
-        const url = String(request.params.arguments?.url);
-        const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
-        
-        try {
-          const endpoint = query 
-            ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
-            : `${url.replace(/\/$/, '')}/discovery/resources`;
-            
-          const res = await fetchWithTimeout(endpoint);
-          
-          if (!res.ok) {
-            return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Service returned ${res.status}`);
-          }
-          
-          const data = await res.json();
-          
-          const hasResources = (d: unknown): d is { resources: unknown[] } => 
-            typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
+      const toolName = request.params.name;
+      const tool = (toolName === 'bazaar_search' || toolName === 'paid_call') ? toolName : 'unknown';
+      const stopTimer = mcp_tool_duration_seconds.startTimer({ tool });
 
-          if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
-            return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
-          }
+      const execute = async () => {
+        if (toolName === 'bazaar_search') {
+          const url = String(request.params.arguments?.url);
+          const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
           
-          return {
-            content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-          };
-        } catch (e: any) {
-          return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
-        }
-      }
-
-      if (request.params.name === 'paid_call') {
-        const url = String(request.params.arguments?.url);
-        const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
-        
-        try {
-          const res = await this.fetchWithPayment(url, { method });
-          
-          if (!res.ok) {
-            if (res.status === 402) {
-              return this.createErrorResponse('ERR_PAYMENT_REJECTED', 'Payment required but was rejected or failed.');
-            }
-            return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
-          }
-          
-          const text = await res.text();
-          let parsed;
           try {
-            parsed = JSON.parse(text);
-          } catch {
-            parsed = text;
-          }
-          
-          return {
-            content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
-          };
-        } catch (e: any) {
-          return this.handlePaidCallError(e);
-        }
-      }
+            const endpoint = query 
+              ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
+              : `${url.replace(/\/$/, '')}/discovery/resources`;
+              
+            const res = await fetchWithTimeout(endpoint);
+            
+            if (!res.ok) {
+              return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Service returned ${res.status}`);
+            }
+            
+            const data = await res.json();
+            
+            const hasResources = (d: unknown): d is { resources: unknown[] } => 
+              typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
 
-      throw new Error(`Unknown tool: ${request.params.name}`);
+            if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
+              return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
+            }
+            
+            return {
+              content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+            };
+          } catch (e: any) {
+            return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
+          }
+        }
+
+        if (toolName === 'paid_call') {
+          const url = String(request.params.arguments?.url);
+          const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
+          
+          try {
+            const res = await this.fetchWithPayment(url, { method });
+            
+            if (!res.ok) {
+              if (res.status === 402) {
+                return this.createErrorResponse('ERR_PAYMENT_REJECTED', 'Payment required but was rejected or failed.');
+              }
+              return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
+            }
+            
+            const text = await res.text();
+            let parsed;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = text;
+            }
+            
+            return {
+              content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
+            };
+          } catch (e: any) {
+            return this.handlePaidCallError(e);
+          }
+        }
+
+        throw new Error(`Unknown tool: ${toolName}`);
+      };
+
+      try {
+        const result = await execute();
+        const outcome = 'isError' in result && result.isError ? 'error' : 'success';
+        mcp_tool_calls_total.inc({ tool, outcome });
+        stopTimer();
+        return result;
+      } catch (err: any) {
+        mcp_tool_calls_total.inc({ tool, outcome: 'error' });
+        stopTimer();
+        throw err;
+      }
     });
   }
 
@@ -161,6 +180,7 @@ export class BazaarMcpServer {
   }
 
   private createErrorResponse(code: McpErrorCode, reason: string) {
+    mcp_errors_total.inc({ code });
     // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
     const payload = {
       isError: true,
