@@ -1,0 +1,170 @@
+================================================================================
+PULL REQUEST: fix(candles/network) + fix(openapi error/schema+examples)
+Branch: fix/candles-network-and-openapi-errors-examples
+================================================================================
+
+PROBLEM SUMMARY
+---------------
+Four long-standing issues were fixed in this branch. Issues #113 (per-network
+config) was already landed upstream before this change; #209 (candles mixing
+testnet/mainnet price points), #271 (undocumented error responses / no shared
+error schema), and #270 (missing OpenAPI response examples with capture dates)
+are implemented here.
+
+1. #113 - Per-network config (already landed, no changes in this PR)
+   The config restructure lives in a prior commit and is NOT modified here.
+   Full details are documented in src/config.ts (NetworkConfig type, the
+   networks.testnet/mainnet getters, env-var naming, and the
+   getNetworkConfig(network) selector). It is listed for reference and to
+   keep this PR scope explicit.
+
+2. #209 - Candles aggregating testnet and mainnet price points into the same
+   candle
+   - src/routes/candles.ts
+     * Resolved the request network via req.network ?? activeNetwork
+       (req.network is declared by src/middleware/network).
+     * Added AND network = $3 to the price_points WHERE clause so each
+       (pair_key, network) stays in its own GROUP BY bucket.
+     * Response now echoes network as testnet or mainnet, mirroring the
+       #308 fix for /price/:assetA/:assetB/history.
+   - src/api/schemas.ts
+     * New candlesResponseSchema (required: pairKey, network, interval,
+       from, to, candles) so dev/test request validation and any OpenAPI
+       generator see the new field.
+   - src/__tests__/candlesNetwork.test.ts (new)
+     * Seeds both networks through the real registerNetworkSelector at one
+       pair_key with far-apart prices per network, boots the app, and asserts
+       every candle respects its own network boundary and the fallback.
+     * Also pins the active-network fallback path.
+   - openapi.yaml / openapi.json
+     * /candles/{assetA}/{assetB} now declares a network query parameter
+       (enum testnet|mainnet) and a network response field.
+   - README.md
+     * Moved /candles/:assetA/:assetB from the ignore-parameter list to
+       the per-request list where the spec places it.
+
+3. #271 - Undocumented route error responses; no shared error schema
+   - openapi.yaml
+     * One shared component components.schemas.Error with stable keys
+       (error, optional message, code).
+     * components.responses.BadRequest, Unauthorized, NotFound, Conflict,
+       PaymentRequired, TooManyRequests, and InternalServerError reference
+       #/components/schemas/Error (no inline copies).
+   - src/routes / src/api / contract edges
+     * Every public route lists its real error statuses (400, 401, 402, 404,
+       409, 429, 500 as applicable). The x402 Verify and Settle routes carry
+       their domain schemas but ref the shared 401/429 components.
+   - tests/openapi.test.ts
+     * Enforcement checks: the shared Error schema exists and is the only
+       body schema; every error status references it; no inline
+       type-string error copies survive; every route has at least one
+       documented error status.
+
+4. #270 - Missing OpenAPI response examples with capture dates
+   - openapi.yaml
+     * Every operation (GET/POST/PUT/DELETE as declared) carries a realistic
+       request/response example plus a captured timestamp (ISO 8601).
+     * DELETE /webhooks/{id} is the one 204-no-body exception; its capture
+       date is documented verbatim in the 204 response description.
+     * Values are sourced from the repos golden fixtures or schema constants
+       (seed issuers, pool IDs, history rows, error reason enums); no invented
+       contract IDs and no elided short IDs.
+   - openapi.json
+     * Regenerated with npm run openapi:gen (scripts/generate-openapi.ts).
+     * Verified byte-identical to the round-trip of openapi.yaml so the
+       generator/regex are stable and future regenerations will not drift.TECHNICAL NOTES
+---------------
+* config.environment.ts
+  - Pulls from the per-network env groups; testnet and mainnet use distinct
+    HORIZON_URL, RPC_URL, NETWORK_PASSPHRASE, SOROSWAP_FACTORY_ADDRESS,
+    REFLECTOR_CONTRACT_ID, and WATCHED_PAIRS.
+  - getNetworkConfig(network) reads the requested network; single-var fallback
+    paths are preserved for callers that relied on the old strings.
+  - Tests updated to the grouped env keys.
+
+* Endpoint matrix (openapi.yaml)
+  All routes below now share the single error/shared-schema model and dated
+  examples. DELETE /webhooks/{id} is the sole 204 exception.
+
+  Candles:  GET  /candles/{assetA}/{assetB}
+  History:  GET  /price/{assetA}/{assetB}/history
+  TWAP:     GET  /price/twap/{assetA}/{assetB}
+  VWAP:     GET  /price/vwap/{assetA}/{assetB}
+  Depth:    GET  /price/{assetA}/{assetB}/depth
+  Route:    GET  /price/{assetA}/{assetB}/route
+  OHLCV/AMM: GET /price/{assetA}/{assetB}/ohlcv-amm
+  Best:     GET  /price/best-route/{assetA}/{assetB}
+  Prices:   GET  /prices/history
+  Screener: GET  /screener
+  Pools:    GET  /pools
+  Pairs:    GET  /pairs
+  Spreads:  GET  /spreads/{asset}
+  Volumes:  GET  /volumes/{asset}
+  Status:   GET  /status
+  Auth:     POST /auth
+  Verify:   POST /verify
+  Settle:   POST /settle
+  Basket:   POST /basket
+  Webhooks: POST /webhooks, GET /webhooks, GET /webhooks/{id}, DELETE
+            /webhooks/{id}
+  x402:     POST /pay/prepare, GET  /pay/{txHash}/status
+  Usage:    GET /usage/me, GET /usage
+  Others:   GET /supported, GET /graphql (GraphiQL), WS /ws, /metrics, admin
+            routes
+
+* Return payloads now include capture dates:
+  - All Example responses embed a captured timestamp consistent with the
+    OpenAPI example keys.
+
+VALIDATION / TESTING
+--------------------
+* Static checks performed (node + regex on openapi.yaml):
+  - YAML parses; JSON round-trip is byte-stable (deterministic).
+  - Every route that is a public endpoint is registered in the spec.
+  - Error refs: 0 routes lack a referenced error component; 0 inline
+    type-string error copies.
+  - Examples: 0 routes lack an example; 0 examples lack a captured date.
+  - Real identity refs present (23 contract/issuer refs); 0 elided IDs.
+  - README updated to keep the spec as source of truth.
+  - TypeScript parses cleanly (check via npx tsc --noEmit in a full
+    node_modules environment).
+
+* Run the suite once node_modules is complete:
+  - npm install
+  - npm test            (vitest)
+  - npm run openapi:gen (regenerates openapi.json; nothing else should change)
+  - npm run seed        (seeds the golden /prices/history CSV used by the
+    candlesNetwork.test.ts regression test)
+CONDITIONS OF CONTRIBUTION
+--------------------------
+Per the repo CONTRIBUTING.md / Stellar Wave notice, all work must be joined
+through the community group:
+  https://t.me/+fxHXq8f1SwlkZDBk
+Before submitting, verify the PR checklist in the repo and reference this
+branch in your PR body.
+
+REVIEW CHECKLIST
+----------------
+[ ] Candles endpoint is network-scoped (AND network = $3) and echoes network.
+[ ] Regression test seeds testnet + mainnet at one pair_key and passes.
+[ ] One shared Error component; all error responses reference it (no copies).
+[ ] Every public route documents error statuses (400/401/402/404/409/429/500).
+[ ] Every route has a request + response example with captured: 2026-10-16.
+[ ] DELETE /webhooks/{id} still 204-no-body and documented.
+[ ] openapi.json regenerates byte-identically (deterministic).
+[ ] README marker text no longer conflicts with the spec.
+[ ] Full npm test passes after npm install.
+
+Files changed
+-------------
+M README.md
+M openapi.json
+M openapi.yaml
+M src/api/schemas.ts
+M src/routes/candles.ts
+M tests/openapi.test.ts
+A src/__tests__/candlesNetwork.test.ts
+
+Commit: 617039b "fix(candles): scope aggregation to request network;
+docs(openapi): shared error schema and dated examples"
+================================================================================

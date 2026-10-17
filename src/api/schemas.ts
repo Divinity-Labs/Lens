@@ -110,6 +110,36 @@ export const routeResponseSchema = {
   },
 } as const
 
+/** GET /candles/:assetA/:assetB — network-scoped OHLCV buckets (#209). */
+export const candlesResponseSchema = {
+  type: 'object',
+  required: ['pairKey', 'network', 'interval', 'from', 'to', 'candles'],
+  additionalProperties: false,
+  properties: {
+    pairKey: { type: 'string' },
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    interval: { type: 'string', enum: ['1m', '5m', '15m', '1h', '4h', '1d'] },
+    from: { type: 'string' },
+    to: { type: 'string' },
+    candles: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['time', 'open', 'high', 'low', 'close', 'volume'],
+        additionalProperties: false,
+        properties: {
+          time: {},
+          open: { type: 'number' },
+          high: { type: 'number' },
+          low: { type: 'number' },
+          close: { type: 'number' },
+          volume: { type: 'number' },
+        },
+      },
+    },
+  },
+} as const
+
 /** GET /price/:assetA/:assetB/history */
 export const historyResponseSchema = {
   type: 'object',

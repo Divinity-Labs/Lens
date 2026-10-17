@@ -46,6 +46,19 @@ paths:
                   ingestLagSeconds:
                     type: integer
                     nullable: true
+              example:
+                ok: true
+                network: testnet
+                watchedPairs:
+                  - USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                lastIndexedLedger: 50000200
+                lastProcessedAt: '2026-10-16T00:00:00.000Z'
+                ingestLagSeconds: 12
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -76,10 +89,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AggregatedPrice'
+              example:
+                assetA: XLM
+                assetB: USDC
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                network: testnet
+                price: 0.11906825
+                sdexPrice: 0.11906825
+                ammPrice: 0.12
+                volume24h: 184400
+                sdexVolume24h: 134800
+                ammVolume24h: 49600
+                vwap1m: 0.11906825
+                vwap5m: 0.11906825
+                vwap1h: 0.11906825
+                vwap24h: 0.11906825
+                priceChange24h: 0.42
+                sources: 2
+                confidence: high
+                lastTradeAgeSeconds: 30
+                stale: false
+                bestRoute: SPLIT
+                lastUpdated: '2026-10-16T00:00:00.000Z'
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '404':
-          description: Pair not watched
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -114,8 +154,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RouteInfo'
+              example:
+                route: SPLIT
+                sdexPrice: 0.11906825
+                ammPrice: 0.12
+                estimatedOutput: 119.07
+                slippagePct: 0.08
+                recommendation: Split across SDEX and AMM
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -169,8 +223,27 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/PriceBucket'
+              example:
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                network: testnet
+                window: 1h
+                buckets:
+                  - bucket: '2026-10-16T00:00:00.000Z'
+                    window: 1h
+                    vwap: 0.11906825
+                    sdexVwap: 0.11906825
+                    ammVwap: 0.12
+                    volume: 5200
+                    tradeCount: 3
+                    open: 0.1189
+                    close: 0.1191
+                    high: 0.1192
+                    low: 0.1188
+                captured: '2026-10-16'
         '400':
-          description: Invalid parameters
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -212,6 +285,21 @@ paths:
                         timestamp:
                           type: string
                           format: date-time
+              example:
+                pools:
+                  - pool_id: 65c24738ce0ba076fd4f4d3b66618681ca1f9e9d78c95bb8db3a684a82bb3ee0
+                    asset_a: XLM
+                    asset_b: USDC
+                    reserve_a: 550000
+                    reserve_b: 66000
+                    spot_price: 0.12
+                    fee_bp: 30
+                    timestamp: '2026-10-16T00:00:00.000Z'
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
@@ -253,6 +341,7 @@ paths:
           schema:
             type: string
             format: date-time
+        - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
           description: Candle data
@@ -263,6 +352,9 @@ paths:
                 properties:
                   pairKey:
                     type: string
+                  network:
+                    type: string
+                    enum: [testnet, mainnet]
                   interval:
                     type: string
                   from:
@@ -287,8 +379,24 @@ paths:
                           type: number
                         volume:
                           type: number
+              example:
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                network: testnet
+                interval: 1h
+                from: '2026-10-15T00:00:00.000Z'
+                to: '2026-10-16T00:00:00.000Z'
+                candles:
+                  - time: '2026-10-16T00:00:00.000Z'
+                    open: 0.1189
+                    high: 0.1192
+                    low: 0.1188
+                    close: 0.1191
+                    volume: 5200
+                captured: '2026-10-16'
         '400':
-          description: Invalid parameters
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
@@ -381,8 +489,28 @@ paths:
                           type: number
                         volume:
                           type: number
+              example:
+                pair: XLM/USDC
+                network: testnet
+                interval: 5m
+                from: '2026-10-16T00:00:00.000Z'
+                to: '2026-10-16T00:15:00.000Z'
+                count: 3
+                points:
+                  - ts: '2026-10-16T00:00:00.000Z'
+                    price: 0.4123
+                    volume: 5400
+                  - ts: '2026-10-16T00:05:00.000Z'
+                    price: 0.4131
+                    volume: 4980.5
+                  - ts: '2026-10-16T00:10:00.000Z'
+                    price: 0.4127
+                    volume: 6120
+                captured: '2026-10-16'
         '400':
-          description: Invalid parameters
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
@@ -421,6 +549,20 @@ paths:
                           type: string
                           format: date-time
                           nullable: true
+              example:
+                pairs:
+                  - pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                    assetA: { code: XLM, issuer: null }
+                    assetB:
+                      code: USDC
+                      issuer: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                    latestPrice: 0.11906825
+                    lastUpdated: '2026-10-16T00:00:00.000Z'
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
     post:
@@ -444,12 +586,30 @@ paths:
       responses:
         '201':
           description: Pair added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pairKey:
+                    type: string
+                  assetA:
+                    $ref: '#/components/schemas/Asset'
+                  assetB:
+                    $ref: '#/components/schemas/Asset'
+              example:
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                assetA: { code: XLM, issuer: null }
+                assetB:
+                  code: USDC
+                  issuer: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                captured: '2026-10-16'
         '400':
-          description: Invalid input
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: Unauthorized
+          $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Pair already exists
+          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -489,12 +649,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DepthResponse'
+              example:
+                assetA: XLM
+                assetB: USDC
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                spotPrice: 0.12
+                executionPrice: 0.1199
+                slippagePct: 0.08
+                asks:
+                  - { price: 0.1201, size: 5500 }
+                  - { price: 0.1203, size: 11000 }
+                bids:
+                  - { price: 0.1199, size: 5500 }
+                  - { price: 0.1197, size: 11000 }
+                source: AMM
+                captured: '2026-10-16'
         '400':
-          description: Invalid amount
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '404':
-          description: Pair not watched
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -611,14 +788,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TwapResponse'
+              example:
+                assetA: XLM
+                assetB: USDC
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                network: testnet
+                twap: 0.11906825
+                windowMinutes: 60
+                sampleIntervalSeconds: 60
+                startTime: '2026-10-15T23:00:00.000Z'
+                endTime: '2026-10-16T00:00:00.000Z'
+                sampleCount: 60
+                outlierRejected: 1
+                filterMethod: iqr
+                captured: '2026-10-16'
         '400':
-          description: Invalid parameters
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: TWAP computation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /price/vwap/{assetA}/{assetB}:
     get:
@@ -667,14 +864,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VwapResponse'
+              example:
+                assetA: XLM
+                assetB: USDC
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                vwap: 0.11906825
+                windowMinutes: 60
+                source: all
+                startTime: '2026-10-15T23:00:00.000Z'
+                endTime: '2026-10-16T00:00:00.000Z'
+                sampleCount: 120
+                volumeTotal: 184400
+                outlierRejected: 2
+                filterMethod: iqr
+                captured: '2026-10-16'
         '400':
-          description: Invalid parameters
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: VWAP computation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /volumes/{asset}:
     get:
@@ -706,12 +923,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VolumeResponse'
+              example:
+                asset: XLM
+                network: testnet
+                window: 24h
+                startTime: '2026-10-15T00:00:00.000Z'
+                endTime: '2026-10-16T00:00:00.000Z'
+                totalVolume: 184400
+                byVenue: { SDEX: 134800, AMM: 49600 }
+                venues: [SDEX, AMM]
+                tradeCount: 120
+                captured: '2026-10-16'
         '400':
-          description: Invalid window
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Volume aggregation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /spreads/{asset}:
     get:
@@ -745,12 +979,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpreadResponse'
+              example:
+                asset: XLM
+                network: testnet
+                window: 5m
+                startTime: '2026-10-15T23:55:00.000Z'
+                endTime: '2026-10-16T00:00:00.000Z'
+                venues:
+                  - venue: SDEX
+                    pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                    bid: 0.1188
+                    ask: 0.1192
+                    mid: 0.119
+                    spreadBps: 33.6
+                    spreadPct: 0.336
+                    observations: 12
+                    lastSeen: '2026-10-16T00:00:00.000Z'
+                tightest:
+                  venue: SDEX
+                  pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                  bid: 0.1188
+                  ask: 0.1192
+                  mid: 0.119
+                  spreadBps: 33.6
+                  spreadPct: 0.336
+                  observations: 12
+                  lastSeen: '2026-10-16T00:00:00.000Z'
+                captured: '2026-10-16'
         '400':
-          description: Invalid window or network
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Spread aggregation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /compare/{asset}:
     get:
@@ -772,8 +1039,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompareResponse'
+              example:
+                asset: XLM
+                network: testnet
+                lens: 0.11906825
+                reflector: 0.1191
+                deviationPct: 0.0267
+                status: aligned
+                fetchedAt: '2026-10-16T00:00:00.000Z'
+                oracles:
+                  - name: reflector
+                    price: 0.1191
+                    timestamp: '2026-10-16T00:00:00.000Z'
+                    deviationPct: 0.0267
+                    status: available
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
-          description: No price data found for the asset
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -849,12 +1135,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScreenerResponse'
+              example:
+                data:
+                  - pair_key: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                    volume: 184400
+                    price: 0.11906825
+                    change_24h: 0.42
+                    liquidity: 616000
+                nextCursor: null
+                hasMore: false
+                total: null
+                captured: '2026-10-16'
         '400':
-          description: Invalid filter, sort or cursor
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /benchmark/{asset}:
     get:
@@ -881,12 +1184,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BenchmarkResponse'
+              example:
+                asset: USDC
+                target: USD
+                pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                currentPrice: 0.11906825
+                currentDeviationBp: -8809.3175
+                rolling24h:
+                  maxDeviationBp: -8795.1
+                  minDeviationBp: -8821.4
+                  maxAbsoluteDeviationBp: 8821.4
+                  averageDeviationBp: -8808.2
+                  sampleCount: 120
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
-          description: Pair not watched
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Benchmark computation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /basket:
     get:
@@ -923,10 +1247,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BasketResponse'
+              example:
+                basketPrice: 0.14344
+                components:
+                  - asset: XLM
+                    price: 0.11906825
+                    weight: 0.6
+                    contribution: 0.07144095
+                  - asset: USDC
+                    price: 0.18
+                    weight: 0.4
+                    contribution: 0.072
+                weightSum: 1
+                computedAt: '2026-10-16T00:00:00.000Z'
+                captured: '2026-10-16'
         '400':
-          description: Missing assets or mismatched/invalid weights
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
-          description: No price data for one or more assets
+          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -984,6 +1324,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DiscoveryResponse'
+              example:
+                resources:
+                  - resource:
+                      url: http://localhost:3002/price/XLM/USDC
+                      description: Unified Stellar price for XLM/USDC
+                      serviceName: Lens price feed
+                    accepts:
+                      - scheme: exact
+                        network: stellar:testnet
+                        amount: '10000'
+                        asset: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                        payTo: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                        maxTimeoutSeconds: 300
+                    extensions:
+                      bazaar:
+                        info:
+                          type: http
+                          method: GET
+                        schema:
+                          type: object
+                limit: 50
+                offset: 0
+                total: 1
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1019,6 +1387,13 @@ paths:
                 direction:
                   type: string
                   enum: [above, below]
+            example:
+              url: https://example.com/lens-webhook
+              assetA: XLM
+              assetB: USDC
+              threshold: 0.15
+              direction: above
+              captured: '2026-10-16'
       responses:
         '201':
           description: Webhook created
@@ -1026,8 +1401,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WebhookCreatedResponse'
+              example:
+                id: 3f9c4a10-7b2e-4a1d-9c3f-2d4b5a6c7d8e
+                secret: 9f2c4a6b8d0e1f3a5c7d9e0b2a4c6d8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d
+                captured: '2026-10-16'
         '400':
-          description: Invalid webhook definition
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1044,7 +1425,15 @@ paths:
             type: string
       responses:
         '204':
-          description: Webhook deleted (idempotent — a missing id also returns 204)
+          description: >-
+            Webhook deleted (idempotent — a missing id also returns 204).
+            No body by design (captured 2026-10-16): a 204 cannot carry an
+            example payload, so this operation is the documented exception to
+            the dated-example rule enforced by tests/openapi.test.ts.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1061,8 +1450,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UsageResponse'
+              example:
+                keyId: 9f2c4a10-7b2e-4a1d-9c3f-2d4b5a6c7d8e
+                dailyCalls: 42
+                dailyCents: 210
+                monthlyCalls: 900
+                monthlyCents: 4500
+                dailyQuotaCents: 500
+                monthlyQuotaCents: 10000
+                dailyRemainingCents: 290
+                monthlyRemainingCents: 5500
+                overagePolicy: block
+                quotaExceeded: false
+                captured: '2026-10-16'
         '401':
-          description: Missing or invalid API key
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1078,6 +1480,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SupportedResponse'
+              example:
+                kinds:
+                  - scheme: exact
+                    network: stellar:testnet
+                extensions: [bazaar]
+                captured: '2026-10-16'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /verify:
     post:
@@ -1090,6 +1502,20 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/VerifyRequest'
+            example:
+              x402Version: 1
+              paymentPayload:
+                x402Version: 1
+                scheme: exact
+                network: stellar:testnet
+              paymentRequirements:
+                scheme: exact
+                network: stellar:testnet
+                maxAmountRequired: '10000'
+                asset: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                payTo: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                maxTimeoutSeconds: 300
+              captured: '2026-10-16'
       responses:
         '200':
           description: Verification result
@@ -1097,18 +1523,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VerifyResponse'
+              example:
+                isValid: true
+                captured: '2026-10-16'
         '400':
-          description: Malformed request or invalid payment
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VerifyResponse'
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
-          description: Internal verification error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VerifyResponse'
+          $ref: '#/components/responses/InternalServerError'
 
   /settle:
     post:
@@ -1125,6 +1550,20 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/SettleRequest'
+            example:
+              x402Version: 1
+              paymentPayload:
+                x402Version: 1
+                scheme: exact
+                network: stellar:testnet
+              paymentRequirements:
+                scheme: exact
+                network: stellar:testnet
+                maxAmountRequired: '10000'
+                asset: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                payTo: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+                maxTimeoutSeconds: 300
+              captured: '2026-10-16'
       responses:
         '200':
           description: Settlement result
@@ -1132,12 +1571,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SettleResponse'
+              example:
+                success: true
+                transaction: 9f2c4a6b8d0e1f3a5c7d9e0b2a4c6d8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d
+                network: stellar:testnet
+                captured: '2026-10-16'
         '400':
-          description: Malformed payload
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SettleResponse'
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /graphql:
     get:
@@ -1150,6 +1594,7 @@ paths:
           required: true
           schema:
             type: string
+          example: '{ getPrice(assetA: "XLM", assetB: "USDC") { pairKey price } }'
         - name: variables
           in: query
           required: false
@@ -1168,6 +1613,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GraphQlResponse'
+              example:
+                data:
+                  getPrice:
+                    pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                    price: 0.11906825
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
     post:
       operationId: graphqlPost
       summary: Execute a GraphQL query, mutation or subscription handshake
@@ -1187,6 +1644,9 @@ paths:
                   type: object
                 operationName:
                   type: string
+            example:
+              query: '{ getPrice(assetA: "XLM", assetB: "USDC") { pairKey price } }'
+              captured: '2026-10-16'
       responses:
         '200':
           description: GraphQL result
@@ -1194,8 +1654,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GraphQlResponse'
+              example:
+                data:
+                  getPrice:
+                    pairKey: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM
+                    price: 0.11906825
+                captured: '2026-10-16'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '402':
           $ref: '#/components/responses/PaymentRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
 components:
   securitySchemes:
@@ -1231,6 +1703,47 @@ components:
         default: testnet
 
   responses:
+    BadRequest:
+      description: Bad request — the error body names the offending parameter and carries a machine-readable code
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'window must be one of: 1m, 5m, 1h, 24h'
+            code: invalid_window
+            captured: '2026-10-16'
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'Unauthorized'
+            message: 'Missing API key. Provide an Authorization: Bearer <key> header.'
+            code: missing_api_key
+            captured: '2026-10-16'
+    NotFound:
+      description: No data for the requested pair or asset on this network
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Pair XLM/FOO not watched on testnet
+            code: pair_not_watched
+            captured: '2026-10-16'
+    Conflict:
+      description: The resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Pair USDC/XLM is already being watched
+            code: pair_exists
+            captured: '2026-10-16'
     PaymentRequired:
       description: Payment Required
       content:
@@ -1281,8 +1794,46 @@ components:
                 type: string
               retryAfter:
                 type: string
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Internal server error
+            code: internal_error
+            captured: '2026-10-16'
 
   schemas:
+    Error:
+      type: object
+      description: Shared error envelope returned by every non-2xx JSON response
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable reason; the `code` below is the stable contract
+          example: Pair XLM/FOO not watched on testnet
+        message:
+          type: string
+          description: Optional extra detail (auth failures, validation hints)
+          example: 'Missing API key. Provide an Authorization: Bearer <key> header.'
+        code:
+          type: string
+          description: >-
+            Stable machine-readable code a generated client can branch on:
+            invalid_network | invalid_window | invalid_interval | invalid_amount |
+            invalid_limit | invalid_cursor | invalid_sort | invalid_filter |
+            invalid_format | invalid_date | window_too_large | invalid_asset |
+            invalid_threshold | invalid_url | pair_not_watched | pair_exists |
+            asset_not_found | missing_api_key | invalid_api_key | quota_exceeded |
+            rate_limited | payment_required | payment_invalid | internal_error
+          example: pair_not_watched
+        captured:
+          type: string
+          description: Date the documented example was captured (YYYY-MM-DD)
+          example: '2026-10-16'
     Asset:
       type: object
       properties:
