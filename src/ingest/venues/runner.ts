@@ -5,6 +5,7 @@ import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
+import { ingest_cycle_duration_seconds, ingest_errors_total, markIngestSuccess } from '../../metrics'
 
 // ── Centralized Last Price Cache ──────────────────────────────────────────────
 // Keyed by `${venue}:${network}:${pairKey}`
@@ -49,6 +50,7 @@ export async function writeVenuePricePoints(
   if (points.length === 0) return
 
   await upsertPricePoints(points as any, network)
+  markIngestSuccess(venue, network)
 
   const latest = points[points.length - 1]
   const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
@@ -99,18 +101,31 @@ export async function startVenueAdapter(
 
   let consecutiveErrors = 0
   while (true) {
+    const cycleStartedAt = Date.now()
     try {
       const pairs = getActivePairs()
       for (const pair of pairs) {
         await adapter.ingestPair(pair, network)
       }
+      ingest_cycle_duration_seconds.observe(
+        { venue: adapter.name, network },
+        (Date.now() - cycleStartedAt) / 1000,
+      )
       consecutiveErrors = 0
     } catch (err) {
+      const error = err as Error
+      const category = /429|rate.?limit/i.test(error.message) ? 'rate_limit' :
+        /timeout|timed out|abort/i.test(error.message) ? 'timeout' : 'other'
+      ingest_errors_total.inc({ venue: adapter.name, network, category })
+      ingest_cycle_duration_seconds.observe(
+        { venue: adapter.name, network },
+        (Date.now() - cycleStartedAt) / 1000,
+      )
       consecutiveErrors++
       const backoffMs = Math.min(10_000 * Math.pow(2, consecutiveErrors - 1), 60_000)
       console.error(
         `[${adapter.name}] Cycle failed on ${network} (attempt ${consecutiveErrors}), retrying in ${backoffMs}ms:`,
-        (err as Error).message
+        error.message
       )
       await sleep(backoffMs)
       continue
