@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { impermanentLossPct } from '../pricing/impermanentLoss'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -225,7 +226,9 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           WHERE ids.pool_id IS NOT NULL
        )
        SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
+              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp,
+              opening.spot_price::float AS window_start_price,
+              COALESCE(activity.counter_volume, 0)::float AS window_counter_volume
          FROM ids
         CROSS JOIN LATERAL (
               SELECT * FROM pool_snapshots s
@@ -233,10 +236,41 @@ export async function registerRESTRoutes(app: FastifyInstance) {
                ORDER BY s.timestamp DESC
                LIMIT 1
              ) l
+        LEFT JOIN LATERAL (
+              SELECT s.spot_price FROM pool_snapshots s
+               WHERE s.network = $1 AND s.pool_id = ids.pool_id
+                 AND s.timestamp >= NOW() - INTERVAL '24 hours'
+               ORDER BY s.timestamp ASC LIMIT 1
+             ) opening ON true
+        LEFT JOIN LATERAL (
+              SELECT SUM(p.counter_volume) AS counter_volume FROM price_points p
+               WHERE p.network = $1 AND p.pool_id = ids.pool_id AND p.source = 'AMM'
+                 AND p.timestamp >= NOW() - INTERVAL '24 hours'
+             ) activity ON true
         WHERE ids.pool_id IS NOT NULL`,
       [network]
     )
-    return { pools: result.rows }
+    const pools = result.rows.map(row => {
+      const startPrice = row.window_start_price == null ? null : Number(row.window_start_price)
+      const endPrice = Number(row.spot_price)
+      const divergenceLossPct = startPrice === null ? null : impermanentLossPct(startPrice, endPrice)
+      const reserveB = Number(row.reserve_b)
+      const poolValueB = Number.isFinite(reserveB) ? 2 * reserveB : 0
+      const feeBp = Number(row.fee_bp) || 0
+      const volumeB = Number(row.window_counter_volume) || 0
+      const feeReturn24hPct = poolValueB > 0 ? (volumeB * feeBp / 10_000 / poolValueB) * 100 : null
+      return {
+        ...row,
+        window: '24h',
+        feeAprPct: feeReturn24hPct === null ? null : feeReturn24hPct * 365,
+        impermanentLossPct: divergenceLossPct,
+        netReturn24hPct: divergenceLossPct === null || feeReturn24hPct === null
+          ? null
+          : feeReturn24hPct + divergenceLossPct,
+        estimate: true,
+      }
+    })
+    return { pools }
   })
 
   // GET /price/:assetA/:assetB/depth?amount=1000

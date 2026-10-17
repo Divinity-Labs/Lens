@@ -212,6 +212,20 @@ paths:
                         timestamp:
                           type: string
                           format: date-time
+                        window:
+                          type: string
+                          enum: [24h]
+                        feeAprPct:
+                          type: number
+                          nullable: true
+                        impermanentLossPct:
+                          type: number
+                          nullable: true
+                        netReturn24hPct:
+                          type: number
+                          nullable: true
+                        estimate:
+                          type: boolean
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
