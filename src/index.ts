@@ -15,7 +15,9 @@ import { venueAdapters, startVenueAdapter } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createVenueReconciliationQueue, startVenueReconciliationWorker, scheduleVenueReconciliation, startInProcessVenueReconciliation } from './jobs/venueReconciliation'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+
 
 async function main() {
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
@@ -135,7 +137,29 @@ async function main() {
     }
   }
 
+  // ── Venue dispersion reconciliation ───────────────────────────────────────
+  // Periodically computes per-pair cross-venue dispersion, stores reconciliation
+  // history, and alerts if dispersion exceeds threshold.
+  {
+    for (const network of getEnabledNetworks()) {
+      let reconQueue: ReturnType<typeof createVenueReconciliationQueue> | undefined
+      let reconWorker: ReturnType<typeof startVenueReconciliationWorker> | undefined
+      try {
+        reconQueue = createVenueReconciliationQueue(network)
+        reconWorker = startVenueReconciliationWorker(network)
+        await scheduleVenueReconciliation(reconQueue, network)
+        console.log(`[lens] Venue reconciliation worker started for ${network}`)
+      } catch (err) {
+        console.warn(`[lens] Venue reconciliation worker skipped for ${network} (Redis unavailable):`, (err as Error).message)
+        await Promise.allSettled([reconQueue?.close(), reconWorker?.close()])
+        console.log(`[lens] Falling back to in-process venue reconciliation timer for ${network}`)
+        startInProcessVenueReconciliation(network)
+      }
+    }
+  }
+
   // ── Ingesters (run in background — infinite loops) ────────────────────────
+
   // Each ingester is independently fault-isolated via restartIngester, keyed by
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
   // mainnet only restarts that one instance and cannot affect SDEX/AMM or the

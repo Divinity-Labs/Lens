@@ -27,7 +27,10 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 | GET | `/pairs` | Watched trading pairs |
 | GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
 | GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
+| GET | `/dispersion/:assetA/:assetB?from=…&to=…` | Cross-venue price dispersion, outlier attribution, and reconciliation history |
+| GET | `/dispersion?pair=…&network=…` | Recent cross-venue dispersion reconciliation across watched pairs |
 | GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
+
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
@@ -203,7 +206,28 @@ const unsubscribe = client.subscribe(
 > the exact keys being indexed. Only the pair you subscribe to is delivered;
 > updates for other pairs are filtered out server-side. For full protocol handshake details and a raw WebSocket implementation, see [`docs/graphql.md`](docs/graphql.md#live-price-subscriptions-graphql-transport-ws).
 
+## Venue Price Dispersion & Reconciliation
+
+When multiple venues quote the same pair, their prices naturally diverge due to market dynamics and arbitrage opportunities. Lens periodically reconciles quotes across venues to detect unhealthy price dispersion or stale/faulty feeds:
+
+* **Dispersion Metric:** Measured as the **Maximum Absolute Percentage Deviation (MAPD)** from the median:
+  $$\text{deviationPct}_i = \frac{|p_i - \text{median}|}{\text{median}} \times 100$$
+  The venue with the maximum deviation is designated as the outlying venue. The median is chosen because it resists extreme skew from rogue or corrupted prints.
+* **Freshness Window:** Quotes older than `RECONCILIATION_FRESHNESS_SECONDS` (default: `300s` / 5 minutes) are excluded from the median and dispersion calculations, but their names are recorded in `staleVenues` so missing feeds remain visible.
+* **Edge Cases:**
+  * **Single-Venue Pair:** Dispersion is not meaningful. Recorded explicitly with `status: "insufficient_venues"` without computing a fake zero or raising an alert.
+  * **Two-Venue Pair:** Both venues sit equidistant from their midpoint. Deterministic alphabetical tie-breaking picks the outlying venue, and `isAmbiguous: true` is flagged.
+  * **Defensive Math:** Non-positive and non-finite quotes are discarded defensively.
+* **Alerting & Suppression:**
+  * When dispersion exceeds `RECONCILIATION_THRESHOLD_PCT` (default: `2.0%`, with optional per-pair overrides via `RECONCILIATION_PAIR_THRESHOLDS`), an alert is delivered to registered webhooks for the pair and emitted on `priceEmitter` (`dispersion:alert`).
+  * Alerts include the pair, dispersion %, threshold %, and the outlying venue by name.
+  * Cooldown suppression (`RECONCILIATION_ALERT_COOLDOWN_SECONDS`, default: `300s`) prevents duplicate alerts while elevated dispersion persists, automatically resetting once prices converge back within threshold.
+* **Querying Dispersion:**
+  * `GET /dispersion/:assetA/:assetB?from=…&to=…&limit=50&network=testnet`
+  * `GET /dispersion?pair=XLM/USDC&network=mainnet`
+
 ## Usage Examples
+
 
 Lens gates `/price`, `/pools`, and `/candles` behind x402 micropayments on Stellar (testnet by default). The `/status` endpoint is free.
 

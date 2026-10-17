@@ -26,7 +26,9 @@ import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerDispersionRoutes } from './routes/dispersion'
 import { getMetrics } from './metrics'
+
 
 export interface BuildAppOptions {
   /**
@@ -139,7 +141,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerBasketRoutes(app)
   await registerDiscoveryRoutes(app)
   await registerSettleRoute(app)
+  await registerDispersionRoutes(app)
   await registerGraphQL(app)
+
   await registerWebSocket(app)
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)

@@ -752,7 +752,144 @@ paths:
         '500':
           description: Spread aggregation failed
 
+  /dispersion/{assetA}/{assetB}:
+    get:
+      operationId: getPairDispersion
+      summary: Get venue price dispersion and outlier attribution for a pair
+      description: >-
+        Returns cross-venue price dispersion history and outlier attribution
+        for a pair over time, including median, max absolute percentage deviation,
+        spread in basis points, and outlying venue.
+      security: []
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Base asset code or CODE:ISSUER
+          example: XLM
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Quote asset code or CODE:ISSUER
+          example: USDC
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start timestamp (ISO-8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End timestamp (ISO-8601)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+          description: Max number of history records to return
+      responses:
+        '200':
+          description: Dispersion history and latest outlier attribution
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pairKey:
+                    type: string
+                  network:
+                    type: string
+                  latest:
+                    type: object
+                    nullable: true
+                  count:
+                    type: integer
+                  history:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid request parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Dispersion query failed
+
+  /dispersion:
+    get:
+      operationId: listDispersion
+      summary: List cross-venue dispersion across watched pairs
+      description: >-
+        Queries recent cross-venue dispersion reconciliation records across all pairs
+        or filtered by a specific pair.
+      security: []
+      parameters:
+        - name: pair
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional pair key filter (e.g. XLM/USDC)
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of dispersion reconciliation records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network:
+                    type: string
+                  pair:
+                    type: string
+                    nullable: true
+                  count:
+                    type: integer
+                  history:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid request parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Dispersion query failed
+
   /compare/{asset}:
+
     get:
       operationId: compareAsset
       summary: Compare Lens prices with every configured external oracle
