@@ -150,7 +150,7 @@ export async function registerYieldRoutes(app: FastifyInstance) {
         yields: yieldItems,
       }
     } catch (err) {
-      console.error('[yield]', err)
+      req.log.error(err, 'Failed to calculate pool yield')
       return reply.status(500).send({ error: 'Failed to calculate pool yield' })
     }
   })
