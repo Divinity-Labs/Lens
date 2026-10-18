@@ -46,6 +46,9 @@ paths:
                   ingestLagSeconds:
                     type: integer
                     nullable: true
+                  retentionPath:
+                    type: string
+                    enum: [starting, redis_queue, in_process]
         '429':
           $ref: '#/components/responses/TooManyRequests'
 

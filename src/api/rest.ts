@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { getRetentionPath } from '../jobs/retentionStatus'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -92,6 +93,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       ingestLagSeconds: lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
         : null,
+      retentionPath: getRetentionPath(),
     }
   })
 

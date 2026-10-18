@@ -19,7 +19,7 @@ import type { FastifyInstance, FastifySchema } from 'fastify'
 /** GET /status */
 export const statusResponseSchema = {
   type: 'object',
-  required: ['ok', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds'],
+  required: ['ok', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds', 'retentionPath'],
   additionalProperties: false,
   properties: {
     ok: { type: 'boolean' },
@@ -33,6 +33,7 @@ export const statusResponseSchema = {
     // Seconds since the last ingester write for this network, null before the
     // first one. Lets `/status` reveal a stalled ingester on its own.
     ingestLagSeconds: { type: ['integer', 'null'] },
+    retentionPath: { type: 'string', enum: ['starting', 'redis_queue', 'in_process'] },
   },
 } as const
 
