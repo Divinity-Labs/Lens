@@ -8,19 +8,27 @@ import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork } from '../config'
+import { config, activeNetwork, type NetworkName } from '../config'
 import { parseAssetStr } from '../pairsRegistry'
+import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
+import type { OracleAdapter } from '../ingest/oracles/adapter'
+import { compareOracles } from '../services/oracleComparison'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
-import { getOracleComparison } from '../routes/oracle'
+import { oracleAdapters } from '../routes/oracle'
 import { getVolumesData } from '../routes/volumes'
 import { getSpreadsData } from '../routes/spreads'
 import { queryScreener, MARKET_CAP_UNSUPPORTED } from '../routes/screener'
+import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
+
+const WINDOW_SECONDS: Record<string, number> = {
+  ...HISTORY_INTERVAL_SECONDS,
+  '24h': 86400,
+}
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
 // each subscriber then filters it down to the pair they asked for.
 const PRICE_TOPIC = 'PRICE_UPDATED'
-
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked.
@@ -58,7 +66,7 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
   return defaultErrorFormatter({ ...execution, errors }, ctx)
 }
 
-const schema = `
+export const schema = `
   type AggregatedPrice {
     assetA: String!
     assetB: String!
@@ -112,11 +120,11 @@ const schema = `
     network: String!
   }
 
-  enum OracleStatus {
+  enum OracleSourceStatus {
+    NOT_CONFIGURED
     AVAILABLE
     UNREACHABLE
     EMPTY
-    NOT_CONFIGURED
   }
 
   type OracleSource {
@@ -125,7 +133,11 @@ const schema = `
     value: Float
     timestamp: String
     deviationPct: Float
-    status: OracleStatus!
+    """
+    UNREACHABLE means the adapter failed; EMPTY means it is configured but
+    returned no quote.
+    """
+    status: OracleSourceStatus!
     ageSeconds: Int
     age: Int
   }
@@ -234,10 +246,12 @@ const schema = `
     """
     getPrice(assetA: String!, assetB: String!): AggregatedPrice
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-
     """
-    Historical price buckets for a pair.
-    The range is inclusive at both ends ([from, to]).
+    Returns historical price aggregate buckets for a pair over an optional [from, to] time range.
+
+    The time range is inclusive at both ends: a bucket is included if bucket >= from and bucket <= to.
+    Because both endpoints are inclusive, querying adjacent windows (e.g. [t0, t1] and [t1, t2]) will
+    return the boundary bucket at t1 in both results.
     """
     getPriceHistory(
       assetA: String!
@@ -251,7 +265,8 @@ const schema = `
     listPairs: [String]!
 
     """
-    Oracle price comparison for an asset across Lens aggregate and external sources.
+    Compares the Lens price for an asset against every configured oracle.
+    The network argument defaults to the active network.
     """
     oracle(asset: String!, network: String): OracleComparison
 
@@ -304,6 +319,8 @@ function findPair(assetA: string, assetB: string) {
     return (cA === pA && cB === pB) || (cA === pB && cB === pA)
   })
 }
+
+const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
 
 const resolvers = {
   Query: {
@@ -371,14 +388,14 @@ const resolvers = {
       let fromDate: Date | undefined
       let toDate: Date | undefined
 
-      if (from !== undefined) {
+      if (from !== undefined && from !== null) {
         fromDate = new Date(from)
         if (isNaN(fromDate.getTime())) {
           throw new ErrorWithProps('from must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
         }
       }
 
-      if (to !== undefined) {
+      if (to !== undefined && to !== null) {
         toDate = new Date(to)
         if (isNaN(toDate.getTime())) {
           throw new ErrorWithProps('to must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
@@ -389,37 +406,36 @@ const resolvers = {
         throw new ErrorWithProps('from must be before to', { code: 'INVALID_INPUT' })
       }
 
-      const WINDOW_SECONDS: Record<string, number> = {
-        '1m': 60,
-        '5m': 300,
-        '15m': 900,
-        '1h': 3600,
-        '24h': 86400,
-      }
-      const intervalSecs = WINDOW_SECONDS[window] ?? 60
-      if (fromDate && toDate) {
-        const spanSecs = (toDate.getTime() - fromDate.getTime()) / 1000
-        if (spanSecs / intervalSecs > 10_000) {
+      const intervalSecs = WINDOW_SECONDS[window] ?? HISTORY_INTERVAL_SECONDS[window] ?? 60
+
+      if (fromDate || toDate) {
+        const effectiveTo = toDate ?? new Date()
+        const effectiveFrom = fromDate ?? new Date(effectiveTo.getTime() - 24 * 60 * 60 * 1000)
+        const spanSecs = (effectiveTo.getTime() - effectiveFrom.getTime()) / 1000
+        if (spanSecs / intervalSecs > MAX_HISTORY_POINTS) {
           throw new ErrorWithProps(
-            `requested window is too large for window=${window} (max 10000 points); narrow the range or use a coarser window`,
+            `requested window is too large for interval=${window} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`,
             { code: 'INVALID_INPUT' }
           )
         }
       }
 
       const pairKey = makePairKey(assetA, assetB)
-      const conditions = ['pair_key = $1', 'window = $2']
+      const conditions: string[] = ['pair_key = $1', 'window = $2']
       const params: any[] = [pairKey, window]
 
       if (fromDate) {
         params.push(fromDate)
         conditions.push(`bucket >= $${params.length}`)
       }
+
       if (toDate) {
         params.push(toDate)
         conditions.push(`bucket <= $${params.length}`)
       }
+
       params.push(Math.min(limit ?? 100, 1000))
+      const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
         `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
@@ -428,11 +444,11 @@ const resolvers = {
          FROM price_aggregates
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
-         LIMIT $${params.length}`,
+         LIMIT ${limitParam}`,
         params
       )
       return result.rows.map(r => ({
-        bucket: r.bucket.toISOString(),
+        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
         window: r.window,
         vwap: r.vwap,
         sdexVwap: r.sdex_vwap,
@@ -450,38 +466,29 @@ const resolvers = {
       return config.pairs.map(p => p.pairKey)
     },
 
-    async oracle(_: unknown, { asset, network }: { asset: string; network?: string }) {
-      try {
-        const comp = await getOracleComparison(asset, network)
-        const sources = comp.oracles.map(o => ({
-          name: o.name,
-          price: o.price,
-          value: o.price,
-          timestamp: o.timestamp,
-          deviationPct: o.deviationPct,
-          status: o.status.toUpperCase(),
-          ageSeconds: o.ageSeconds,
-          age: o.ageSeconds,
-        }))
-        return {
-          asset: comp.asset,
-          network: comp.network,
-          lens: comp.lens,
-          reflector: comp.reflector,
-          deviationPct: comp.deviationPct,
-          status: comp.status,
-          fetchedAt: comp.fetchedAt,
-          oracles: sources,
-          sources,
-        }
-      } catch (err: any) {
-        if (err.message === 'network must be one of: testnet, mainnet') {
-          throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT' })
-        }
-        if (err.statusCode === 404 || err.message?.startsWith('No price data found')) {
-          throw new ErrorWithProps(err.message, { code: 'NOT_FOUND' })
-        }
-        throw err
+    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
+      if (network != null && network !== 'testnet' && network !== 'mainnet') {
+        throw new ErrorWithProps('network must be one of: testnet, mainnet', {
+          code: 'INVALID_INPUT',
+          field: 'network',
+        })
+      }
+      const comparison = await compareOracles(
+        asset.toUpperCase(),
+        (network ?? activeNetwork) as NetworkName,
+        oracleAdapters
+      )
+      if (!comparison) return null
+      const sources = comparison.oracles.map(o => ({
+        ...o,
+        value: o.price,
+        status: o.status.toUpperCase(),
+        age: o.ageSeconds,
+      }))
+      return {
+        ...comparison,
+        oracles: sources,
+        sources,
       }
     },
 

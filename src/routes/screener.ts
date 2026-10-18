@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import { formatValidationError, VALIDATION_ERROR_CODE } from '../validation'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
@@ -8,6 +10,64 @@ import '../middleware/network' // declares req.network on the FastifyRequest typ
 // it must be told it is gone rather than have the parameter silently ignored.
 export const MARKET_CAP_UNSUPPORTED =
   'market_cap is not supported: Lens has no circulating supply data to compute it from. Use liquidity instead'
+
+/** Machine-readable code for the market_cap rejection (not a validation error). */
+const MARKET_CAP_CODE = 'UNSUPPORTED_PARAMETER'
+
+export const ALLOWED_SORT_FIELDS = ['volume', 'change_24h', 'price', 'liquidity'] as const
+
+const numFilter = (name: string) =>
+  z.coerce.number({ error: `${name} must be a valid number` }).optional()
+
+export const ScreenerQuerySchema = z
+  .object({
+    // Historical behavior: limit is clamped to [1, 100], never rejected.
+    // `GET /screener?limit=500` returns 100 rows, `limit=0` behaves as 1.
+    limit: z.coerce
+      .number({ error: 'limit must be a valid integer' })
+      .int({ error: 'limit must be a valid integer' })
+      .default(20)
+      .transform((v) => Math.min(100, Math.max(1, v))),
+    sortBy: z.string().default('volume'),
+    order: z
+      .preprocess(
+        (v) => (typeof v === 'string' ? v.toLowerCase() : v),
+        z.enum(['asc', 'desc'])
+      )
+      .default('desc'),
+    volume: numFilter('volume'),
+    change_24h_min: numFilter('change_24h_min'),
+    change_24h_max: numFilter('change_24h_max'),
+    price_min: numFilter('price_min'),
+    price_max: numFilter('price_max'),
+    liquidity: numFilter('liquidity'),
+    cursor: z.string().optional(),
+    // market_cap is declared only so the rejection below goes through the
+    // shared error formatter like every other rejection.
+    market_cap: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.market_cap !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['market_cap'],
+        message: MARKET_CAP_UNSUPPORTED,
+      })
+    }
+    if (data.sortBy === 'market_cap') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sortBy'],
+        message: MARKET_CAP_UNSUPPORTED,
+      })
+    } else if (!(ALLOWED_SORT_FIELDS as readonly string[]).includes(data.sortBy)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sortBy'],
+        message: `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(', ')}`,
+      })
+    }
+  })
 
 export interface ScreenerOptions {
   volume?: number
@@ -208,24 +268,29 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       limit?: string
     }
   }>('/screener', async (req, reply) => {
+    const log = req.log.child({ component: 'route:screener' })
     try {
       const q = req.query
-      const parseNum = (val?: string) => val ? parseFloat(val) : undefined
-      const limit = q.limit !== undefined ? parseInt(q.limit, 10) : undefined
+      const parsed = ScreenerQuerySchema.safeParse(q)
+      if (!parsed.success) {
+        // market_cap is not a validation error but an unsupported parameter;
+        // it keeps its own machine-readable code while using the shared shape.
+        const marketCapRejected = parsed.error.issues.some(
+          (issue) => issue.path[0] === 'market_cap'
+        )
+        return reply
+          .status(400)
+          .send(
+            formatValidationError(
+              parsed.error,
+              marketCapRejected ? MARKET_CAP_CODE : VALIDATION_ERROR_CODE
+            )
+          )
+      }
 
       const result = await queryScreener({
-        limit,
-        market_cap: q.market_cap,
-        sortBy: q.sortBy,
-        order: q.order,
-        volume: parseNum(q.volume),
-        change_24h_min: parseNum(q.change_24h_min),
-        change_24h_max: parseNum(q.change_24h_max),
-        price_min: parseNum(q.price_min),
-        price_max: parseNum(q.price_max),
-        liquidity: parseNum(q.liquidity),
-        cursor: q.cursor,
-        network: req.network,
+        ...parsed.data,
+        network: req.network ?? activeNetwork,
       })
 
       return result
@@ -237,9 +302,9 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
         error.message?.includes('order must be') ||
         error.message === 'Invalid cursor format'
       ) {
-        return reply.status(400).send({ error: error.message })
+        return reply.status(400).send({ error: error.message, code: 'VALIDATION_ERROR' })
       }
-      console.error('[screener]', error)
+      log.error({ err: error }, 'screener query failed')
       return reply.status(500).send({ error: 'Internal server error' })
     }
   })
