@@ -1,6 +1,9 @@
 import Redis from 'ioredis'
 import { config, activeNetwork } from './config'
 import { redis_connected } from './metrics'
+import { createLogger } from './logger'
+
+const log = createLogger('redis')
 
 export const redis = new Redis(config.redis.url, {
   maxRetriesPerRequest: 3,
@@ -38,8 +41,7 @@ redis.on('error', (err) => {
     suppressedRedisErrors++
     return
   }
-  const suffix = suppressedRedisErrors > 0 ? ` (${suppressedRedisErrors} more since last report)` : ''
-  console.error('[redis] Connection error:', err.message + suffix)
+  log.error({ err, suppressed: suppressedRedisErrors }, 'redis connection error')
   lastRedisErrorLog = now
   suppressedRedisErrors = 0
 })

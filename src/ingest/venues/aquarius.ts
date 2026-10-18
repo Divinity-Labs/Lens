@@ -9,6 +9,7 @@
  */
 
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
+import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -19,6 +20,8 @@ import {
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
 import { VenueFetchError, recordVenueFailure, recordVenueSuccess } from './errors'
+
+const log = createLogger('ingester:aquarius')
 
 export function _resetLastPrice(): void {
   resetLastPrice('Aquarius')
@@ -56,7 +59,7 @@ export async function fetchAquariusPools(
 
     const res = await fetchWithTimeout(`${apiUrl}?${params.toString()}`)
     if (!res.ok) {
-      console.error(`[aquarius] Horizon/API returned HTTP ${res.status} for ${pair.pairKey}`)
+      log.error({ status: res.status, pair: pair.pairKey }, 'horizon/api returned error')
       recordVenueFailure('Aquarius', `HTTP ${res.status}`)
       throw new VenueFetchError('Aquarius', `HTTP ${res.status}`, res.status)
     }
@@ -68,7 +71,7 @@ export async function fetchAquariusPools(
       recordVenueFailure('Aquarius', err.message)
       throw err
     }
-    console.error(`[aquarius] Failed to fetch pools for ${pair.pairKey}:`, (err as Error).message)
+    log.error({ pair: pair.pairKey, err }, 'failed to fetch pools')
     recordVenueFailure('Aquarius', (err as Error).message)
     throw new VenueFetchError('Aquarius', (err as Error).message)
   }
@@ -118,6 +121,7 @@ export async function ingestAquariusPair(
 
 export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
   name: 'Aquarius',
+  kind: 'amm',
   source: 'aquarius_amm',
 
   isEnabled(network: NetworkName): boolean {

@@ -66,11 +66,10 @@ describe('fetchAquariusPools', () => {
     )
   })
 
-  it('returns an empty array on a non-ok response', async () => {
-    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false })
+  it('throws on a non-ok response (#329)', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 500 })
 
-    const result = await fetchAquariusPools(mockPair as any)
-    expect(result).toEqual([])
+    await expect(fetchAquariusPools(mockPair as any)).rejects.toThrow()
   })
 })
 

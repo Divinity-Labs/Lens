@@ -21,6 +21,9 @@ import { activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { getRpcServer } from '../../network/clients'
 import type { OracleAdapter, OracleQuote } from './adapter'
 import { recordVenueFailure, recordVenueSuccess } from '../venues/errors'
+import { createLogger } from '../../logger'
+
+const log = createLogger('oracle:reflector')
 
 // Ephemeral fee payer — simulation only, no real funds needed
 const FEE_PAYER = Keypair.random()
@@ -91,7 +94,7 @@ export async function fetchReflectorPrice(
       timestamp: Number(raw.timestamp ?? 0),
     }
   } catch (err) {
-    console.warn(`[reflector] Failed to fetch oracle quote for ${assetCode} on ${network}:`, (err as Error).message)
+    log.warn({ assetCode, network, err }, 'failed to fetch oracle quote')
     lastReflectorError = (err as Error).message
     recordVenueFailure('Reflector', (err as Error).message)
     return null

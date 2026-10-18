@@ -1,4 +1,7 @@
 import { createHmac } from 'crypto'
+import { createLogger } from '../logger'
+
+const log = createLogger('webhook')
 import { fetchWithTimeout } from '../fetch'
 import { webhook_delivery_failures_total } from '../metrics'
 
@@ -115,7 +118,7 @@ export async function deliverJsonWithRetries(
       category,
     })
 
-    console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}:`, (err as Error).message)
+    log.warn({ url, attempt, err }, 'webhook delivery failed after retries')
     return
   }
 
@@ -123,7 +126,7 @@ export async function deliverJsonWithRetries(
 
   if (res.status >= 400 && res.status < 500) {
     // 4xx client errors are not retried (the subscriber's URL or request is invalid)
-    console.warn(`[webhook] client error ${res.status} from ${url} — not retrying`)
+    log.warn({ url, status: res.status }, 'webhook client error; not retrying')
     return
   }
 
@@ -146,5 +149,5 @@ export async function deliverJsonWithRetries(
     category,
   })
 
-  console.warn(`[webhook] delivery failed after ${attempt} attempts to ${url}: HTTP ${res.status}`)
+  log.warn({ url, attempt, status: res.status }, 'webhook delivery failed after retries')
 }

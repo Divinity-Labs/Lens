@@ -8,6 +8,9 @@ import {
   pg_pool_exhausted_total,
 } from './metrics'
 import { config, type NetworkName } from './config'
+import { createLogger } from './logger'
+
+const log = createLogger('db')
 
 // Prisma for schema management + simple queries
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
@@ -70,8 +73,9 @@ export function handlePoolQueryError(err: any): never {
     (pgPool as any)?.waitingCount > 0
   ) {
     pg_pool_exhausted_total.inc()
-    console.error(
-      `[db] Connection pool exhausted: waitingCount=${(pgPool as any).waitingCount}, totalCount=${(pgPool as any).totalCount}, idleCount=${(pgPool as any).idleCount}: ${err?.message}`
+    log.error(
+      { waitingCount: (pgPool as any).waitingCount, totalCount: (pgPool as any).totalCount, idleCount: (pgPool as any).idleCount, err },
+      'connection pool exhausted'
     )
     throw new DatabasePoolExhaustedError(err?.message ?? 'Acquisition timeout', err)
   }

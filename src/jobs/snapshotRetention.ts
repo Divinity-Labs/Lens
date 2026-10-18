@@ -3,6 +3,9 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
 import { retention_path_mode } from '../metrics'
+import { createLogger } from '../logger'
+
+const log = createLogger('job:snapshot-retention')
 
 const QUEUE_NAME = `${activeNetwork}:snapshot-retention`
 
@@ -71,7 +74,10 @@ export async function pruneOldSnapshots(
 
     totalPruned += pruned
     batchNumber += 1
-    console.log(`[snapshot-retention] ${network}: pruned batch ${batchNumber} (${pruned} rows; ${totalPruned} total)`)
+    log.info(
+      { network, batch: batchNumber, rows: pruned, total: totalPruned },
+      'pruned retention batch'
+    )
     onProgress?.({ network, batch: batchNumber, batchRows: pruned, totalPruned })
 
     // Give other jobs and requests a chance to run between database batches.
@@ -111,17 +117,22 @@ export function startSnapshotRetentionWorker() {
       try {
         const counts = await pruneAllNetworks()
         for (const [network, pruned] of Object.entries(counts)) {
-          if (pruned > 0) console.log(`[snapshot-retention] pruned ${pruned} ${network} snapshot(s) older than ${SNAPSHOT_RETENTION_DAYS}d`)
+          if (pruned > 0) {
+            log.info(
+              { network, pruned, retentionDays: SNAPSHOT_RETENTION_DAYS },
+              'pruned snapshots older than retention window'
+            )
+          }
         }
       } catch (err) {
-        console.error('[snapshot-retention] prune failed:', (err as Error).message)
+        log.error({ err }, 'snapshot prune failed')
       }
     },
     { connection: redisConnection(), concurrency: 1 }
   )
 
   worker.on('failed', (_job, err) => {
-    console.error('[snapshot-retention] Job failed:', err.message)
+    log.error({ err }, 'snapshot retention job failed')
   })
 
   return worker
@@ -156,7 +167,7 @@ export function setRetentionPathMode(mode: RetentionMode): void {
   retention_path_mode.set({ mode: 'queue' }, mode === 'queue' ? 1 : 0)
   retention_path_mode.set({ mode: 'in_process' }, mode === 'in_process' ? 1 : 0)
   if (prev !== mode) {
-    console.info(`[snapshot-retention] Transitioned retention mode from ${prev} to ${mode}`)
+    log.info({ prev, mode }, 'transitioned retention mode')
   }
 }
 
@@ -172,12 +183,12 @@ export async function safePruneWithAdvisoryLock(
     const res = await pgPool.query('SELECT pg_try_advisory_lock(8392104) AS acquired')
     lockAcquired = res.rows[0]?.acquired === true
     if (!lockAcquired) {
-      console.log('[snapshot-retention] Advisory lock not acquired; another instance is actively pruning.')
+      log.info('advisory lock not acquired; another instance is actively pruning')
       return null
     }
     return await pruneAllNetworks(retentionDays)
   } catch (err) {
-    console.error('[snapshot-retention] Prune failed:', (err as Error).message)
+    log.error({ err }, 'prune failed')
     throw err
   } finally {
     if (lockAcquired) {
@@ -224,7 +235,7 @@ export async function switchToQueueRetention(): Promise<boolean> {
     setRetentionPathMode('queue')
     return true
   } catch (err) {
-    console.warn('[snapshot-retention] Failed to switch to queue retention (Redis unavailable):', (err as Error).message)
+    log.warn({ err }, 'failed to switch to queue retention (redis unavailable)')
     await switchToInProcessRetention()
     return false
   }

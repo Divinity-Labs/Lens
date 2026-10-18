@@ -1,7 +1,28 @@
 openapi: 3.0.0
 info:
   title: Lens API
-  description: Unified Stellar price API aggregating SDEX + AMM prices.
+  description: >-
+    Unified Stellar price API aggregating SDEX + AMM prices.
+
+    Cache policy: every route sends a deliberate `Cache-Control` response
+    header. Live prices (`/price/*`) are `public, max-age=30`; aggregates
+    (`/price/*/history`, `/price/twap/*`, `/price/vwap/*`, `/prices/history`,
+    `/compare/*`, `/spreads/*`) are `public, max-age=60`; slower-moving views
+    (`/volumes/*`, `/screener`, `/basket`) are `public, max-age=120`;
+    reference data that changes rarely (`/pairs`, `/pools`, `/benchmark/*`)
+    is `public, max-age=300`; the discovery document is
+    `public, max-age=3600`. `/candles` for a closed historical window (its
+    `to` at least one full interval in the past) is *probably* immutable —
+    backfill can rewrite history — so it is
+    `public, max-age=3600, stale-while-revalidate=86400`; the still-forming
+    window is `public, max-age=60`. Every `public` response also sends
+    `Vary: x-network`, because the Stellar network can come from the
+    `x-network` header (not part of the URL cache key). Routes behind the
+    x402 payment gate use `private` instead of `public` when x402 is
+    configured, so a shared cache never serves paid content for free.
+    Per-caller responses (`/usage/me`), operator routes
+    (`/admin/*`), mutations and error responses are `no-store` and must never
+    sit in a shared cache.
   version: 0.1.0
   license:
     name: MIT
@@ -12,6 +33,50 @@ servers:
     description: Local development server
 
 paths:
+  /venues/registry:
+    get:
+      operationId: getVenueRegistry
+      summary: List registered venues and their network liveness
+      description: Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Registered venues and their current liveness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [network, venues]
+                properties:
+                  network:
+                    type: string
+                    enum: [testnet, mainnet]
+                  venues:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, kind, network, enabled, liveness, lastSeenAt]
+                      properties:
+                        id:
+                          type: string
+                        kind:
+                          type: string
+                          enum: [orderbook, amm, oracle]
+                        network:
+                          type: string
+                          enum: [testnet, mainnet]
+                        enabled:
+                          type: boolean
+                        liveness:
+                          type: string
+                          enum: [live, stale, disabled, unknown]
+                        lastSeenAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+
   /status:
     get:
       operationId: getStatus
@@ -22,6 +87,9 @@ paths:
       responses:
         '200':
           description: API status
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -140,6 +208,9 @@ paths:
       responses:
         '200':
           description: Aggregated price data
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -178,6 +249,9 @@ paths:
       responses:
         '200':
           description: Best route information
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -221,6 +295,9 @@ paths:
       responses:
         '200':
           description: Price history
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -253,6 +330,9 @@ paths:
       responses:
         '200':
           description: List of pools
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -324,6 +404,9 @@ paths:
       responses:
         '200':
           description: Candle data
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -413,6 +496,9 @@ paths:
       responses:
         '200':
           description: Historical price snapshots
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             text/csv:
               schema:
@@ -466,6 +552,9 @@ paths:
       responses:
         '200':
           description: List of pairs
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -553,6 +642,9 @@ paths:
       responses:
         '200':
           description: Depth ladder
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -675,6 +767,9 @@ paths:
       responses:
         '200':
           description: TWAP result
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -731,6 +826,9 @@ paths:
       responses:
         '200':
           description: VWAP result
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -770,6 +868,9 @@ paths:
       responses:
         '200':
           description: Aggregated volume
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -809,6 +910,9 @@ paths:
       responses:
         '200':
           description: Per-venue spreads
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -836,6 +940,9 @@ paths:
       responses:
         '200':
           description: Price comparison
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -913,6 +1020,9 @@ paths:
       responses:
         '200':
           description: Screened pairs
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -945,6 +1055,9 @@ paths:
       responses:
         '200':
           description: Benchmark statistics
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -987,6 +1100,9 @@ paths:
       responses:
         '200':
           description: Basket price
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -1048,6 +1164,9 @@ paths:
       responses:
         '200':
           description: Paginated catalog page
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -1125,6 +1244,9 @@ paths:
       responses:
         '200':
           description: Usage summary for the authenticated key
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -1142,6 +1264,9 @@ paths:
       responses:
         '200':
           description: Supported payment kinds and extensions
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -1232,6 +1357,9 @@ paths:
       responses:
         '200':
           description: GraphQL result
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
           content:
             application/json:
               schema:
@@ -1349,6 +1477,19 @@ components:
                 type: string
               retryAfter:
                 type: string
+
+  headers:
+    CacheControl:
+      description: >-
+        Per-route cache policy (see "Cache policy" in the API description).
+        Every route sends a deliberate `Cache-Control`: live prices
+        `public, max-age=30`; aggregates `public, max-age=60`; `/pairs` and
+        `/pools` `public, max-age=300`; closed candle windows
+        `public, max-age=86400`; per-caller, operator and error responses
+        `no-store`.
+      schema:
+        type: string
+        example: 'public, max-age=300'
 
   schemas:
     Asset:
@@ -1773,7 +1914,7 @@ components:
           description: One result per configured adapter; unavailable sources remain present with a status.
           items:
             type: object
-            required: [name, price, timestamp, deviationPct, status]
+            required: [name, price, timestamp, deviationPct, status, ageSeconds]
             additionalProperties: false
             properties:
               name:
@@ -1790,7 +1931,11 @@ components:
                 nullable: true
               status:
                 type: string
-                enum: [available, unreachable, not_configured]
+                description: unreachable means the adapter failed; empty means it is configured but returned no quote.
+                enum: [available, unreachable, empty, not_configured]
+              ageSeconds:
+                type: integer
+                nullable: true
 
     ScreenerRow:
       type: object
