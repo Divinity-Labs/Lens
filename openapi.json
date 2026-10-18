@@ -2074,6 +2074,15 @@
       }
     },
     "parameters": {
+      "RequestIdHeader": {
+        "name": "x-request-id",
+        "in": "header",
+        "required": false,
+        "description": "Caller-supplied request id. When present it is used verbatim on every log line for the request and echoed in the `x-request-id` response header and any error body; when absent one is generated.",
+        "schema": {
+          "type": "string"
+        }
+      },
       "NetworkQuery": {
         "name": "network",
         "in": "query",
@@ -2145,6 +2154,9 @@
               "type": "integer"
             },
             "description": "Remaining requests in current window"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
           }
         },
         "content": {
@@ -2163,6 +2175,9 @@
                 },
                 "retryAfter": {
                   "type": "string"
+                },
+                "requestId": {
+                  "type": "string"
                 }
               }
             }
@@ -2171,6 +2186,13 @@
       }
     },
     "headers": {
+      "RequestId": {
+        "description": "The request id for this request: the inbound `x-request-id` when supplied, otherwise a generated id. Also present in error bodies as `requestId`.",
+        "schema": {
+          "type": "string",
+          "example": "3f1c9a52-8b7e-4d0a-9c1e-2b6f5a4d8e10"
+        }
+      },
       "CacheControl": {
         "description": "Per-route cache policy (see \"Cache policy\" in the API description). Every route sends a deliberate `Cache-Control`: live prices `public, max-age=30`; aggregates `public, max-age=60`; `/pairs` and `/pools` `public, max-age=300`; closed candle windows `public, max-age=86400`; per-caller, operator and error responses `no-store`.",
         "schema": {

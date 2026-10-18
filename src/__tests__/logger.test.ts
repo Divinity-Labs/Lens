@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join, relative } from 'node:path'
 import type { DestinationStream } from 'pino'
 import { buildLogger, redactSecrets, secretValues } from '../logger'
+import { runWithRequestId } from '../request-context'
 
 const rootDir = resolve(__dirname, '../..')
 const srcDir = resolve(rootDir, 'src')
@@ -116,6 +117,22 @@ describe('structured logger output', () => {
     expect(lines[0]).toContain('pruned snapshots')
     expect(lines[0]).toContain('INFO')
     expect(() => JSON.parse(lines[0])).toThrow()
+  })
+
+  it('stamps the request id from the active request context onto every line', () => {
+    const { lines, destination } = capture()
+    const log = buildLogger({ level: 'info', pretty: false, destination })
+
+    runWithRequestId('abc-123', () => log.info('inside request'))
+    log.info('outside request')
+
+    expect(lines).toHaveLength(2)
+    const inside = JSON.parse(lines[0])
+    const outside = JSON.parse(lines[1])
+    expect(inside.requestId).toBe('abc-123')
+    expect(inside.msg).toBe('inside request')
+    expect(outside.msg).toBe('outside request')
+    expect(outside).not.toHaveProperty('requestId')
   })
 
   it('respects the level and drops messages below it', () => {
