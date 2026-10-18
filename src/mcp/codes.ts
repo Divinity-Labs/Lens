@@ -9,7 +9,14 @@ export const MCP_ERROR_CODES = {
   ERR_INTERNAL_FAILURE: 'ERR_INTERNAL_FAILURE',
   ERR_MISSING_KEY: 'ERR_MISSING_KEY',
   ERR_RATE_LIMITED: 'ERR_RATE_LIMITED',
-  ERR_CONCURRENCY_LIMIT_EXCEEDED: 'ERR_CONCURRENCY_LIMIT_EXCEEDED'
+  ERR_CONCURRENCY_LIMIT_EXCEEDED: 'ERR_CONCURRENCY_LIMIT_EXCEEDED',
+  // Refused before any request was made:
+  //   ERR_URL_BLOCKED      the target resolves somewhere we will never fetch
+  //                        (private, loopback, link-local, metadata) — #488
+  //   ERR_HOST_NOT_ALLOWED the host is reachable but is not on the operator's
+  //                        paid_call allow-list — #487
+  ERR_URL_BLOCKED: 'ERR_URL_BLOCKED',
+  ERR_HOST_NOT_ALLOWED: 'ERR_HOST_NOT_ALLOWED',
 } as const;
 
 export type McpErrorCode = keyof typeof MCP_ERROR_CODES;

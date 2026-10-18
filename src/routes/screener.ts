@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import { formatValidationError, VALIDATION_ERROR_CODE } from '../validation'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // Lens has no circulating-supply data, so a market cap cannot be computed. It
@@ -15,6 +17,64 @@ export class ScreenerValidationError extends Error {
     this.name = 'ScreenerValidationError'
   }
 }
+
+/** Machine-readable code for the market_cap rejection (not a validation error). */
+const MARKET_CAP_CODE = 'UNSUPPORTED_PARAMETER'
+
+const ALLOWED_SORT_FIELDS = ['volume', 'change_24h', 'price', 'liquidity'] as const
+
+const numFilter = (name: string) =>
+  z.coerce.number({ error: `${name} must be a valid number` }).optional()
+
+const ScreenerQuerySchema = z
+  .object({
+    // Historical behavior: limit is clamped to [1, 100], never rejected.
+    // `GET /screener?limit=500` returns 100 rows, `limit=0` behaves as 1.
+    limit: z.coerce
+      .number({ error: 'limit must be a valid integer' })
+      .int({ error: 'limit must be a valid integer' })
+      .default(20)
+      .transform((v) => Math.min(100, Math.max(1, v))),
+    sortBy: z.string().default('volume'),
+    order: z
+      .preprocess(
+        (v) => (typeof v === 'string' ? v.toLowerCase() : v),
+        z.enum(['asc', 'desc'])
+      )
+      .default('desc'),
+    volume: numFilter('volume'),
+    change_24h_min: numFilter('change_24h_min'),
+    change_24h_max: numFilter('change_24h_max'),
+    price_min: numFilter('price_min'),
+    price_max: numFilter('price_max'),
+    liquidity: numFilter('liquidity'),
+    cursor: z.string().optional(),
+    // market_cap is declared only so the rejection below goes through the
+    // shared error formatter like every other rejection.
+    market_cap: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.market_cap !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['market_cap'],
+        message: MARKET_CAP_UNSUPPORTED,
+      })
+    }
+    if (data.sortBy === 'market_cap') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sortBy'],
+        message: MARKET_CAP_UNSUPPORTED,
+      })
+    } else if (!(ALLOWED_SORT_FIELDS as readonly string[]).includes(data.sortBy)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sortBy'],
+        message: `sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(', ')}`,
+      })
+    }
+  })
 
 export interface ScreenerQueryOptions {
   volume?: number
@@ -41,10 +101,9 @@ export async function getScreenerData(options: ScreenerQueryOptions = {}) {
     throw new ScreenerValidationError(MARKET_CAP_UNSUPPORTED)
   }
 
-  const allowedSortFields = ['volume', 'change_24h', 'price', 'liquidity']
   const sortBy = options.sortBy ?? 'volume'
-  if (!allowedSortFields.includes(sortBy)) {
-    throw new ScreenerValidationError(`sortBy must be one of: ${allowedSortFields.join(', ')}`)
+  if (!(ALLOWED_SORT_FIELDS as readonly string[]).includes(sortBy)) {
+    throw new ScreenerValidationError(`sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(', ')}`)
   }
 
   const order = (options.order ?? 'desc').toLowerCase()
@@ -200,32 +259,35 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
       limit?: string
     }
   }>('/screener', async (req, reply) => {
+    const log = req.log.child({ component: 'route:screener' })
     try {
       const q = req.query
-      const parseNum = (val?: string) => (val ? parseFloat(val) : undefined)
-      const parseIntNum = (val?: string) => (val ? parseInt(val, 10) : undefined)
+      const parsed = ScreenerQuerySchema.safeParse(q)
+      if (!parsed.success) {
+        const marketCapRejected = parsed.error.issues.some(
+          (issue) => issue.path[0] === 'market_cap'
+        )
+        return reply
+          .status(400)
+          .send(
+            formatValidationError(
+              parsed.error,
+              marketCapRejected ? MARKET_CAP_CODE : VALIDATION_ERROR_CODE
+            )
+          )
+      }
 
       const result = await getScreenerData({
-        volume: parseNum(q.volume),
-        change_24h_min: parseNum(q.change_24h_min),
-        change_24h_max: parseNum(q.change_24h_max),
-        market_cap: q.market_cap,
-        price_min: parseNum(q.price_min),
-        price_max: parseNum(q.price_max),
-        liquidity: parseNum(q.liquidity),
-        sortBy: q.sortBy,
-        order: q.order,
-        cursor: q.cursor,
-        limit: parseIntNum(q.limit),
+        ...parsed.data,
         network: req.network ?? activeNetwork,
       })
 
       return result
     } catch (error: any) {
       if (error instanceof ScreenerValidationError) {
-        return reply.status(400).send({ error: error.message })
+        return reply.status(400).send({ error: error.message, code: 'VALIDATION_ERROR' })
       }
-      console.error('[screener]', error)
+      log.error({ err: error }, 'screener query failed')
       return reply.status(500).send({ error: 'Internal server error' })
     }
   })

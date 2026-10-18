@@ -4,6 +4,11 @@ This directory contains the reference Model Context Protocol (MCP) server implem
 
 The MCP server exposes Lens's unified price discovery, liquidity pool metrics, pair screening, and x402 payment execution capabilities directly to AI agents via the standard [Model Context Protocol](https://modelcontextprotocol.io/).
 
+| Command | File | What it does |
+|---|---|---|
+| `npm run mcp:server` | `run.ts` | Starts the Bazaar MCP server on stdio. It signs x402 payment challenges with two Stellar secret keys — one for testnet, one for mainnet — and forwards paid API calls to Bazaar resources, handling the 402 → sign → 200 loop automatically. |
+| `npm run mcp:agent` | `agent.ts` | Starts a mock Bazaar API on `http://localhost:3000`, connects an MCP client to the server, lists the available tools, calls `bazaar_search`, then makes a `paid_call` to the discovered resource. End-to-end demonstration of an agent discovering and paying for a resource. |
+
 ---
 
 ## ⚠️ CRITICAL SPENDING WARNING & MAINNET SAFEGUARDS
@@ -21,26 +26,6 @@ The MCP server exposes Lens's unified price discovery, liquidity pool metrics, p
 
 ---
 
-## Commands & Execution
-
-### 1. Start the MCP Server (`npm run mcp:server`)
-Starts the Bazaar MCP server on standard I/O (`stdio`):
-
-```bash
-npm run mcp:server
-```
-
-Configuration is loaded from your environment (`.env`). The server automatically logs which schemes are configured without ever logging secret keys.
-
-### 2. Run the Agent Example (`npm run mcp:agent`)
-Spawns a mock Bazaar provider and boots an agent that connects to the MCP server via `stdio`, searches for resources, and completes a paid request loop:
-
-```bash
-npm run mcp:agent
-```
-
----
-
 ## Configuration (`.env`)
 
 Configure the following environment variables in your `.env` file:
@@ -50,6 +35,7 @@ Configure the following environment variables in your `.env` file:
 | `MCP_AGENT_SECRET_KEY_TESTNET` | Optional | `""` | Stellar secret key used to sign payments on `stellar:testnet`. When empty, testnet paid calls refuse with `ERR_MISSING_KEY`. |
 | `MCP_AGENT_SECRET_KEY_MAINNET` | Optional | `""` | Stellar secret key used to sign payments on `stellar:pubnet`. **Spends real funds!** |
 | `MCP_ENABLE_MAINNET` | Optional | `false` | Explicit opt-in flag required to activate `stellar:pubnet` signing. Defaults to `false`. |
+| `MCP_PAID_CALL_ALLOWED_HOSTS` | Optional | `""` | Comma-separated allowlist of origins/hosts that `paid_call` may pay for. If empty, all paid calls fail closed. |
 | `MCP_MAX_PAYMENT_PRICE` | Optional | `"$1.00"` | Maximum price limit per paid tool call. Requests exceeding this price fail closed. |
 | `MCP_MAX_CONCURRENCY` | Optional | `5` | Maximum number of in-flight concurrent tool executions before throttling with `ERR_CONCURRENCY_LIMIT_EXCEEDED`. |
 | `MCP_RATE_LIMIT_PAID_CALL` | Optional | `10` | Rate limit for `paid_call` in requests per minute. Exceeding returns `ERR_RATE_LIMITED` with retry hint. |
@@ -94,9 +80,29 @@ In addition to tools, the server advertises read-only resources:
 
 ---
 
-## Worked Client Connection Example
+## Error Codes
 
-Below is a complete, runnable client example using `@modelcontextprotocol/sdk`:
+Paid-call and tool failures return deterministic, machine-readable codes (see `src/mcp/codes.ts`):
+
+| Code | Meaning |
+|---|---|
+| `ERR_PAYMENT_REJECTED` | Payment was required but rejected or failed |
+| `ERR_INSUFFICIENT_BALANCE` | The signing account lacks the balance to pay |
+| `ERR_MISSING_TRUSTLINE` | Missing trustline for the required asset |
+| `ERR_EXPIRED_AUTHORISATION` | The transaction signature expired before submission |
+| `ERR_SERVICE_UNREACHABLE` | The Bazaar service could not be reached |
+| `ERR_NO_RESULTS` | The search returned no resources |
+| `ERR_BAD_REQUEST` | The request failed with a non-402 error status or invalid arguments |
+| `ERR_MISSING_KEY` | Server has no payment keys configured for the requested network |
+| `ERR_RATE_LIMITED` | Per-tool rate limit exceeded |
+| `ERR_CONCURRENCY_LIMIT_EXCEEDED` | Maximum in-flight concurrent requests exceeded |
+| `ERR_URL_BLOCKED` | Destination URL blocked by SSRF defense |
+| `ERR_HOST_NOT_ALLOWED` | Target host not on the operator's paid_call allowlist |
+| `ERR_INTERNAL_FAILURE` | An unknown internal error occurred |
+
+---
+
+## Client Example
 
 ```typescript
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -104,7 +110,6 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import path from 'node:path';
 
 async function runClient() {
-  // 1. Connect transport to the local MCP server process
   const transport = new StdioClientTransport({
     command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
     args: ['tsx', path.resolve(__dirname, 'run.ts')],
@@ -118,38 +123,11 @@ async function runClient() {
   await client.connect(transport);
   console.log('Connected to Lens MCP server.');
 
-  // 2. Discover available tools
   const tools = await client.listTools();
   console.log('Available tools:', tools.tools.map((t) => t.name));
 
-  // 3. Discover available resources
   const resources = await client.listResources();
   console.log('Available resources:', resources.resources.map((r) => r.uri));
-
-  // 4. Read watched pairs resource
-  const pairsResource = await client.readResource({ uri: 'lens://pairs' });
-  console.log('Watched pairs:', pairsResource.contents[0].text);
-
-  // 5. Discover markets using lens_list_pairs tool
-  const pairsResult = await client.callTool({
-    name: 'lens_list_pairs',
-    arguments: { limit: 5, offset: 0, network: 'testnet' },
-  });
-  console.log('Market pairs:', pairsResult.content[0].text);
-
-  // 6. Inspect liquidity pools using lens_get_pools tool
-  const poolsResult = await client.callTool({
-    name: 'lens_get_pools',
-    arguments: { limit: 5, offset: 0, network: 'testnet' },
-  });
-  console.log('Pools:', poolsResult.content[0].text);
-
-  // 7. Screen active pairs by volume
-  const screenResult = await client.callTool({
-    name: 'lens_screen_pairs',
-    arguments: { sortBy: 'volume', order: 'desc', limit: 5, network: 'testnet' },
-  });
-  console.log('Screener results:', screenResult.content[0].text);
 
   await client.close();
 }
