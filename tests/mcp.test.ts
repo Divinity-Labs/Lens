@@ -34,7 +34,7 @@ describe('BazaarMcpServer', () => {
   describe('paid_call error mapping and execution (existing & realistic paths)', () => {
     it('should map signature expiration ledger error to ERR_EXPIRED_AUTHORISATION', async () => {
       const mockFetch = vi.fn().mockRejectedValue(new Error('Transaction signature expired. Signature expiration ledger 123 is less than current ledger 125'));
-      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch });
+      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -53,7 +53,7 @@ describe('BazaarMcpServer', () => {
 
     it('should map missing trustline error to ERR_MISSING_TRUSTLINE', async () => {
       const mockFetch = vi.fn().mockRejectedValue(new Error('op_no_trust: The account does not have a trustline for this asset'));
-      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch });
+      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -77,7 +77,7 @@ describe('BazaarMcpServer', () => {
         text: async () => 'Payment Required'
       });
       
-      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch });
+      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -101,7 +101,7 @@ describe('BazaarMcpServer', () => {
         text: async () => JSON.stringify({ success: true, data: 'hello' })
       });
       
-      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch });
+      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -139,7 +139,7 @@ describe('BazaarMcpServer', () => {
       }
 
       const mockFetch = vi.fn().mockRejectedValue(new HorizonTransactionError());
-      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch });
+      const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['bazaar.example.org'] });
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -193,6 +193,11 @@ describe('BazaarMcpServer', () => {
   });
 
   describe('bazaar_search execution paths (Issue #414 & #421)', () => {
+    const defaultPublicBazaar = {
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { lookup: async () => ['93.184.216.34'] }
+    };
+
     it('should query discovery search endpoint when query argument is provided', async () => {
       const mockData = {
         resources: [
@@ -207,7 +212,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -242,7 +247,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -272,7 +277,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -302,7 +307,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -330,7 +335,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -356,7 +361,7 @@ describe('BazaarMcpServer', () => {
         })
       );
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -376,7 +381,7 @@ describe('BazaarMcpServer', () => {
     it('should report structured error when network connection fails', async () => {
       vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('getaddrinfo ENOTFOUND bazaar.stellar.org'));
 
-      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const server = new BazaarMcpServer(defaultPublicBazaar);
       const { callTool } = getHandlers(server);
 
       const response = await callTool({
@@ -458,5 +463,84 @@ describe('BazaarMcpServer', () => {
       expect(content.code).toBe('ERR_INTERNAL_FAILURE');
       expect(content.reason).toContain('Simulated runtime property access error');
     });
+  });
+});
+
+describe('BazaarMcpServer bazaar_search SSRF guard (#407)', () => {
+  function captureHandler(server: any) {
+    let handler: any = null;
+    server.server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) handler = fn;
+    };
+    server.setupHandlers();
+    return handler;
+  }
+
+  const publicLookup = { lookup: async () => ['93.184.216.34'] };
+  const okFetchImpl = async () =>
+    new Response(JSON.stringify({ resources: [{ name: 'x' }] }), { status: 200 });
+
+  it('rejects a non-http(s) scheme', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], ...publicLookup, fetchImpl: okFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'file:///etc' } } });
+    expect(response.isError).toBe(true);
+    expect(JSON.parse(response.content[0].text).code).toBe('ERR_URL_BLOCKED');
+  });
+
+  it('refuses a private / metadata literal', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], ...publicLookup, fetchImpl: okFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'http://169.254.169.254' } } });
+    expect(response.isError).toBe(true);
+    expect(JSON.parse(response.content[0].text).code).toBe('ERR_URL_BLOCKED');
+  });
+
+  it('refuses a hostname that resolves to a private address', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], lookup: async () => ['127.0.0.1'], fetchImpl: okFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'https://innocent.example' } } });
+    expect(response.isError).toBe(true);
+    expect(JSON.parse(response.content[0].text).code).toBe('ERR_URL_BLOCKED');
+  });
+
+  it('refuses a redirect to a forbidden host', async () => {
+    const calls: string[] = [];
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: {
+        allowedHosts: [],
+        ...publicLookup,
+        fetchImpl: async (input: string | URL) => {
+          calls.push(String(input));
+          return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/' } });
+        },
+      },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'https://ok.example' } } });
+    expect(response.isError).toBe(true);
+    expect(JSON.parse(response.content[0].text).code).toBe('ERR_URL_BLOCKED');
+    expect(calls).toEqual(['https://ok.example/discovery/resources']);
+  });
+
+  it('returns results from a permitted public host', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], ...publicLookup, fetchImpl: okFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'https://ok.example', query: 'xlm' } } });
+    expect(response.isError).toBeFalsy();
+    expect(JSON.parse(response.content[0].text).resources[0].name).toBe('x');
   });
 });
