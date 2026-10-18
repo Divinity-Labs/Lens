@@ -4,14 +4,23 @@ import Fastify from 'fastify'
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
 vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
-vi.mock('../config', () => ({
-  activeNetwork: 'testnet',
-  getNetworkConfig: (network: string) => ({
-    soroswap: { enabled: network === 'mainnet' },
-    aquarius: { enabled: network === 'mainnet' },
-    oracle: { enabled: false },
-  }),
-}))
+// `importOriginal` rather than a bare factory: this module's import chain
+// pulls in `config` as well as `activeNetwork` and `getNetworkConfig`, and a
+// factory that lists only what the test uses fails at import time with
+// `No "config" export is defined on the "../config" mock` — a message that
+// points at the mock rather than at whoever needed the missing export.
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>()
+  return {
+    ...actual,
+    activeNetwork: 'testnet',
+    getNetworkConfig: (network: string) => ({
+      soroswap: { enabled: network === 'mainnet' },
+      aquarius: { enabled: network === 'mainnet' },
+      oracle: { enabled: false },
+    }),
+  }
+})
 
 import { registerVenueRoutes } from '../routes/venues'
 import { venueAdapters, type VenueAdapter } from '../ingest/venues'
