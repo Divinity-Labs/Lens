@@ -54,6 +54,37 @@ export const schema = `
     network: String!
   }
 
+  enum OracleSourceStatus {
+    NOT_CONFIGURED
+    AVAILABLE
+    UNREACHABLE
+    EMPTY
+  }
+
+  type OracleSource {
+    name: String!
+    price: Float
+    timestamp: String
+    deviationPct: Float
+    """
+    UNREACHABLE means the adapter failed; EMPTY means it is configured but
+    returned no quote.
+    """
+    status: OracleSourceStatus!
+    ageSeconds: Int
+  }
+
+  type OracleComparison {
+    asset: String!
+    network: String!
+    lens: Float
+    reflector: Float
+    deviationPct: Float
+    status: String!
+    fetchedAt: String!
+    oracles: [OracleSource!]!
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -70,8 +101,27 @@ export const schema = `
     """
     getPrice(assetA: String!, assetB: String!): AggregatedPrice
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-    getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
+    """
+    Returns historical price aggregate buckets for a pair over an optional [from, to] time range.
+
+    The time range is inclusive at both ends: a bucket is included if bucket >= from and bucket <= to.
+    Because both endpoints are inclusive, querying adjacent windows (e.g. [t0, t1] and [t1, t2]) will
+    return the boundary bucket at t1 in both results.
+    """
+    getPriceHistory(
+      assetA: String!
+      assetB: String!
+      window: String!
+      limit: Int
+      from: String
+      to: String
+    ): [PriceBucket]
     listPairs: [String]!
+    """
+    Compares the Lens price for an asset against every configured oracle.
+    The network argument defaults to the active network.
+    """
+    oracle(asset: String!, network: String): OracleComparison
   }
 
   type Subscription {
