@@ -51,8 +51,16 @@ async function main() {
         })
       : undefined;
 
+  // paid_call spends from the keys above, so the hosts it may pay for are the
+  // operator's decision. Unset means no host is payable at all (#404).
+  const paidCallAllowlist = (process.env.MCP_PAID_CALL_ALLOWED_HOSTS || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+
   const server = new BazaarMcpServer({
     fetchWithPayment,
+    paidCallAllowlist,
     configuredNetworks,
     maxConcurrency: process.env.MCP_MAX_CONCURRENCY ? parseInt(process.env.MCP_MAX_CONCURRENCY, 10) : undefined,
     rateLimits: {
@@ -74,6 +82,11 @@ async function main() {
     `[mcp-server] Agent configured for ${
       configuredNetworks.length > 0 ? configuredNetworks.join(' and ') : 'read-only (no payment keys)'
     }`
+  );
+  console.error(
+    paidCallAllowlist.length > 0
+      ? `[mcp-server] paid_call may pay these allow-listed origins: ${paidCallAllowlist.join(', ')}`
+      : '[mcp-server] paid_call allow-list is empty: every paid call will be refused. Set MCP_PAID_CALL_ALLOWED_HOSTS to allow hosts.'
   );
 
   await server.run();
