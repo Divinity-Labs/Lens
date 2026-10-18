@@ -256,6 +256,9 @@ const globalConfig = {
     // per-request scan, but callers must never be shown a minutes-old market.
     snapshotTtl: parseInt(process.env.SNAPSHOT_CACHE_TTL ?? '15', 10),
   },
+  http: {
+    timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
+  },
 } as const
 
 // ── Per-network map ───────────────────────────────────────────────────────────
@@ -335,4 +338,5 @@ export const config = {
   api:     globalConfig.api,
   indexer: globalConfig.indexer,
   cache:   globalConfig.cache,
+  http:    globalConfig.http,
 }
