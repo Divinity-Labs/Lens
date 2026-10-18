@@ -225,7 +225,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           WHERE ids.pool_id IS NOT NULL
        )
        SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
+              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp, l.venue
          FROM ids
         CROSS JOIN LATERAL (
               SELECT * FROM pool_snapshots s
@@ -267,3 +267,4 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   )
 }
+
