@@ -280,11 +280,21 @@ export async function registerRESTRoutes(app: FastifyInstance) {
 
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
       const freshnessSec = parseInt(req.query.freshness ?? '300', 10)
-      if (isNaN(freshnessSec) || freshnessSec <= 0) {
-        return reply.status(400).send({ error: 'freshness must be a positive integer in seconds' })
+      if (isNaN(freshnessSec) || freshnessSec < 5 || freshnessSec > 86400) {
+        return reply.status(400).send({ error: 'freshness must be an integer between 5 and 86400 seconds' })
       }
 
       const result = await getStalenessAwareMedianPrice(pair.pairKey, network, freshnessSec)
+      if (result.medianPrice === null) {
+        return reply.status(404).send({
+          error: `No price data available for pair ${assetA}/${assetB} on ${network}`,
+          reason: result.reason,
+          assetA: pair.assetA.code,
+          assetB: pair.assetB.code,
+          ...result,
+        })
+      }
+
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,

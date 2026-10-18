@@ -22,8 +22,8 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
   })
 
   describe('calculateMedian', () => {
-    it('returns 0 for empty array', () => {
-      expect(calculateMedian([])).toBe(0)
+    it('returns null for empty array', () => {
+      expect(calculateMedian([])).toBeNull()
     })
 
     it('returns exact value for single element', () => {
@@ -43,6 +43,55 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
 
   describe('computeStalenessAwareMedian', () => {
     const fixedNow = 1700000000000 // fixed reference epoch
+
+    it('returns null median and no_price_data when sources array is empty', () => {
+      const result = computeStalenessAwareMedian('XLM/USDC', [], {
+        freshnessThresholdSec: 300,
+        now: fixedNow,
+      })
+
+      expect(result.medianPrice).toBeNull()
+      expect(result.sourceCount).toBe(0)
+      expect(result.fallbackUsed).toBe(false)
+      expect(result.reason).toBe('no_price_data')
+    })
+
+    it('returns null median and all_sources_invalid when all sources are invalid', () => {
+      const sources: PriceSourceEntry[] = [
+        {
+          source: 'SDEX',
+          price: 0,
+          timestamp: new Date(fixedNow - 10 * 1000),
+        },
+        {
+          source: 'AMM',
+          price: -5.0,
+          timestamp: new Date(fixedNow - 10 * 1000),
+        },
+      ]
+
+      const result = computeStalenessAwareMedian('XLM/USDC', sources, {
+        now: fixedNow,
+      })
+
+      expect(result.medianPrice).toBeNull()
+      expect(result.sourceCount).toBe(0)
+      expect(result.fallbackUsed).toBe(false)
+      expect(result.reason).toBe('all_sources_invalid')
+      expect(result.sources.excluded).toHaveLength(2)
+    })
+
+    it('clamps freshnessThresholdSec between 5 and 86400 seconds', () => {
+      const resLow = computeStalenessAwareMedian('XLM/USDC', [], {
+        freshnessThresholdSec: 1, // below 5
+      })
+      expect(resLow.freshnessThresholdSeconds).toBe(5)
+
+      const resHigh = computeStalenessAwareMedian('XLM/USDC', [], {
+        freshnessThresholdSec: 999999, // above 86400
+      })
+      expect(resHigh.freshnessThresholdSeconds).toBe(86400)
+    })
 
     it('computes median from only fresh sources and drops stale ones', () => {
       const sources: PriceSourceEntry[] = [
@@ -75,6 +124,7 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
 
       expect(result.sourceCount).toBe(3)
       expect(result.fallbackUsed).toBe(false)
+      expect(result.reason).toBeNull()
       // Fresh prices: [1.02, 1.05, 1.08] -> median is 1.05
       expect(result.medianPrice).toBe(1.05)
       expect(result.sources.included.map((s) => s.source)).toEqual(['SDEX', 'AMM', 'SOROSWAP'])
@@ -84,22 +134,22 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
       expect(result.sources.excluded[0].ageSeconds).toBe(600)
     })
 
-    it('engages priority fallback chain when all sources are stale', () => {
+    it('engages priority fallback chain when all sources are stale and reports fallbackAgeSeconds', () => {
       const sources: PriceSourceEntry[] = [
         {
           source: 'AQUARIUS',
           price: 1.10,
-          timestamp: new Date(fixedNow - 1000 * 1000), // very stale
+          timestamp: new Date(fixedNow - 1000 * 1000), // very stale (1000s)
         },
         {
           source: 'SDEX',
           price: 1.04,
-          timestamp: new Date(fixedNow - 500 * 1000), // stale
+          timestamp: new Date(fixedNow - 500 * 1000), // stale (500s)
         },
         {
           source: 'SOROSWAP',
           price: 1.06,
-          timestamp: new Date(fixedNow - 400 * 1000), // stale
+          timestamp: new Date(fixedNow - 400 * 1000), // stale (400s)
         },
       ]
 
@@ -112,9 +162,12 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
       // Since all are stale, fallback engages and selects SDEX as top priority
       expect(result.fallbackUsed).toBe(true)
       expect(result.fallbackSource).toBe('SDEX')
+      expect(result.fallbackAgeSeconds).toBe(500)
       expect(result.medianPrice).toBe(1.04)
+      expect(result.reason).toBeNull()
       expect(result.sources.included).toHaveLength(1)
       expect(result.sources.included[0].source).toBe('SDEX')
+      expect(result.sources.included[0].ageSeconds).toBe(500)
       expect(result.sources.excluded).toHaveLength(3)
     })
 
@@ -143,6 +196,7 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
 
       expect(result.sourceCount).toBe(1)
       expect(result.medianPrice).toBe(1.25)
+      expect(result.reason).toBeNull()
       expect(result.sources.excluded).toHaveLength(2)
       expect(result.sources.excluded[0].reason).toBe('invalid')
       expect(result.sources.excluded[1].reason).toBe('invalid')
@@ -165,6 +219,16 @@ describe('Staleness-aware median pricing with source fallback (#81)', () => {
       )
       expect(res.medianPrice).toBe(0.13)
       expect(res.fallbackUsed).toBe(false)
+      expect(res.reason).toBeNull()
+    })
+
+    it('returns null medianPrice and no_price_data when DB has no rows', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [] })
+
+      const res = await getStalenessAwareMedianPrice('UNKNOWN/PAIR', 'testnet', 300)
+      expect(res.medianPrice).toBeNull()
+      expect(res.sourceCount).toBe(0)
+      expect(res.reason).toBe('no_price_data')
     })
   })
 })

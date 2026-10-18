@@ -19,23 +19,26 @@ export interface ExcludedSourceEntry {
 export interface StalenessAwareMedianResult {
   pair: string
   network: string
-  medianPrice: number
+  medianPrice: number | null
   sourceCount: number
   freshnessThresholdSeconds: number
   sources: {
-    included: Array<{ source: string; price: number; timestamp: string }>
+    included: Array<{ source: string; price: number; timestamp: string; ageSeconds?: number }>
     excluded: ExcludedSourceEntry[]
   }
   fallbackUsed: boolean
   fallbackSource?: string
+  fallbackAgeSeconds?: number
+  reason: 'no_price_data' | 'all_sources_invalid' | null
   calculatedAt: string
 }
 
 /**
  * Calculates the mathematical median of an array of numeric values.
+ * Returns null if the values array is empty.
  */
-export function calculateMedian(values: number[]): number {
-  if (values.length === 0) return 0
+export function calculateMedian(values: number[]): number | null {
+  if (values.length === 0) return null
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   if (sorted.length % 2 === 0) {
@@ -60,11 +63,11 @@ export function computeStalenessAwareMedian(
   } = {}
 ): StalenessAwareMedianResult {
   const network = options.network ?? activeNetwork
-  const freshnessThresholdSec = options.freshnessThresholdSec ?? 300 // default 5 minutes
+  const freshnessThresholdSec = Math.max(5, Math.min(86400, options.freshnessThresholdSec ?? 300)) // bounded 5s to 24h
   const now = options.now ?? Date.now()
   const fallbackPriority = options.fallbackPriority ?? ['SDEX', 'AMM', 'SOROSWAP', 'PHOENIX', 'AQUARIUS', 'CEX']
 
-  const included: Array<{ source: string; price: number; timestamp: string }> = []
+  const included: Array<{ source: string; price: number; timestamp: string; ageSeconds?: number }> = []
   const excluded: ExcludedSourceEntry[] = []
 
   for (const entry of sources) {
@@ -96,19 +99,21 @@ export function computeStalenessAwareMedian(
         source: entry.source,
         price: entry.price,
         timestamp: isoTimestamp,
+        ageSeconds,
       })
     }
   }
 
-  let medianPrice = 0
+  let medianPrice: number | null = null
   let fallbackUsed = false
   let fallbackSource: string | undefined
+  let fallbackAgeSeconds: number | undefined
+  let reason: 'no_price_data' | 'all_sources_invalid' | null = null
 
   if (included.length > 0) {
     medianPrice = calculateMedian(included.map((s) => s.price))
   } else if (sources.length > 0) {
     // Priority fallback: select highest priority source available even if aged
-    fallbackUsed = true
     const validSources = sources.filter((s) => Number.isFinite(s.price) && s.price > 0)
 
     let chosen: PriceSourceEntry | undefined
@@ -125,14 +130,22 @@ export function computeStalenessAwareMedian(
     }
 
     if (chosen) {
+      fallbackUsed = true
       medianPrice = chosen.price
       fallbackSource = chosen.source
+      const chosenAgeSeconds = Math.max(0, Math.floor((now - new Date(chosen.timestamp).getTime()) / 1000))
+      fallbackAgeSeconds = chosenAgeSeconds
       included.push({
         source: chosen.source,
         price: chosen.price,
         timestamp: new Date(chosen.timestamp).toISOString(),
+        ageSeconds: chosenAgeSeconds,
       })
+    } else {
+      reason = 'all_sources_invalid'
     }
+  } else {
+    reason = 'no_price_data'
   }
 
   return {
@@ -147,6 +160,8 @@ export function computeStalenessAwareMedian(
     },
     fallbackUsed,
     fallbackSource,
+    fallbackAgeSeconds,
+    reason,
     calculatedAt: new Date(now).toISOString(),
   }
 }
