@@ -33,9 +33,17 @@ async function main() {
     ]
   });
 
+  // paid_call spends from the keys above, so the hosts it may pay for are the
+  // operator's decision. Unset means no host is payable at all (#404).
+  const paidCallAllowlist = (process.env.MCP_PAID_CALL_ALLOWED_HOSTS || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+
   const transport = process.env.MCP_TRANSPORT === 'http' ? 'http' : 'stdio';
   const server = new BazaarMcpServer({
     fetchWithPayment,
+    paidCallAllowlist,
     transport,
     port: process.env.MCP_PORT ? Number(process.env.MCP_PORT) : 3000,
     host: process.env.MCP_HOST || '127.0.0.1',
@@ -48,7 +56,12 @@ async function main() {
     console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
   }
   console.error('[mcp-server] Agent configured for stellar:testnet and stellar:pubnet');
-  
+  console.error(
+    paidCallAllowlist.length > 0
+      ? `[mcp-server] paid_call may pay these allow-listed origins: ${paidCallAllowlist.join(', ')}`
+      : '[mcp-server] paid_call allow-list is empty: every paid call will be refused. Set MCP_PAID_CALL_ALLOWED_HOSTS to allow hosts.'
+  );
+
   await server.run();
 }
 
