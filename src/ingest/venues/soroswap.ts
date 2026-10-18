@@ -25,6 +25,7 @@ import { upsertPricePoints } from '../../db'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
+import { fetchWithTimeout } from '../../fetch'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -78,7 +79,7 @@ export async function fetchSoroswapTokenList(
   tokenListUrl: string = getNetworkConfig(activeNetwork).soroswap.tokenListUrl
 ): Promise<SoroswapToken[]> {
   try {
-    const res = await fetch(tokenListUrl)
+    const res = await fetchWithTimeout(tokenListUrl)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as SoroswapTokenList
     return Array.isArray(data.tokens) ? data.tokens : []

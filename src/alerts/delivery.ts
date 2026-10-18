@@ -2,6 +2,7 @@ import { createHmac } from 'crypto'
 import { createLogger } from '../logger'
 
 const log = createLogger('webhook')
+import { fetchWithTimeout } from '../fetch'
 
 function retryDelayMs(attempt: number): number {
   return Math.pow(2, attempt - 1) * 1000
@@ -22,14 +23,14 @@ export async function deliverJsonWithRetries(
 
   let res: Response
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Lens-Signature': signature,
       },
       body: payload,
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
     })
   } catch (err) {
     if (attempt < 3) {
