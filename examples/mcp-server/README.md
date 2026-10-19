@@ -113,6 +113,18 @@ JSON):
   `ERR_MISSING_TRUSTLINE`, `ERR_EXPIRED_AUTHORISATION`, or
   `ERR_SERVICE_UNREACHABLE`.
 
+### Resources
+
+In addition to tools, the MCP server declares the `resources` capability, allowing agents to read cacheable Lens context directly without executing repeated function calls:
+
+| Resource URI | MIME Type | Description | Freshness |
+|---|---|---|---|
+| `lens://pairs` | `application/json` | Watched pairs list tracked and indexed by Lens | Server startup / configuration time |
+| `lens://openapi` | `application/json` | Complete OpenAPI 3.0 specification for the Lens API | File mtime (`openapi.json`) |
+| `lens://venues` | `application/json` | DEX and AMM venues tracked by Lens (SDEX, Soroswap, Aquarius) | Server startup / configuration time |
+| `lens://status` | `application/json` | Service status snapshot and active network | Real-time / request time |
+
+
 ### Standalone client example
 
 You can also connect your own MCP client to the server. This TypeScript

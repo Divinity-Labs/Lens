@@ -1,6 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BazaarMcpServer, SERVER_VERSION, SERVER_NAME } from '../src/mcp/server';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  BazaarMcpServer,
+  SERVER_VERSION,
+  SERVER_NAME,
+  LENS_MCP_RESOURCES,
+} from '../src/mcp/server';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { PAID_CALL_HTTP_METHODS } from '../src/mcp/toolSchemas';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -483,3 +493,125 @@ describe('BazaarMcpServer bazaar_search upstream failures (#349)', () => {
     expect(body.reason).toContain('not valid JSON');
   });
 });
+
+describe('BazaarMcpServer — Resources (#418)', () => {
+  function captureResourceHandlers(server: any) {
+    let listHandler: any = null;
+    let readHandler: any = null;
+    server.server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === ListResourcesRequestSchema) listHandler = fn;
+      if (schema === ReadResourceRequestSchema) readHandler = fn;
+    };
+    server.setupHandlers();
+    return { listHandler, readHandler };
+  }
+
+  it('declares the resources capability', () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    expect((server as any).server._capabilities.resources).toBeDefined();
+  });
+
+  it('lists exposed resources including pairs and OpenAPI spec with freshness metadata', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { listHandler } = captureResourceHandlers(server);
+    expect(listHandler).toBeTruthy();
+
+    const res = await listHandler({ method: 'resources/list', params: {} });
+    expect(res.resources).toBeInstanceOf(Array);
+    expect(res.resources.length).toBeGreaterThanOrEqual(2);
+
+    const uris = res.resources.map((r: any) => r.uri);
+    expect(uris).toContain('lens://pairs');
+    expect(uris).toContain('lens://openapi');
+    expect(uris).toContain('lens://venues');
+    expect(uris).toContain('lens://status');
+
+    // Verify freshness metadata
+    for (const r of res.resources) {
+      expect(r.mimeType).toBe('application/json');
+      expect(r.annotations?.lastModified).toBeTruthy();
+      // Ensure lastModified is a valid ISO date
+      expect(new Date(r.annotations.lastModified).toISOString()).toBe(r.annotations.lastModified);
+    }
+  });
+
+  it('reads the lens://pairs resource returning valid JSON array', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { readHandler } = captureResourceHandlers(server);
+    expect(readHandler).toBeTruthy();
+
+    const res = await readHandler({
+      method: 'resources/read',
+      params: { uri: 'lens://pairs' },
+    });
+
+    expect(res.contents).toHaveLength(1);
+    expect(res.contents[0].uri).toBe('lens://pairs');
+    expect(res.contents[0].mimeType).toBe('application/json');
+
+    const parsed = JSON.parse(res.contents[0].text);
+    expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  it('reads the lens://openapi resource returning valid OpenAPI JSON', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { readHandler } = captureResourceHandlers(server);
+
+    const res = await readHandler({
+      method: 'resources/read',
+      params: { uri: 'lens://openapi' },
+    });
+
+    expect(res.contents).toHaveLength(1);
+    expect(res.contents[0].uri).toBe('lens://openapi');
+    expect(res.contents[0].mimeType).toBe('application/json');
+
+    const parsed = JSON.parse(res.contents[0].text);
+    expect(parsed.openapi || parsed.info).toBeDefined();
+  });
+
+  it('reads the lens://venues resource returning valid venue list', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { readHandler } = captureResourceHandlers(server);
+
+    const res = await readHandler({
+      method: 'resources/read',
+      params: { uri: 'lens://venues' },
+    });
+
+    expect(res.contents).toHaveLength(1);
+    expect(res.contents[0].uri).toBe('lens://venues');
+    const venues = JSON.parse(res.contents[0].text);
+    expect(Array.isArray(venues)).toBe(true);
+    expect(venues.some((v: any) => v.id === 'sdex')).toBe(true);
+  });
+
+  it('reads the lens://status resource returning service status snapshot', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { readHandler } = captureResourceHandlers(server);
+
+    const res = await readHandler({
+      method: 'resources/read',
+      params: { uri: 'lens://status' },
+    });
+
+    expect(res.contents).toHaveLength(1);
+    expect(res.contents[0].uri).toBe('lens://status');
+    const status = JSON.parse(res.contents[0].text);
+    expect(status.status).toBe('ok');
+    expect(status.timestamp).toBeDefined();
+  });
+
+  it('rejects reading an unknown resource URI with descriptive error', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const { readHandler } = captureResourceHandlers(server);
+
+    await expect(
+      readHandler({
+        method: 'resources/read',
+        params: { uri: 'lens://unknown-resource-xyz' },
+      })
+    ).rejects.toThrow(/Resource not found/i);
+  });
+});
+

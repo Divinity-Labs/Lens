@@ -1,6 +1,11 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
 import { LENS_PRICE_TOOL_NAME, lensPriceToolDefinition, readLensPrice, type LensPriceQueries } from './priceTool.js';
@@ -13,7 +18,7 @@ import {
 import { fetchWithTimeout } from '../fetch.js';
 import { config } from '../config.js';
 import { ssrfSafeFetch, SsrfError, type SsrfFetchOptions } from '../net/ssrf.js';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -61,6 +66,82 @@ function hostOf(url: string): string {
     return 'unknown host';
   }
 }
+
+const openApiPath = join(__dirname, '../../openapi.json');
+const serverStartTime = new Date().toISOString();
+
+export interface McpResourceDefinition {
+  uri: string;
+  name: string;
+  description: string;
+  mimeType: string;
+  getLastModified: () => string;
+  read: () => string;
+}
+
+export const LENS_MCP_RESOURCES: readonly McpResourceDefinition[] = [
+  {
+    uri: 'lens://pairs',
+    name: 'Watched Pairs',
+    description: 'Current list of trading pairs watched and indexed by Lens',
+    mimeType: 'application/json',
+    getLastModified: () => serverStartTime,
+    read: () => JSON.stringify(config.pairs ?? [], null, 2),
+  },
+  {
+    uri: 'lens://openapi',
+    name: 'OpenAPI Specification',
+    description: 'Complete OpenAPI 3.0 specification for the Lens REST API',
+    mimeType: 'application/json',
+    getLastModified: () => {
+      try {
+        return statSync(openApiPath).mtime.toISOString();
+      } catch {
+        return serverStartTime;
+      }
+    },
+    read: () => {
+      if (existsSync(openApiPath)) {
+        return readFileSync(openApiPath, 'utf-8');
+      }
+      return JSON.stringify({ openapi: '3.0.0', info: { title: 'Lens API' } });
+    },
+  },
+  {
+    uri: 'lens://venues',
+    name: 'Supported Venues',
+    description: 'Venues and DEXs tracked by Lens on Stellar (SDEX, Soroswap, etc.)',
+    mimeType: 'application/json',
+    getLastModified: () => serverStartTime,
+    read: () =>
+      JSON.stringify(
+        [
+          { id: 'sdex', name: 'Stellar Decentralized Exchange' },
+          { id: 'soroswap', name: 'Soroswap AMM' },
+          { id: 'aquarius', name: 'Aquarius AMM' },
+        ],
+        null,
+        2
+      ),
+  },
+  {
+    uri: 'lens://status',
+    name: 'Service Status',
+    description: 'Status of the Lens service and runtime environment',
+    mimeType: 'application/json',
+    getLastModified: () => new Date().toISOString(),
+    read: () =>
+      JSON.stringify(
+        {
+          status: 'ok',
+          network: (config as any).activeNetwork ?? 'testnet',
+          timestamp: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+  },
+];
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
@@ -118,6 +199,7 @@ export class BazaarMcpServer {
       {
         capabilities: {
           tools: {},
+          resources: {},
         },
       }
     );
@@ -289,6 +371,35 @@ export class BazaarMcpServer {
       }
 
       throw new Error(`Unknown tool: ${request.params.name}`);
+    });
+
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+      resources: LENS_MCP_RESOURCES.map((r) => ({
+        uri: r.uri,
+        name: r.name,
+        description: r.description,
+        mimeType: r.mimeType,
+        annotations: {
+          lastModified: r.getLastModified(),
+        },
+      })),
+    }));
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const uri = request.params?.uri;
+      const resource = LENS_MCP_RESOURCES.find((r) => r.uri === uri);
+      if (!resource) {
+        throw new Error(`Resource not found: ${uri}`);
+      }
+      return {
+        contents: [
+          {
+            uri: resource.uri,
+            mimeType: resource.mimeType,
+            text: resource.read(),
+          },
+        ],
+      };
     });
   }
 
