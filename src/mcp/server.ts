@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -8,6 +9,8 @@ import {
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { MCP_ERROR_CODES, McpErrorCode, classifyPaidCallError } from './codes.js';
 import { SpendBudget } from './budget.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
@@ -70,6 +73,40 @@ function hostOf(url: string): string {
   } catch {
     return 'unknown host';
   }
+}
+
+export interface McpRunOptions {
+  /**
+   * Transport to use: 'stdio' (default) connects via stdin/stdout;
+   * 'http' starts an HTTP streamable transport server.
+   * Can also be controlled via the MCP_TRANSPORT environment variable.
+   */
+  transport?: 'stdio' | 'http';
+  /**
+   * Port for the HTTP transport server.
+   * Defaults to MCP_HTTP_PORT || PORT || 3001.
+   */
+  port?: number;
+  /**
+   * Host to bind the HTTP transport server.
+   * Defaults to MCP_HTTP_HOST || '0.0.0.0'.
+   */
+  host?: string;
+  /**
+   * API key required for HTTP authentication.
+   * When HTTP transport is selected, requests must provide this key
+   * in `Authorization: Bearer <key>` or `x-api-key: <key>`.
+   * Can also be provided via the MCP_API_KEY environment variable.
+   * If unset when HTTP transport is used, the server refuses to start.
+   */
+  apiKey?: string;
+}
+
+export interface McpRunningInstance {
+  transport: 'stdio' | 'http';
+  httpServer?: http.Server;
+  port?: number;
+  close: () => Promise<void>;
 }
 
 export interface McpServerConfig {
@@ -581,8 +618,88 @@ export class BazaarMcpServer {
     };
   }
 
-  async run() {
+  /**
+   * Connects the server to the given transport. Prefer this over `run()` when
+   * you manage the transport yourself.
+   */
+  async connect(transport: Transport): Promise<void> {
+    await this.server.connect(transport);
+  }
+
+  /**
+   * Starts the MCP server on the configured transport.
+   * - Defaults to `stdio` unless configured otherwise.
+   * - Can be switched to `http` via `options.transport = 'http'` or `MCP_TRANSPORT=http`.
+   * - HTTP exposure strictly requires authentication (via `apiKey` or `MCP_API_KEY`)
+   *   and refuses to start without one.
+   */
+  async run(options: McpRunOptions = {}): Promise<McpRunningInstance> {
+    const transportType = options.transport ?? (process.env.MCP_TRANSPORT === 'http' ? 'http' : 'stdio');
+
+    if (transportType === 'http') {
+      const apiKey = options.apiKey ?? process.env.MCP_API_KEY;
+      if (!apiKey || apiKey.trim() === '') {
+        throw new Error('MCP HTTP transport requires authentication: set MCP_API_KEY or provide apiKey in options');
+      }
+
+      const port = options.port ?? (process.env.MCP_HTTP_PORT ? parseInt(process.env.MCP_HTTP_PORT, 10) : (process.env.PORT ? parseInt(process.env.PORT, 10) : 3001));
+      const host = options.host ?? process.env.MCP_HTTP_HOST ?? '0.0.0.0';
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      await this.server.connect(transport);
+
+      const httpServer = http.createServer(async (req, res) => {
+        // Enforce authentication on all incoming requests
+        const authHeader = req.headers['authorization'];
+        const apiKeyHeader = req.headers['x-api-key'];
+        const token = authHeader?.startsWith('Bearer ')
+          ? authHeader.slice(7).trim()
+          : (typeof apiKeyHeader === 'string' ? apiKeyHeader.trim() : undefined);
+
+        if (!token || token !== apiKey) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: valid API key required for MCP HTTP transport' }));
+          return;
+        }
+
+        try {
+          await transport.handleRequest(req, res);
+        } catch (err: any) {
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message || 'Internal error' }));
+          }
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        httpServer.listen(port, host, () => resolve());
+        httpServer.on('error', reject);
+      });
+
+      const actualPort = (httpServer.address() as any)?.port ?? port;
+
+      return {
+        transport: 'http',
+        httpServer,
+        port: actualPort,
+        close: async () => {
+          await transport.close();
+          await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        },
+      };
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+
+    return {
+      transport: 'stdio',
+      close: async () => {
+        await transport.close();
+      },
+    };
   }
 }

@@ -486,6 +486,7 @@ describe('BazaarMcpServer bazaar_search upstream failures (#349)', () => {
   });
 });
 
+
 import { classifyPaidCallError } from '../src/mcp/codes';
 
 function captureHandler(server: BazaarMcpServer): any {
@@ -854,3 +855,105 @@ describe('cumulative spend budget', () => {
     expect(() => parseUsdToNanodollars('$1.0000000000')).toThrow(/more than 9 decimal places/);
   })
 })
+
+describe('BazaarMcpServer — Transports (#419)', () => {
+  it('defaults to stdio transport when no options or env var is specified', async () => {
+    const oldEnv = process.env.MCP_TRANSPORT;
+    delete process.env.MCP_TRANSPORT;
+    try {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const running = await server.run();
+      expect(running.transport).toBe('stdio');
+      await running.close();
+    } finally {
+      if (oldEnv) process.env.MCP_TRANSPORT = oldEnv;
+    }
+  });
+
+  it('refuses to start HTTP transport when apiKey / MCP_API_KEY is missing', async () => {
+    const oldKey = process.env.MCP_API_KEY;
+    delete process.env.MCP_API_KEY;
+    try {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      await expect(server.run({ transport: 'http' })).rejects.toThrow(
+        /MCP HTTP transport requires authentication/i
+      );
+    } finally {
+      if (oldKey) process.env.MCP_API_KEY = oldKey;
+    }
+  });
+
+  it('starts HTTP transport with valid apiKey and enforces authentication on requests', async () => {
+    const apiKey = 'test-secret-key-12345';
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    // Bind to port 0 (dynamic port) to avoid collisions
+    const running = await server.run({ transport: 'http', port: 0, host: '127.0.0.1', apiKey });
+    expect(running.transport).toBe('http');
+    expect(running.port).toBeGreaterThan(0);
+
+    const baseUrl = `http://127.0.0.1:${running.port}`;
+
+    try {
+      // 1. Request without auth should be rejected with 401
+      const unauthRes = await fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+      expect(unauthRes.status).toBe(401);
+      const unauthJson = await unauthRes.json();
+      expect(unauthJson.error).toMatch(/Unauthorized/i);
+
+      // 2. Request with invalid key should be rejected with 401
+      const badAuthRes = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer wrong-key',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+      expect(badAuthRes.status).toBe(401);
+
+      // 3. Request with valid x-api-key header should be accepted (not 401)
+      const validApiKeyRes = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+      expect(validApiKeyRes.status).not.toBe(401);
+
+      // 4. Request with valid Bearer token should be accepted (not 401)
+      const validBearerRes = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      });
+      expect(validBearerRes.status).not.toBe(401);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it('exposes identical tools across both stdio and HTTP setups', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    let listToolsHandler: any = null;
+    (server as any).server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === ListToolsRequestSchema) {
+        listToolsHandler = fn;
+      }
+    };
+    (server as any).setupHandlers();
+
+    expect(listToolsHandler).toBeTruthy();
+    const res = await listToolsHandler({ method: 'tools/list', params: {} });
+    const toolNames = res.tools.map((t: any) => t.name).sort();
+    expect(toolNames).toEqual(['bazaar_search', 'paid_call']);
+  });
+});

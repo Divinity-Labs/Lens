@@ -73,7 +73,19 @@ async function main() {
     paidCallAllowlist
   });
 
-  console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
+  const transport = process.env.MCP_TRANSPORT === 'http' ? 'http' : 'stdio';
+  const port = process.env.MCP_HTTP_PORT ? parseInt(process.env.MCP_HTTP_PORT, 10) : (process.env.PORT ? parseInt(process.env.PORT, 10) : 3001);
+
+  if (transport === 'http') {
+    if (!process.env.MCP_API_KEY) {
+      console.error('[mcp-server] Error: MCP_API_KEY must be set when running with MCP_TRANSPORT=http');
+      process.exit(1);
+    }
+    console.error(`[mcp-server] Starting Bazaar MCP server on HTTP transport (port ${port})...`);
+    console.error('[mcp-server] Authentication required via Authorization: Bearer <MCP_API_KEY> or x-api-key header');
+  } else {
+    console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
+  }
   console.error('[mcp-server] Agent configured for stellar:testnet and stellar:pubnet');
   console.error(`[mcp-server] lens_get_price serves aggregated prices on ${activeNetwork}`);
   // Limits and file paths only: the signing key is never logged.

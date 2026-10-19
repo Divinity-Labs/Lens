@@ -29,8 +29,13 @@ paid call from the mainnet account.
 | `MCP_AGENT_SECRET_KEY_TESTNET` | Yes | Stellar secret key used to sign payments on `stellar:testnet` |
 | `MCP_AGENT_SECRET_KEY_MAINNET` | Yes | Stellar secret key used to sign payments on `stellar:pubnet` (mainnet) — **real money** |
 | `MCP_MAX_PAYMENT_PRICE` | No | Maximum price the server will pay per request (default: `$1.00`) |
+| `MCP_TRANSPORT` | No | Transport mode: `stdio` (default) or `http` |
+| `MCP_API_KEY` | If HTTP | Shared secret for authenticating incoming HTTP requests. Refuses to start if missing when `MCP_TRANSPORT=http` |
+| `MCP_HTTP_PORT` | No | Port for HTTP transport (default: `3001` or `PORT`) |
+| `MCP_HTTP_HOST` | No | Host interface for HTTP transport (default: `0.0.0.0`) |
 
 Both keys are required: `run.ts` exits with an error if either is unset.
+When running with `MCP_TRANSPORT=http`, `MCP_API_KEY` is also strictly required.
 
 The server talks to two Stellar networks:
 - `stellar:testnet` — safe, friendbot-funded play money
@@ -64,12 +69,38 @@ export MCP_AGENT_SECRET_KEY_MAINNET=<your-empty-mainnet-secret-key>
 npm run mcp:server
 ```
 
-The server starts on stdio and logs:
+The server starts on stdio (default) and logs:
 
 ```
 [mcp-server] Starting Bazaar MCP server on stdio...
 [mcp-server] Agent configured for stellar:testnet and stellar:pubnet
 ```
+
+### Running on HTTP Transport (hosted / remote)
+
+To run the MCP server over HTTP/SSE instead of stdio, set `MCP_TRANSPORT=http` and provide `MCP_API_KEY`:
+
+```bash
+export MCP_AGENT_SECRET_KEY_TESTNET=<your-testnet-secret-key>
+export MCP_AGENT_SECRET_KEY_MAINNET=<your-empty-mainnet-secret-key>
+export MCP_TRANSPORT=http
+export MCP_API_KEY=<your-secret-api-key>
+export MCP_HTTP_PORT=3001 # optional, defaults to 3001
+npm run mcp:server
+```
+
+The server starts on HTTP and logs:
+
+```
+[mcp-server] Starting Bazaar MCP server on HTTP transport (port 3001)...
+[mcp-server] Authentication required via Authorization: Bearer <MCP_API_KEY> or x-api-key header
+[mcp-server] Agent configured for stellar:testnet and stellar:pubnet
+```
+
+**Transport Selection & Purpose:**
+- **`stdio` (Default):** Best for local developer use and CLI agents spawned as child processes on the same machine.
+- **`http`:** Streamable HTTP transport for remote or hosted Lens deployments where agents connect over the network. Every incoming HTTP request must include authentication (`Authorization: Bearer <MCP_API_KEY>` or `x-api-key: <MCP_API_KEY>`), refusing unauthenticated calls with HTTP 401. Both transports expose the exact same tools (`bazaar_search` and `paid_call`).
+
 
 In another terminal, run the agent example, which connects an MCP client,
 lists the tools, and calls both of them:

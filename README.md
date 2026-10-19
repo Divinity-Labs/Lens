@@ -332,6 +332,10 @@ and `stellar:pubnet`.
 **⚠️ Warning:** the mainnet key signs with real XLM. Read the configuration,
 spending warning, and worked example before running.
 
+The server supports two transports selectable by configuration (`MCP_TRANSPORT`):
+- `stdio` (default) for local subprocess agents.
+- `http` for hosted/remote setups (Streamable HTTP, requires `MCP_API_KEY` authentication).
+
 Full documentation: [examples/mcp-server/README.md](examples/mcp-server/README.md)
 
 ### WebSocket backpressure
