@@ -263,10 +263,36 @@ model ApiKey {
   ratePerMin       Int       @default(60) @map("rate_per_min")
   ratePerDay       Int       @default(10000) @map("rate_per_day")
   revokedAt        DateTime? @map("revoked_at")
+  expiresAt        DateTime? @map("expires_at")
   createdAt        DateTime  @default(now()) @map("created_at")
   monthlyQuotaCents Int?     @default(10000) @map("monthly_quota_cents")
   dailyQuotaCents  Int?      @default(500) @map("daily_quota_cents")
   overagePolicy    String    @default("block") @map("overage_policy")
+  createdByAdminId String?   @map("created_by_admin_id")
 
   @@map("api_keys")
+}
+
+model AdminCredential {
+  id         String    @id @default(uuid())
+  name       String    @unique
+  hash       String    @unique
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("admin_credentials")
+}
+
+model AuditLog {
+  id           String    @id @default(uuid())
+  action       String
+  targetKeyId  String?   @map("target_key_id")
+  adminId      String?   @map("admin_id")
+  adminName    String?   @map("admin_name")
+  sourceIp     String?   @map("source_ip")
+  timestamp    DateTime  @default(now()) @map("timestamp")
+  details      Json?     @map("details")
+
+  @@index([timestamp(sort: Desc)])
+  @@map("audit_logs")
 }
