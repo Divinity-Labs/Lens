@@ -5,6 +5,8 @@ import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
 import { LENS_PRICE_TOOL_NAME, lensPriceToolDefinition, readLensPrice, type LensPriceQueries } from './priceTool.js';
 import { fetchWithTimeout } from '../fetch.js';
+import { config } from '../config.js';
+import { ssrfSafeFetch, SsrfError, type SsrfFetchOptions } from '../net/ssrf.js';
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
@@ -20,6 +22,11 @@ export interface McpServerConfig {
    * not advertise the tool, so an agent is never offered a price it cannot get.
    */
   priceQueries?: LensPriceQueries;
+   * Outbound fetch policy for `bazaar_search`. Falls back to the operator's
+   * shared `OUTBOUND_ALLOWED_HOSTS` allowlist. `lookup`/`fetchImpl` exist so
+   * tests can drive DNS resolution and the transport without real sockets.
+   */
+  bazaarFetch?: Partial<SsrfFetchOptions>;
 }
 
 export class BazaarMcpServer {
@@ -33,12 +40,26 @@ export class BazaarMcpServer {
     this.priceQueries = config.priceQueries;
 
     const allowlist = parsePaidCallAllowlist(config.paidCallAllowlist ?? []);
+  private bazaarFetchOptions: SsrfFetchOptions;
+
+  constructor(config_: McpServerConfig) {
+    this.fetchWithPayment = config_.fetchWithPayment;
+
+    // Two independent gates, deliberately separate: this one decides which
+    // hosts may be PAID (#404), the one below decides which addresses may be
+    // REACHED at all (#407). Neither can re-open what the other refuses.
+    const allowlist = parsePaidCallAllowlist(config_.paidCallAllowlist ?? []);
     this.paidCallRules = allowlist.rules;
     if (allowlist.rejected.length > 0) {
       // Unparseable entries match nothing rather than matching everything.
       console.error(`[mcp-server] Ignoring unreadable paid_call allow-list entries: ${allowlist.rejected.join(', ')}`);
     }
 
+    this.bazaarFetchOptions = {
+      allowedHosts: config.outbound.allowedHosts,
+      fetchImpl: (input, init) => fetchWithTimeout(input, init),
+      ...config_.bazaarFetch,
+    };
     this.server = new Server(
       {
         name: 'bazaar-mcp-server',
@@ -148,7 +169,7 @@ export class BazaarMcpServer {
             ? `${url.replace(/\/$/, '')}/discovery/search?q=${encodeURIComponent(query)}`
             : `${url.replace(/\/$/, '')}/discovery/resources`;
             
-          const res = await fetchWithTimeout(endpoint);
+          const res = await ssrfSafeFetch(endpoint, {}, this.bazaarFetchOptions);
           
           if (!res.ok) {
             return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Service returned ${res.status}`);
@@ -167,6 +188,9 @@ export class BazaarMcpServer {
             content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
           };
         } catch (e: any) {
+          if (e instanceof SsrfError) {
+            return this.createErrorResponse('ERR_URL_BLOCKED', `Blocked request: ${e.message}`);
+          }
           return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', e.message);
         }
       }

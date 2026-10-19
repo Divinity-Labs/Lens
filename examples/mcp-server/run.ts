@@ -47,6 +47,7 @@ async function main() {
     paidCallAllowlist,
     // Lens's own aggregated prices, read from the same Postgres the API serves.
     priceQueries: createLensPriceQueries(),
+    paidCallAllowlist
   });
 
   console.error('[mcp-server] Starting Bazaar MCP server on stdio...');
