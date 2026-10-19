@@ -4,6 +4,7 @@ import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '..
 import { resolvePageLedgers } from '../../ingesters/toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -13,6 +14,8 @@ import {
   startVenueAdapter,
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
+
+const log = createLogger('ingester:amm')
 
 export function _resetLastPrice(): void {
   resetLastPrice('AMM')
@@ -121,10 +124,10 @@ export async function snapshotPool(
         previousPrice,
         currentPrice: spotPrice,
         network,
-      }).catch((err) => console.error('[amm] webhook dispatch error:', err.message))
+      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
     }
   } catch (err) {
-    console.error(`[amm] Snapshot error for pool ${pool.id}:`, (err as Error).message)
+    log.error({ pool: pool.id, err }, 'snapshot error')
   }
 }
 
@@ -157,8 +160,9 @@ export async function ingestPoolTrades(
       state.ledger
     )
     if (ledgers === null) {
-      console.error(
-        `[amm] pool ${pool.id.slice(0, 8)}: no ledger derivable from ${records.length} trades; skipping batch`
+      log.error(
+        { pool: pool.id, trades: records.length },
+        'no ledger derivable from trades; skipping batch'
       )
       return
     }
@@ -203,7 +207,7 @@ export async function ingestPoolTrades(
 
     const lastRecord = records[records.length - 1]
     await setIndexerCursor(stateId, lastRecord.paging_token, network, ledgers[ledgers.length - 1])
-    console.log(`[amm] Pool ${pool.id.slice(0, 8)}: ingested ${points.length} trades`)
+    log.info({ pair: pair.pairKey, pool: pool.id, trades: points.length }, 'ingested pool trades')
 
     publishPriceUpdate({
       pair: pair.pairKey,
@@ -218,9 +222,9 @@ export async function ingestPoolTrades(
       previousPrice,
       currentPrice,
       network,
-    }).catch((err) => console.error('[amm] webhook dispatch error:', err.message))
+    }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
   } catch (err) {
-    console.error(`[amm] Trade ingest error for pool ${pool.id}:`, (err as Error).message)
+    log.error({ pool: pool.id, err }, 'trade ingest error')
   }
 }
 
@@ -228,7 +232,7 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
   // A failed fetch throws and propagates to the caller instead of being reported
   // as an empty venue.
   const pools = await fetchPools(pair, network)
-  console.log(`[amm] ${pair.pairKey}: found ${pools.length} AMM pools`)
+  log.info({ pair: pair.pairKey, pools: pools.length }, 'found AMM pools')
 
   await Promise.all(
     pools.map(async (pool) => {
@@ -240,7 +244,8 @@ export async function ingestPair(pair: WatchedPair, network: NetworkName = activ
 
 export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
-  source: 'AMM' ,
+  kind: 'amm',
+  source: 'AMM',
 
   isEnabled(_network: NetworkName): boolean {
     return true

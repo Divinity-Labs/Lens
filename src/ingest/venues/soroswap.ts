@@ -24,6 +24,7 @@ import { getRpcServer } from '../../network/clients'
 import { upsertPricePoints } from '../../db'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { createLogger } from '../../logger'
 import { fetchWithTimeout } from '../../fetch'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
@@ -33,6 +34,8 @@ import {
   setLastPrice,
   startVenueAdapter,
 } from './runner'
+
+const log = createLogger('ingester:soroswap')
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -95,7 +98,7 @@ export async function fetchSoroswapTokenList(
     const data = (await res.json()) as SoroswapTokenList
     return Array.isArray(data.tokens) ? data.tokens : []
   } catch (err) {
-    console.error('[soroswap] Failed to fetch token list:', (err as Error).message)
+    log.error({ err }, 'failed to fetch token list')
     throw new VenueFetchError('Soroswap', err)
   }
 }
@@ -136,10 +139,7 @@ export async function fetchPoolsFromFactory(
     const sim = await rpc.simulateTransaction(tx)
 
     if (SorobanRpc.Api.isSimulationError(sim)) {
-      console.error(
-        `[soroswap] get_pools simulation error for ${tokenA}/${tokenB}:`,
-        sim.error
-      )
+      log.debug({ tokenA, tokenB, error: sim.error }, 'get_pools simulation error')
       throw new VenueFetchError('Soroswap', new Error(sim.error))
     }
 
@@ -149,10 +149,7 @@ export async function fetchPoolsFromFactory(
     return Array.isArray(pools) ? pools : []
   } catch (err) {
     if (err instanceof VenueFetchError) throw err
-    console.error(
-      '[soroswap] fetchPoolsFromFactory error:',
-      (err as Error).message
-    )
+    log.debug({ err }, 'fetchPoolsFromFactory error')
     throw new VenueFetchError('Soroswap', err)
   }
 }
@@ -186,10 +183,7 @@ export async function fetchPoolReserves(
     const sim = await rpc.simulateTransaction(tx)
 
     if (SorobanRpc.Api.isSimulationError(sim)) {
-      console.error(
-        `[soroswap] get_reserves simulation error for pool ${poolAddress}:`,
-        sim.error
-      )
+      log.debug({ pool: poolAddress, error: sim.error }, 'get_reserves simulation error')
       throw new VenueFetchError('Soroswap', new Error(sim.error))
     }
 
@@ -201,10 +195,7 @@ export async function fetchPoolReserves(
     return [BigInt(reserves[0]), BigInt(reserves[1])]
   } catch (err) {
     if (err instanceof VenueFetchError) throw err
-    console.error(
-      `[soroswap] fetchPoolReserves error for ${poolAddress}:`,
-      (err as Error).message
-    )
+    log.debug({ pool: poolAddress, err }, 'fetchPoolReserves error')
     throw new VenueFetchError('Soroswap', err)
   }
 }
@@ -244,9 +235,7 @@ export async function ingestPool(
     const spotPrice = calcSpotPrice(reserveA, reserveB)
 
     if (spotPrice === 0) {
-      console.debug(
-        `[soroswap] Skipping empty pool ${poolEntry.poolAddress} for ${pair.pairKey}`
-      )
+      log.debug({ pool: poolEntry.poolAddress, pair: pair.pairKey }, 'skipping empty pool')
       return
     }
 
@@ -285,19 +274,15 @@ export async function ingestPool(
       previousPrice,
       currentPrice: spotPrice,
       network,
-    }).catch((err) =>
-      console.error('[soroswap] webhook dispatch error:', err.message)
-    )
+    }).catch((err) => log.error({ pool: poolEntry.poolAddress, err }, 'webhook dispatch error'))
 
-    console.log(
-      `[soroswap] Pool ${poolEntry.poolAddress.slice(0, 8)}: price=${spotPrice.toFixed(8)} for ${pair.pairKey}`
+    log.info(
+      { pair: pair.pairKey, pool: poolEntry.poolAddress, price: spotPrice },
+      'ingested pool price'
     )
   } catch (err) {
     if (err instanceof VenueFetchError) throw err
-    console.error(
-      `[soroswap] ingestPool error for ${poolEntry.poolAddress}:`,
-      (err as Error).message
-    )
+    log.error({ pool: poolEntry.poolAddress, err }, 'ingestPool error')
     throw new VenueFetchError('Soroswap', err)
   }
 }
@@ -328,9 +313,7 @@ export async function ingestPair(
   )
 
   if (!tokenA || !tokenB) {
-    console.debug(
-      `[soroswap] No Soroswap token found for pair ${pair.pairKey} — skipping`
-    )
+    log.debug({ pair: pair.pairKey }, 'no Soroswap token found; skipping')
     return
   }
 
@@ -342,9 +325,7 @@ export async function ingestPair(
   )
 
   if (!poolAddresses.length) {
-    console.debug(
-      `[soroswap] No pools found for ${pair.pairKey} — skipping`
-    )
+    log.debug({ pair: pair.pairKey }, 'no pools found; skipping')
     return
   }
 
@@ -362,6 +343,7 @@ export async function ingestPair(
 
 export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   name: 'Soroswap',
+  kind: 'amm',
   source: 'soroswap_amm',
 
   isEnabled(network: NetworkName): boolean {
