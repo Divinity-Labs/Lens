@@ -11,6 +11,7 @@ describe('WebSocket subscription full cycle', () => {
   let port: number
 
   beforeAll(async () => {
+    process.env.REQUIRE_API_KEY = 'false'
     // Initialize the fan-out manager so it listens for price updates
     // and broadcasts to registered WebSocket clients
     await fanOutManager.initialize()

@@ -4,7 +4,7 @@ import fp from 'fastify-plugin'
 import { prisma } from '../db'
 import { api_key_auth_failures_total } from '../metrics'
 
-type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired' | 'insufficient_scope'
+export type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired' | 'insufficient_scope'
 
 /**
  * Metadata for an authenticated API key, attached to each request as
@@ -65,7 +65,7 @@ export async function lookupApiKey(plaintext: string): Promise<ApiKeyContext | n
   return (await lookupApiKeyResult(plaintext)).context
 }
 
-async function lookupApiKeyResult(
+export async function lookupApiKeyResult(
   plaintext: string,
 ): Promise<{ context: ApiKeyContext | null; failureReason?: ApiKeyAuthFailureReason }> {
   const hash = hashApiKey(plaintext)
