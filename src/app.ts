@@ -18,6 +18,7 @@ import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
 import { registerFacilitatorRoutes } from './api/facilitator'
 import { registerPriceRoutes } from './routes/price'
+import { registerPremiumRoutes } from './routes/premium'
 import { registerVolumeRoutes } from './routes/volumes'
 import { registerBookRoutes } from './routes/book'
 import { registerSpreadsRoutes } from './routes/spreads'
@@ -171,6 +172,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerScreenerRoutes(app)
   await registerHistoryRoutes(app)
   await registerPriceRoutes(app)
+  await registerPremiumRoutes(app)
   await registerVolumeRoutes(app)
   await registerBookRoutes(app)
   await registerSpreadsRoutes(app)

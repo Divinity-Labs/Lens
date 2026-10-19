@@ -349,6 +349,89 @@
         }
       }
     },
+    "/premium/{assetA}/{assetB}": {
+      "get": {
+        "operationId": "getPremium",
+        "summary": "Get on-chain vs CEX price premium and spread",
+        "description": "Returns the on-chain price, the best CEX price, the spread in basis points, both sources, and both timestamps. Refuses to answer with a 400 when either side is older than the configured staleness bound.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetA",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM"
+          },
+          {
+            "name": "assetB",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Premium and spread calculation",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stale price data or unrecognised network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PremiumErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/price/{assetA}/{assetB}/route": {
       "get": {
         "operationId": "getBestRoute",
@@ -4057,6 +4140,91 @@
                 }
               }
             }
+          }
+        }
+      },
+      "PremiumPricePoint": {
+        "type": "object",
+        "required": [
+          "price",
+          "source",
+          "timestamp"
+        ],
+        "properties": {
+          "price": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PremiumResponse": {
+        "type": "object",
+        "required": [
+          "assetA",
+          "assetB",
+          "network",
+          "onChain",
+          "cex",
+          "spreadBps"
+        ],
+        "properties": {
+          "assetA": {
+            "type": "string"
+          },
+          "assetB": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "onChain": {
+            "$ref": "#/components/schemas/PremiumPricePoint"
+          },
+          "cex": {
+            "$ref": "#/components/schemas/PremiumPricePoint"
+          },
+          "spreadBps": {
+            "type": "number"
+          }
+        }
+      },
+      "PremiumErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "string",
+            "enum": [
+              "onChain",
+              "cex",
+              "both"
+            ]
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "onChainAgeSeconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "cexAgeSeconds": {
+            "type": "integer",
+            "nullable": true
           }
         }
       }

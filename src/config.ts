@@ -275,6 +275,11 @@ const globalConfig = {
     // per-request scan, but callers must never be shown a minutes-old market.
     snapshotTtl: parseInt(process.env.SNAPSHOT_CACHE_TTL ?? '15', 10),
   },
+  premium: {
+    get stalenessSeconds() {
+      return parseInt(process.env.PREMIUM_STALENESS_SECONDS ?? '60', 10)
+    },
+  },
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
@@ -365,6 +370,7 @@ export const config = {
   api:     globalConfig.api,
   indexer: globalConfig.indexer,
   cache:   globalConfig.cache,
+  premium: globalConfig.premium,
   http:    globalConfig.http,
   outbound: globalConfig.outbound,
 }
