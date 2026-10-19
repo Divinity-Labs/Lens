@@ -156,3 +156,89 @@ describe('FanOutClient per-pair subscription', () => {
     fanOutManager.register('ETH/USDC', mockSocket)
   })
 })
+
+describe('Backpressure & Slow Client Bounding (#335)', () => {
+  afterEach(() => {
+    delete process.env.WS_BUFFER_MAX_BYTES
+    delete process.env.WS_BUFFER_THRESHOLD_BYTES
+  })
+
+  it('drops intermediate updates and coalesces when bufferedAmount exceeds soft threshold', () => {
+    process.env.WS_BUFFER_THRESHOLD_BYTES = '1000'
+    const slowSocket = {
+      id: 'lagging-client',
+      bufferedAmount: 1500, // Exceeds 1000 byte soft threshold
+      send: vi.fn(),
+      close: vi.fn(),
+    }
+
+    fanOutManager.register('XLM/USDC', slowSocket)
+
+    // Broadcast a price update
+    fanOutManager.broadcast({
+      pairKey: 'XLM/USDC',
+      price: 0.12,
+      timestamp: Date.now(),
+      source: 'AGGREGATED',
+    })
+
+    // Socket.send should not be called to prevent memory accumulation
+    expect(slowSocket.send).not.toHaveBeenCalled()
+    expect(metricLabelValues.some(m => m.metric === 'ws_messages_dropped_total')).toBe(true)
+  })
+
+  it('terminates and unregisters a slow client when bufferedAmount exceeds hard ceiling', () => {
+    process.env.WS_BUFFER_MAX_BYTES = '5000'
+    const stalledSocket = {
+      id: 'stalled-client',
+      bufferedAmount: 10000, // Stalled client exceeding hard ceiling
+      send: vi.fn(),
+      close: vi.fn(),
+    }
+
+    fanOutManager.register('XLM/USDC', stalledSocket)
+
+    fanOutManager.broadcast({
+      pairKey: 'XLM/USDC',
+      price: 0.15,
+      timestamp: Date.now(),
+      source: 'AGGREGATED',
+    })
+
+    // Expect close(1008, 'Buffer overflow')
+    expect(stalledSocket.close).toHaveBeenCalledWith(1008, 'Buffer overflow')
+    expect(metricLabelValues.some(m => m.metric === 'ws_slow_clients_total')).toBe(true)
+  })
+
+  it('ensures a slow client does not affect delivery to a healthy client on the same pair', () => {
+    process.env.WS_BUFFER_MAX_BYTES = '5000'
+    const stalledSocket = {
+      id: 'stalled-client-2',
+      bufferedAmount: 8000,
+      send: vi.fn(),
+      close: vi.fn(),
+    }
+    const healthySocket = {
+      id: 'healthy-client-2',
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    }
+
+    fanOutManager.register('XLM/USDC', stalledSocket)
+    fanOutManager.register('XLM/USDC', healthySocket)
+
+    fanOutManager.broadcast({
+      pairKey: 'XLM/USDC',
+      price: 0.20,
+      timestamp: Date.now(),
+      source: 'AGGREGATED',
+    })
+
+    // Stalled socket dropped
+    expect(stalledSocket.close).toHaveBeenCalledWith(1008, 'Buffer overflow')
+    // Healthy socket receives delivery cleanly
+    expect(healthySocket.send).toHaveBeenCalledTimes(1)
+  })
+})
+

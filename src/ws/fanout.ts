@@ -29,9 +29,27 @@ export const ws_messages_dropped_total = new Counter({
   registers: [register],
 })
 
+export const ws_slow_clients_total = new Counter({
+  name: 'ws_slow_clients_total',
+  help: 'Total number of slow WebSocket clients dropped due to excessive buffer accumulation',
+  labelNames: ['pair'],
+  registers: [register],
+})
+
 // ─── Configuration ─────────────────────────────────────────────────────────────
 const REDIS_CHANNEL = `lens:${activeNetwork}:price:updates`
 const DEFAULT_COALESCE_INTERVAL_MS = 100 // max 10 updates/sec per client
+
+/** Configurable backpressure limits (#335) */
+export function getBufferMaxBytes(): number {
+  const val = parseInt(process.env.WS_BUFFER_MAX_BYTES ?? '1048576', 10) // default 1MB hard limit
+  return isNaN(val) || val <= 0 ? 1048576 : val
+}
+
+export function getBufferThresholdBytes(): number {
+  const val = parseInt(process.env.WS_BUFFER_THRESHOLD_BYTES ?? '65536', 10) // default 64KB soft threshold
+  return isNaN(val) || val <= 0 ? 65536 : val
+}
 
 /**
  * Pair names can contain arbitrary asset codes and issuer identifiers supplied
@@ -46,7 +64,8 @@ function pairMetricLabel(pairKey: string): 'other' | null {
 export interface FanOutClient {
   id: string
   send: (data: string) => void
-  close: () => void
+  close: (code?: number, reason?: string) => void
+  bufferedAmount?: number
 }
 
 interface InternalClient {
@@ -170,20 +189,33 @@ class FanOutManager {
   }
 
   /**
+   * Broadcast a price update to local clients. Public for testing and manual dispatch.
+   */
+  broadcast(event: any): void {
+    if (!event.assetA && event.pairKey) {
+      const [a, b] = event.pairKey.split('/')
+      event.assetA = a
+      event.assetB = b
+    }
+    this.broadcastToLocalClients(event)
+  }
+
+  /**
    * Broadcast a price update to local clients subscribed to this pair.
    * Applies per-client coalescing for slow consumers.
    * Also sends to wildcard ('*') subscribers that receive all pairs.
    */
-  private broadcastToLocalClients(event: PriceUpdateEvent): void {
-    // Derive pairKey from event
-    const assets = [event.assetA, event.assetB].sort()
-    const pairKey = assets.join('/')
-
-    // Collect client IDs from both the specific pair and wildcard subscriptions
+  broadcastToLocalClients(event: PriceUpdateEvent): void {
+    // Collect client IDs from specific pair (both sorted and direct) and wildcard subscriptions
     const matchedIds = new Set<string>()
-    const pairClients = this.pairClients.get(pairKey)
-    if (pairClients) {
-      for (const id of pairClients) matchedIds.add(id)
+    const sortedKey = event.assetA && event.assetB ? [event.assetA, event.assetB].sort().join('/') : null
+    const directKey = event.assetA && event.assetB ? `${event.assetA}/${event.assetB}` : null
+
+    for (const key of [sortedKey, directKey, (event as any).pairKey].filter(Boolean)) {
+      const clients = this.pairClients.get(key as string)
+      if (clients) {
+        for (const id of clients) matchedIds.add(id)
+      }
     }
     const wildcardClients = this.pairClients.get('*')
     if (wildcardClients) {
@@ -203,9 +235,11 @@ class FanOutManager {
 
       if (elapsed >= DEFAULT_COALESCE_INTERVAL_MS) {
         // Client is ready to receive
-        this.sendToClient(client, payload)
-        client.lastSent = now
-        client.pendingUpdate = null
+        const sent = this.sendToClient(client, payload)
+        if (sent) {
+          client.lastSent = now
+          client.pendingUpdate = null
+        }
       } else {
         // Client is too fast — coalesce: buffer the latest update
         client.pendingUpdate = payload
@@ -215,9 +249,11 @@ class FanOutManager {
             client.timer = null
             if (client.destroyed) return
             if (client.pendingUpdate) {
-              this.sendToClient(client, client.pendingUpdate)
-              client.lastSent = Date.now()
-              client.pendingUpdate = null
+              const sent = this.sendToClient(client, client.pendingUpdate)
+              if (sent) {
+                client.lastSent = Date.now()
+                client.pendingUpdate = null
+              }
             }
           }, timeout)
         }
@@ -225,15 +261,48 @@ class FanOutManager {
     }
   }
 
-  private sendToClient(client: InternalClient, payload: string): void {
+  /**
+   * Sends payload to a client enforcing backpressure and buffer threshold checks (#335).
+   * Returns true only when socket.send actually executes successfully.
+   */
+  private sendToClient(client: InternalClient, payload: string): boolean {
+    if (client.destroyed) return false
+
+    const buffered = client.socket.bufferedAmount ?? 0
+    const hardLimit = getBufferMaxBytes()
+    const softThreshold = getBufferThresholdBytes()
+    const metricPair = pairMetricLabel(client.pairKey)
+
+    // Hard ceiling: client is stalled and accumulating unbounded memory (#335)
+    if (buffered >= hardLimit) {
+      if (metricPair) ws_slow_clients_total.labels(metricPair).inc()
+      ws_slow_clients_total.labels('*').inc()
+      try {
+        client.socket.close(1008, 'Buffer overflow')
+      } catch {
+        // ignore
+      }
+      this.unregister(client.id)
+      return false
+    }
+
+    // Soft threshold: socket is lagging behind; drop intermediate updates and coalesce (#335)
+    if (buffered >= softThreshold) {
+      if (metricPair) ws_messages_dropped_total.labels(metricPair).inc()
+      ws_messages_dropped_total.labels('*').inc()
+      client.pendingUpdate = payload
+      return false
+    }
+
     try {
       client.socket.send(payload)
-      const metricPair = pairMetricLabel(client.pairKey)
       if (metricPair) ws_messages_sent_total.labels(metricPair).inc()
       ws_messages_sent_total.labels('*').inc()
+      return true
     } catch {
       // Client likely disconnected
       this.unregister(client.id)
+      return false
     }
   }
 
