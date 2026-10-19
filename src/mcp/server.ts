@@ -22,6 +22,7 @@ export interface McpServerConfig {
    * not advertise the tool, so an agent is never offered a price it cannot get.
    */
   priceQueries?: LensPriceQueries;
+  /**
    * Outbound fetch policy for `bazaar_search`. Falls back to the operator's
    * shared `OUTBOUND_ALLOWED_HOSTS` allowlist. `lookup`/`fetchImpl` exist so
    * tests can drive DNS resolution and the transport without real sockets.
@@ -33,17 +34,12 @@ export class BazaarMcpServer {
   private server: Server;
   private fetchWithPayment: typeof fetch;
   private paidCallRules: PaidCallAllowRule[];
-  private priceQueries?: LensPriceQueries;
-
-  constructor(config: McpServerConfig) {
-    this.fetchWithPayment = config.fetchWithPayment;
-    this.priceQueries = config.priceQueries;
-
-    const allowlist = parsePaidCallAllowlist(config.paidCallAllowlist ?? []);
   private bazaarFetchOptions: SsrfFetchOptions;
+  private priceQueries?: LensPriceQueries;
 
   constructor(config_: McpServerConfig) {
     this.fetchWithPayment = config_.fetchWithPayment;
+    this.priceQueries = config_.priceQueries;
 
     // Two independent gates, deliberately separate: this one decides which
     // hosts may be PAID (#404), the one below decides which addresses may be
