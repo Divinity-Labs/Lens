@@ -120,3 +120,58 @@ expiresAt DateTime? @map("expires_at")
 ### Testing
 - Test file: `src/__tests__/auth.test.ts`
 - Covers: expired keys, null expiry, future expiry, and distinguishable error messages
+
+## API Key Auditing
+
+### Overview
+All admin actions on API keys are now logged to an append-only audit log. This provides a complete audit trail of key creation, revocation, and failed authentication attempts. No secrets (plaintext keys, hashes, or admin tokens) are ever recorded.
+
+### Database Schema Changes
+
+#### New Model: AuditLog
+```prisma
+model AuditLog {
+  id           String    @id @default(uuid())
+  action       String
+  targetKeyId  String?   @map("target_key_id")
+  adminId      String?   @map("admin_id")
+  adminName    String?   @map("admin_name")
+  sourceIp     String?   @map("source_ip")
+  timestamp    DateTime  @default(now()) @map("timestamp")
+  details      Json?     @map("details")
+
+  @@index([timestamp(sort: Desc)])
+  @@map("audit_logs")
+}
+```
+
+### Audit Actions
+- `key_created` - Logged when a new API key is created
+- `key_revoked` - Logged when an API key is revoked
+- `admin_auth_failed` - Logged when admin authentication fails
+
+### Audit Details
+- **Never logged**: plaintext API keys, key hashes, admin tokens, or any secrets
+- **Always logged**: action type, target key ID, admin identity, source IP, timestamp
+- **Optional details**: key label, rate limits, expiration date, failure reason
+
+### API Changes
+
+#### New Endpoint: GET /admin/audit
+- Retrieves recent audit logs
+- Query parameter: `limit` (default: 100, max: 1000)
+- Requires admin authentication
+- Returns logs in reverse chronological order
+
+### Logging Behavior
+- Key creation logs: label, rate limits, expiration date
+- Key revocation logs: key label
+- Failed auth logs: reason (no_token, no_legacy_token, invalid_token)
+- Source IP extracted from `x-forwarded-for`, `x-real-ip`, or `req.ip`
+
+### Retention
+Audit logs are append-only with no automatic expiration. Retention policy should be implemented at the database level based on compliance requirements.
+
+### Testing
+- Test file: `src/__tests__/auth.test.ts`
+- Covers: audit logging on key creation, revocation, failed auth, and log retrieval

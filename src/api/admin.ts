@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
 import { hashApiKey, resolveAdminIdentity } from './auth'
+import { logAuditEvent, getAuditLogs } from './audit'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -51,6 +52,7 @@ interface CreateAdminCredentialBody {
  * - `POST /admin/credentials` — create a new admin credential.
  * - `GET /admin/credentials` — list all admin credentials.
  * - `DELETE /admin/credentials/:id` — revoke an admin credential.
+ * - `GET /admin/audit` — retrieve recent audit logs.
  *
  * All routes are marked `config.public = true` so the API-key auth hook skips
  * them; they enforce their own admin credential check instead.
@@ -89,6 +91,20 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           ...(dailyQuotaCents !== undefined ? { dailyQuotaCents } : {}),
           ...(overagePolicy !== undefined ? { overagePolicy } : {}),
           ...(expiration ? { expiresAt: expiration } : {}),
+        },
+      })
+
+      // Log the key creation event
+      await logAuditEvent('key_created', {
+        targetKeyId: record.id,
+        adminId: admin.id,
+        adminName: admin.name,
+        req,
+        details: {
+          label: record.label,
+          ratePerMin: record.ratePerMin,
+          ratePerDay: record.ratePerDay,
+          expiresAt: record.expiresAt,
         },
       })
 
@@ -131,6 +147,17 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       await prisma.apiKey.update({
         where: { id },
         data: { revokedAt: new Date() },
+      })
+
+      // Log the key revocation event
+      await logAuditEvent('key_revoked', {
+        targetKeyId: id,
+        adminId: admin.id,
+        adminName: admin.name,
+        req,
+        details: {
+          label: existing.label,
+        },
       })
 
       return reply.status(200).send({ id, revoked: true })
@@ -223,6 +250,25 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       })
 
       return reply.status(200).send({ id, revoked: true })
+    },
+  )
+
+  app.get(
+    '/admin/audit',
+    { config: { public: true } },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Provide a valid admin credential.',
+        })
+      }
+
+      const limit = parseInt((req.query as { limit?: string }).limit ?? '100', 10)
+      const logs = await getAuditLogs(Math.min(limit, 1000))
+
+      return reply.send({ logs })
     },
   )
 }

@@ -17,6 +17,10 @@ vi.mock('../db', () => ({
       update: vi.fn(),
       findMany: vi.fn(),
     },
+    auditLog: {
+      create: vi.fn(),
+      findMany: vi.fn(),
+    },
   },
 }))
 
@@ -39,6 +43,8 @@ const mockAdminFindUnique = prisma.adminCredential.findUnique as unknown as Retu
 const mockAdminCreate = prisma.adminCredential.create as unknown as ReturnType<typeof vi.fn>
 const mockAdminUpdate = prisma.adminCredential.update as unknown as ReturnType<typeof vi.fn>
 const mockAdminFindMany = prisma.adminCredential.findMany as unknown as ReturnType<typeof vi.fn>
+const mockAuditLogCreate = prisma.auditLog.create as unknown as ReturnType<typeof vi.fn>
+const mockAuditLogFindMany = prisma.auditLog.findMany as unknown as ReturnType<typeof vi.fn>
 
 function sha256(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex')
@@ -69,6 +75,8 @@ beforeEach(() => {
   mockAdminCreate.mockReset()
   mockAdminUpdate.mockReset()
   mockAdminFindMany.mockReset()
+  mockAuditLogCreate.mockReset()
+  mockAuditLogFindMany.mockReset()
 })
 
 describe('hashApiKey / extractBearer', () => {
@@ -534,5 +542,79 @@ describe('admin endpoints', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({ id: 'admin-1', revoked: true })
+  })
+
+  it('logs audit event on key creation', async () => {
+    mockAuditLogCreate.mockResolvedValue({ id: 'audit-1' })
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/keys',
+      headers: { authorization: 'Bearer admin-secret' },
+      payload: { label: 'acme' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'key_created',
+        targetKeyId: 'new-id',
+        adminId: 'legacy',
+        adminName: 'legacy-admin',
+      }),
+    })
+  })
+
+  it('logs audit event on key revocation', async () => {
+    mockAuditLogCreate.mockResolvedValue({ id: 'audit-1' })
+    mockFindUnique.mockResolvedValue({ id: 'key-1', revokedAt: null, label: 'acme' })
+    mockUpdate.mockResolvedValue({ id: 'key-1', revokedAt: new Date() })
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/admin/keys/key-1',
+      headers: { authorization: 'Bearer admin-secret' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'key_revoked',
+        targetKeyId: 'key-1',
+        adminId: 'legacy',
+        adminName: 'legacy-admin',
+      }),
+    })
+  })
+
+  it('logs audit event on failed admin authentication', async () => {
+    mockAuditLogCreate.mockResolvedValue({ id: 'audit-1' })
+    mockAdminFindUnique.mockResolvedValue(null)
+    const req = { headers: { authorization: 'Bearer wrong-token' } } as any
+    await resolveAdminIdentity(req)
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'admin_auth_failed',
+        details: { reason: 'invalid_token' },
+      }),
+    })
+  })
+
+  it('retrieves audit logs via admin endpoint', async () => {
+    mockAuditLogFindMany.mockResolvedValue([
+      { id: 'audit-1', action: 'key_created', timestamp: new Date() },
+      { id: 'audit-2', action: 'key_revoked', timestamp: new Date() },
+    ])
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/admin/audit',
+      headers: { authorization: 'Bearer admin-secret' },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.logs).toHaveLength(2)
+    expect(body.logs[0].action).toBe('key_created')
   })
 })

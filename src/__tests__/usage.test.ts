@@ -10,6 +10,9 @@ vi.mock('../db', () => ({
     adminCredential: {
       findUnique: vi.fn(),
     },
+    auditLog: {
+      create: vi.fn(),
+    },
   },
 }))
 
@@ -29,10 +32,12 @@ const mockFindUnique = prisma.apiKey.findUnique as any
 const mockFindMany = prisma.apiKey.findMany as any
 const mockRedisGet = redis.get as any
 const mockAdminFindUnique = prisma.adminCredential.findUnique as any
+const mockAuditLogCreate = prisma.auditLog.create as any
 
 beforeEach(() => {
   vi.clearAllMocks()
   mockAdminFindUnique.mockResolvedValue(null)
+  mockAuditLogCreate.mockResolvedValue(null)
 })
 
 const ORIGINAL_ADMIN_TOKEN = process.env.ADMIN_TOKEN

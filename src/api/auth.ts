@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
+import { logAuditEvent } from './audit'
 
 /**
  * Metadata for an authenticated API key, attached to each request as
@@ -132,6 +133,12 @@ export async function resolveAdminIdentity(
   if (a.length === b.length && require('crypto').timingSafeEqual(a, b)) {
     return { id: 'legacy', name: 'legacy-admin' }
   }
+
+  // Log failed auth: invalid token was provided
+  await logAuditEvent('admin_auth_failed', {
+    req,
+    details: { reason: 'invalid_token' },
+  })
 
   return null
 }
