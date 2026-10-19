@@ -12,11 +12,22 @@ export interface ApiKeyContext {
   label: string
   ratePerMin: number
   ratePerDay: number
+  createdByAdminId?: string
+}
+
+/**
+ * Metadata for an authenticated admin credential, attached to each request as
+ * `req.adminCredential` once the credential has been validated.
+ */
+export interface AdminCredentialContext {
+  id: string
+  name: string
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
     apiKey?: ApiKeyContext
+    adminCredential?: AdminCredentialContext
   }
   interface FastifyContextConfig {
     /** When true, the API-key auth hook skips this route (e.g. health, admin). */
@@ -49,7 +60,51 @@ export async function lookupApiKey(plaintext: string): Promise<ApiKeyContext | n
     label: record.label,
     ratePerMin: record.ratePerMin,
     ratePerDay: record.ratePerDay,
+    createdByAdminId: record.createdByAdminId ?? undefined,
   }
+}
+
+/**
+ * Looks up an admin credential by its plaintext value, returning the credential
+ * context only when the credential exists and has not been revoked.
+ */
+export async function lookupAdminCredential(plaintext: string): Promise<AdminCredentialContext | null> {
+  const hash = hashApiKey(plaintext)
+  const record = await prisma.adminCredential.findUnique({ where: { hash } })
+  if (!record || record.revokedAt) return null
+  return {
+    id: record.id,
+    name: record.name,
+  }
+}
+
+/**
+ * Resolves the admin identity from a request.
+ *
+ * First attempts to resolve via named admin credentials (new system).
+ * Falls back to the legacy ADMIN_TOKEN env var for migration compatibility.
+ *
+ * Returns the admin credential context if authenticated, null otherwise.
+ */
+export async function resolveAdminIdentity(
+  req: FastifyRequest
+): Promise<AdminCredentialContext | null> {
+  const token = extractBearer(req.headers['authorization'])
+  if (!token) return null
+
+  const adminCredential = await lookupAdminCredential(token)
+  if (adminCredential) return adminCredential
+
+  const legacyToken = process.env.ADMIN_TOKEN
+  if (!legacyToken) return null
+
+  const a = Buffer.from(token)
+  const b = Buffer.from(legacyToken)
+  if (a.length === b.length && require('crypto').timingSafeEqual(a, b)) {
+    return { id: 'legacy', name: 'legacy-admin' }
+  }
+
+  return null
 }
 
 /**

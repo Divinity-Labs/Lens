@@ -1,29 +1,18 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
-
-function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
-  if (!adminToken) return false
-  const supplied =
-    (req.headers['x-admin-token'] as string | undefined) ??
-    req.headers['authorization']?.replace(/^Bearer\s+/i, '')
-  if (!supplied) return false
-  const a = Buffer.from(supplied)
-  const b = Buffer.from(adminToken)
-  // Constant-time comparison (timingSafeEqual requires equal-length buffers).
-  return a.length === b.length && require('crypto').timingSafeEqual(a, b)
-}
+import { resolveAdminIdentity } from './auth'
 
 export async function registerUsageRoutes(app: FastifyInstance) {
   app.get<{ Params: { keyId: string } }>(
     '/admin/usage/:keyId',
     { config: { public: true } },
     async (req, reply) => {
-      if (!isAdminAuthorized(req)) {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
         return reply.status(401).send({
           error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
+          message: 'Provide a valid admin credential.',
         })
       }
       const { keyId } = req.params
@@ -36,10 +25,11 @@ export async function registerUsageRoutes(app: FastifyInstance) {
     '/admin/usage',
     { config: { public: true } },
     async (req, reply) => {
-      if (!isAdminAuthorized(req)) {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
         return reply.status(401).send({
           error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
+          message: 'Provide a valid admin credential.',
         })
       }
       const summaries = await getAllUsageSummaries()
