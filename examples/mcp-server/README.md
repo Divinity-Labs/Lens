@@ -103,9 +103,10 @@ JSON):
 ### What each tool does
 
 - `bazaar_search` — searches a Bazaar node's discovery endpoint. Takes `url`
-  (base URL of the Bazaar API) and an optional `query`. Returns the catalog of
-  discoverable resources, or a structured error such as `ERR_NO_RESULTS` or
-  `ERR_SERVICE_UNREACHABLE`.
+  (base URL of the Bazaar API) and an optional `query`. Returns the collection of
+  discoverable resources and count (or `{ resources: [], count: 0 }` when no matching
+  resources exist, distinguishing empty matches from unreachable services), or a structured
+  error such as `ERR_SERVICE_UNREACHABLE` or `ERR_URL_BLOCKED`.
 - `paid_call` — makes a paid API call to a Bazaar resource, handling the x402
   402 payment loop automatically. Takes `url` (full URL of the resource) and an
   optional `method` (default `GET`). Returns the resource body, or a structured

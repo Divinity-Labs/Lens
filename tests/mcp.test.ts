@@ -219,6 +219,37 @@ describe('BazaarMcpServer bazaar_search SSRF guard (#407)', () => {
     expect(response.isError).toBeFalsy();
     expect(JSON.parse(response.content[0].text).resources[0].name).toBe('x');
   });
+
+  it('returns success with empty collection when bazaar_search finds no resources (#414)', async () => {
+    const emptyFetchImpl = async () =>
+      new Response(JSON.stringify({ resources: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], ...publicLookup, fetchImpl: emptyFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'https://ok.example', query: 'nonexistent' } } });
+    expect(response.isError).toBeFalsy();
+    const payload = JSON.parse(response.content[0].text);
+    expect(payload.resources).toEqual([]);
+    expect(payload.count).toBe(0);
+  });
+
+  it('returns success with empty collection when endpoint returns empty array (#414)', async () => {
+    const emptyArrayFetchImpl = async () =>
+      new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      bazaarFetch: { allowedHosts: [], ...publicLookup, fetchImpl: emptyArrayFetchImpl },
+    });
+    const handler = captureHandler(server);
+    const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'https://ok.example' } } });
+    expect(response.isError).toBeFalsy();
+    const payload = JSON.parse(response.content[0].text);
+    expect(payload.resources).toEqual([]);
+    expect(payload.count).toBe(0);
+  });
 });
 
 describe('BazaarMcpServer argument validation (#411)', () => {
@@ -483,6 +514,24 @@ describe('BazaarMcpServer bazaar_search upstream failures (#349)', () => {
     expect(response.isError).toBe(true);
     const body = JSON.parse(response.content[0].text);
     expect(body.reason).toContain('not valid JSON');
+  });
+
+  it('returns success with empty collection when bazaar_search finds no resources (#414)', async () => {
+    const response = await run(
+      async () => new Response('{"resources":[]}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    expect(response.isError).toBeFalsy();
+    const body = JSON.parse(response.content[0].text);
+    expect(body.resources).toEqual([]);
+  });
+
+  it('returns success with empty collection when endpoint returns empty array (#414)', async () => {
+    const response = await run(
+      async () => new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    expect(response.isError).toBeFalsy();
+    const body = JSON.parse(response.content[0].text);
+    expect(Array.isArray(body) ? body : body.resources).toEqual([]);
   });
 });
 
