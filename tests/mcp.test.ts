@@ -483,3 +483,117 @@ describe('BazaarMcpServer bazaar_search upstream failures (#349)', () => {
     expect(body.reason).toContain('not valid JSON');
   });
 });
+
+describe('BazaarMcpServer — Bounded Results (#416)', () => {
+  function captureToolHandler(server: any) {
+    let handler: any = null;
+    server.server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) handler = fn;
+    };
+    server.setupHandlers();
+    return handler;
+  }
+
+  it('outputs compact JSON without human pretty-printing indentation', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ a: 1, b: 'two', c: [1, 2, 3] }),
+    });
+
+    const server = new BazaarMcpServer({
+      fetchWithPayment: mockFetch,
+      paidCallAllowlist: ['example.com'],
+    });
+
+    const handler = captureToolHandler(server);
+    const response = await handler({
+      params: { name: 'paid_call', arguments: { url: 'http://example.com/data' } },
+    });
+
+    expect(response.isError).toBeFalsy();
+    const rawText = response.content[0].text;
+    // Must not contain pretty-print indentation
+    expect(rawText).not.toContain('\n  ');
+    expect(JSON.parse(rawText)).toEqual({ a: 1, b: 'two', c: [1, 2, 3] });
+  });
+
+  it('bounds response size and reports explicit truncation when limit is exceeded', async () => {
+    // Generate a response larger than maxResultBytes (e.g. 200 bytes with a 100 byte limit)
+    const longString = 'x'.repeat(250);
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ payload: longString }),
+    });
+
+    const server = new BazaarMcpServer({
+      fetchWithPayment: mockFetch,
+      paidCallAllowlist: ['example.com'],
+      maxResultBytes: 100, // strictly capped at 100 bytes
+    });
+
+    const handler = captureToolHandler(server);
+    const response = await handler({
+      params: { name: 'paid_call', arguments: { url: 'http://example.com/large' } },
+    });
+
+    expect(response.isError).toBeFalsy();
+    const parsed = JSON.parse(response.content[0].text);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.maxBytes).toBe(100);
+    expect(parsed.warning).toMatch(/truncated/i);
+    expect(Buffer.byteLength(response.content[0].text, 'utf-8')).toBeLessThanOrEqual(400);
+  });
+
+  it('cancels oversized upstream readable streams rather than buffering in full', async () => {
+    let streamCancelled = false;
+    let cancelReason: any = null;
+
+    // Create a mock stream with multiple chunks
+    const chunk = new TextEncoder().encode('A'.repeat(100));
+    let chunkCount = 0;
+
+    const mockStream = {
+      getReader: () => ({
+        read: async () => {
+          chunkCount++;
+          if (chunkCount > 10) return { done: true, value: undefined };
+          return { done: false, value: chunk };
+        },
+        cancel: async (reason: any) => {
+          streamCancelled = true;
+          cancelReason = reason;
+        },
+      }),
+    };
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: mockStream,
+      text: async () => 'fallback',
+    });
+
+    const server = new BazaarMcpServer({
+      fetchWithPayment: mockFetch,
+      paidCallAllowlist: ['example.com'],
+      maxResultBytes: 150, // smaller than the 10 chunks (1000 bytes)
+    });
+
+    const handler = captureToolHandler(server);
+    const response = await handler({
+      params: { name: 'paid_call', arguments: { url: 'http://example.com/streaming' } },
+    });
+
+    expect(response.isError).toBeFalsy();
+    // The stream should have been cancelled before reading all 10 chunks
+    expect(streamCancelled).toBe(true);
+    expect(cancelReason).toMatch(/maxResultBytes/i);
+    expect(chunkCount).toBeLessThan(5);
+
+    const parsed = JSON.parse(response.content[0].text);
+    expect(parsed.truncated).toBe(true);
+  });
+});
+

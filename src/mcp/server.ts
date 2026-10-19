@@ -15,6 +15,11 @@ import { config } from '../config.js';
 import { ssrfSafeFetch, SsrfError, type SsrfFetchOptions } from '../net/ssrf.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import {
+  readBoundedResponseBody,
+  formatBoundedToolOutput,
+  DEFAULT_MAX_RESULT_BYTES,
+} from './boundedResponse.js';
 
 /**
  * The version advertised to MCP clients, read from `package.json` so it cannot
@@ -82,6 +87,11 @@ export interface McpServerConfig {
    * tests can drive DNS resolution and the transport without real sockets.
    */
   bazaarFetch?: Partial<SsrfFetchOptions>;
+  /**
+   * Maximum allowed bytes for tool results before truncation (#416).
+   * Default: 65,536 (64 KB).
+   */
+  maxResultBytes?: number;
 }
 
 export class BazaarMcpServer {
@@ -90,6 +100,7 @@ export class BazaarMcpServer {
   private paidCallRules: PaidCallAllowRule[];
   private bazaarFetchOptions: SsrfFetchOptions;
   private priceQueries?: LensPriceQueries;
+  private maxResultBytes: number;
 
   constructor(config_: McpServerConfig) {
     this.fetchWithPayment = config_.fetchWithPayment;
@@ -110,6 +121,7 @@ export class BazaarMcpServer {
       fetchImpl: (input, init) => fetchWithTimeout(input, init),
       ...config_.bazaarFetch,
     };
+    this.maxResultBytes = config_.maxResultBytes ?? DEFAULT_MAX_RESULT_BYTES;
     this.server = new Server(
       {
         name: SERVER_NAME,
@@ -206,7 +218,6 @@ export class BazaarMcpServer {
           if (!res.ok) {
             return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Upstream ${upstream} returned HTTP ${res.status}`);
           }
-
           const contentType = res.headers.get('content-type') ?? '';
           if (!/\bjson\b/i.test(contentType)) {
             return this.createErrorResponse(
@@ -215,22 +226,26 @@ export class BazaarMcpServer {
             );
           }
 
+          const bounded = await readBoundedResponseBody(res, this.maxResultBytes);
           let data: unknown;
           try {
-            data = await res.json();
+            data = JSON.parse(bounded.text);
           } catch {
-            return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Upstream ${upstream} returned a body that is not valid JSON`);
+            if (!bounded.truncated) {
+              return this.createErrorResponse('ERR_SERVICE_UNREACHABLE', `Upstream ${upstream} returned a body that is not valid JSON`);
+            }
+            data = bounded.text;
           }
-
           const hasResources = (d: unknown): d is { resources: unknown[] } => 
             typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
 
-          if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
+          if (!bounded.truncated && ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0))) {
             return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
           }
           
+          const outputText = formatBoundedToolOutput(bounded.text, bounded.truncated, this.maxResultBytes);
           return {
-            content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+            content: [{ type: 'text', text: outputText }],
           };
         } catch (e: any) {
           if (e instanceof SsrfError) {
@@ -272,16 +287,10 @@ export class BazaarMcpServer {
             return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
           }
           
-          const text = await res.text();
-          let parsed;
-          try {
-            parsed = JSON.parse(text);
-          } catch {
-            parsed = text;
-          }
-          
+          const bounded = await readBoundedResponseBody(res, this.maxResultBytes);
+          const outputText = formatBoundedToolOutput(bounded.text, bounded.truncated, this.maxResultBytes);
           return {
-            content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
+            content: [{ type: 'text', text: outputText }],
           };
         } catch (e: any) {
           return this.handlePaidCallError(e);
