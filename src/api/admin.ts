@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
-import { randomBytes, timingSafeEqual } from 'crypto'
+import { randomBytes } from 'crypto'
 import { prisma } from '../db'
-import { hashApiKey } from './auth'
+import { hashApiKey, resolveAdminIdentity } from './auth'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -9,21 +9,10 @@ export function generateApiKey(): string {
 }
 
 /**
- * Guards admin routes with a shared secret supplied via the `ADMIN_TOKEN`
- * env var, sent as `X-Admin-Token` (or `Authorization: Bearer <token>`).
- * Returns true if the caller is authorized.
+ * Generates a new admin credential with a recognizable `admin_` prefix.
  */
-function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
-  if (!adminToken) return false
-  const supplied =
-    (req.headers['x-admin-token'] as string | undefined) ??
-    req.headers['authorization']?.replace(/^Bearer\s+/i, '')
-  if (!supplied) return false
-  const a = Buffer.from(supplied)
-  const b = Buffer.from(adminToken)
-  // Constant-time comparison (timingSafeEqual requires equal-length buffers).
-  return a.length === b.length && timingSafeEqual(a, b)
+export function generateAdminCredential(): string {
+  return `admin_${randomBytes(24).toString('hex')}`
 }
 
 interface CreateKeyBody {
@@ -33,6 +22,25 @@ interface CreateKeyBody {
   monthlyQuotaCents?: number
   dailyQuotaCents?: number
   overagePolicy?: 'block' | 'charge_402' | 'allow_overage'
+  expiresAt?: string
+}
+
+/**
+ * Calculates the default expiration date for API keys based on the
+ * API_KEY_DEFAULT_LIFETIME_DAYS environment variable.
+ *
+ * Returns null if the lifetime is 0 (no expiry) or if the variable is not set.
+ */
+function getDefaultExpiration(): Date | null {
+  const lifetimeDays = parseInt(process.env.API_KEY_DEFAULT_LIFETIME_DAYS ?? '365', 10)
+  if (lifetimeDays <= 0) return null
+  const expiresAt = new Date()
+  expiresAt.setDate(expiresAt.getDate() + lifetimeDays)
+  return expiresAt
+}
+
+interface CreateAdminCredentialBody {
+  name: string
 }
 
 /**
@@ -40,26 +48,33 @@ interface CreateKeyBody {
  *
  * - `POST /admin/keys`   — mint a new key (returns the plaintext key ONCE).
  * - `DELETE /admin/keys/:id` — revoke an existing key.
+ * - `POST /admin/credentials` — create a new admin credential.
+ * - `GET /admin/credentials` — list all admin credentials.
+ * - `DELETE /admin/credentials/:id` — revoke an admin credential.
  *
  * All routes are marked `config.public = true` so the API-key auth hook skips
- * them; they enforce their own `ADMIN_TOKEN` check instead.
+ * them; they enforce their own admin credential check instead.
  */
 export async function registerAdminRoutes(app: FastifyInstance) {
   app.post<{ Body: CreateKeyBody }>(
     '/admin/keys',
     { config: { public: true } },
     async (req: FastifyRequest<{ Body: CreateKeyBody }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
         return reply.status(401).send({
           error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
+          message: 'Provide a valid admin credential.',
         })
       }
 
-      const { label, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy } = req.body ?? {}
+      const { label, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, expiresAt } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
         return reply.status(400).send({ error: 'label is required' })
       }
+
+      // Determine expiration: use explicit value if provided, otherwise use default
+      const expiration = expiresAt ? new Date(expiresAt) : getDefaultExpiration()
 
       // Generate the key, store only its hash, and return the plaintext once.
       const plaintext = generateApiKey()
@@ -67,11 +82,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         data: {
           hash: hashApiKey(plaintext),
           label: label.trim(),
+          createdByAdminId: admin.id,
           ...(ratePerMin !== undefined ? { ratePerMin } : {}),
           ...(ratePerDay !== undefined ? { ratePerDay } : {}),
           ...(monthlyQuotaCents !== undefined ? { monthlyQuotaCents } : {}),
           ...(dailyQuotaCents !== undefined ? { dailyQuotaCents } : {}),
           ...(overagePolicy !== undefined ? { overagePolicy } : {}),
+          ...(expiration ? { expiresAt: expiration } : {}),
         },
       })
 
@@ -83,6 +100,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         monthlyQuotaCents: record.monthlyQuotaCents,
         dailyQuotaCents: record.dailyQuotaCents,
         overagePolicy: record.overagePolicy,
+        expiresAt: record.expiresAt,
         key: plaintext,
         createdAt: record.createdAt,
       })
@@ -93,10 +111,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id',
     { config: { public: true } },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
         return reply.status(401).send({
           error: 'Unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
+          message: 'Provide a valid admin credential.',
         })
       }
 
@@ -110,6 +129,95 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       }
 
       await prisma.apiKey.update({
+        where: { id },
+        data: { revokedAt: new Date() },
+      })
+
+      return reply.status(200).send({ id, revoked: true })
+    },
+  )
+
+  app.post<{ Body: CreateAdminCredentialBody }>(
+    '/admin/credentials',
+    { config: { public: true } },
+    async (req: FastifyRequest<{ Body: CreateAdminCredentialBody }>, reply: FastifyReply) => {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Provide a valid admin credential.',
+        })
+      }
+
+      const { name } = req.body
+      if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        return reply.status(400).send({ error: 'name is required' })
+      }
+
+      const plaintext = generateAdminCredential()
+      const record = await prisma.adminCredential.create({
+        data: {
+          name: name.trim(),
+          hash: hashApiKey(plaintext),
+        },
+      })
+
+      return reply.status(201).send({
+        id: record.id,
+        name: record.name,
+        credential: plaintext,
+        createdAt: record.createdAt,
+      })
+    },
+  )
+
+  app.get(
+    '/admin/credentials',
+    { config: { public: true } },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Provide a valid admin credential.',
+        })
+      }
+
+      const credentials = await prisma.adminCredential.findMany({
+        select: {
+          id: true,
+          name: true,
+          revokedAt: true,
+          createdAt: true,
+        },
+      })
+
+      return reply.send({ credentials })
+    },
+  )
+
+  app.delete<{ Params: { id: string } }>(
+    '/admin/credentials/:id',
+    { config: { public: true } },
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const admin = await resolveAdminIdentity(req)
+      if (!admin) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Provide a valid admin credential.',
+        })
+      }
+
+      const { id } = req.params
+      const existing = await prisma.adminCredential.findUnique({ where: { id } })
+      if (!existing) {
+        return reply.status(404).send({ error: 'Admin credential not found' })
+      }
+      if (existing.revokedAt) {
+        return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
+      }
+
+      await prisma.adminCredential.update({
         where: { id },
         data: { revokedAt: new Date() },
       })

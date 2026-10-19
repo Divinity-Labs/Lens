@@ -12,11 +12,30 @@ export interface ApiKeyContext {
   label: string
   ratePerMin: number
   ratePerDay: number
+  createdByAdminId?: string
+}
+
+/**
+ * Result of an API key lookup, including whether the key is expired.
+ */
+export interface ApiKeyLookupResult {
+  context: ApiKeyContext | null
+  expired: boolean
+}
+
+/**
+ * Metadata for an authenticated admin credential, attached to each request as
+ * `req.adminCredential` once the credential has been validated.
+ */
+export interface AdminCredentialContext {
+  id: string
+  name: string
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
     apiKey?: ApiKeyContext
+    adminCredential?: AdminCredentialContext
   }
   interface FastifyContextConfig {
     /** When true, the API-key auth hook skips this route (e.g. health, admin). */
@@ -41,15 +60,80 @@ export function extractBearer(header: string | undefined): string | null {
  * when the key exists and has not been revoked.
  */
 export async function lookupApiKey(plaintext: string): Promise<ApiKeyContext | null> {
+  const result = await lookupApiKeyWithExpiry(plaintext)
+  return result.expired ? null : result.context
+}
+
+/**
+ * Looks up an API key by its plaintext value, returning both the context and
+ * whether the key is expired. This allows the caller to distinguish between
+ * invalid keys and expired keys.
+ */
+export async function lookupApiKeyWithExpiry(plaintext: string): Promise<ApiKeyLookupResult> {
   const hash = hashApiKey(plaintext)
   const record = await prisma.apiKey.findUnique({ where: { hash } })
+  if (!record || record.revokedAt) {
+    return { context: null, expired: false }
+  }
+
+  // Check if the key has expired
+  if (record.expiresAt && new Date() > record.expiresAt) {
+    return { context: null, expired: true }
+  }
+
+  return {
+    context: {
+      id: record.id,
+      label: record.label,
+      ratePerMin: record.ratePerMin,
+      ratePerDay: record.ratePerDay,
+      createdByAdminId: record.createdByAdminId ?? undefined,
+    },
+    expired: false,
+  }
+}
+
+/**
+ * Looks up an admin credential by its plaintext value, returning the credential
+ * context only when the credential exists and has not been revoked.
+ */
+export async function lookupAdminCredential(plaintext: string): Promise<AdminCredentialContext | null> {
+  const hash = hashApiKey(plaintext)
+  const record = await prisma.adminCredential.findUnique({ where: { hash } })
   if (!record || record.revokedAt) return null
   return {
     id: record.id,
-    label: record.label,
-    ratePerMin: record.ratePerMin,
-    ratePerDay: record.ratePerDay,
+    name: record.name,
   }
+}
+
+/**
+ * Resolves the admin identity from a request.
+ *
+ * First attempts to resolve via named admin credentials (new system).
+ * Falls back to the legacy ADMIN_TOKEN env var for migration compatibility.
+ *
+ * Returns the admin credential context if authenticated, null otherwise.
+ */
+export async function resolveAdminIdentity(
+  req: FastifyRequest
+): Promise<AdminCredentialContext | null> {
+  const token = extractBearer(req.headers['authorization'])
+  if (!token) return null
+
+  const adminCredential = await lookupAdminCredential(token)
+  if (adminCredential) return adminCredential
+
+  const legacyToken = process.env.ADMIN_TOKEN
+  if (!legacyToken) return null
+
+  const a = Buffer.from(token)
+  const b = Buffer.from(legacyToken)
+  if (a.length === b.length && require('crypto').timingSafeEqual(a, b)) {
+    return { id: 'legacy', name: 'legacy-admin' }
+  }
+
+  return null
 }
 
 /**
@@ -82,11 +166,11 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
       })
     }
 
-    const keyContext = await lookupApiKey(token)
+    const { context: keyContext, expired } = await lookupApiKeyWithExpiry(token)
     if (!keyContext) {
       return reply.status(401).send({
         error: 'Unauthorized',
-        message: 'Invalid or revoked API key.',
+        message: expired ? 'API key has expired.' : 'Invalid or revoked API key.',
       })
     }
 
