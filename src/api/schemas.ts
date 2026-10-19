@@ -612,6 +612,24 @@ export const snapshotResponseSchema = {
 } as const
 
 /**
+ * Error body returned by the shared error handler.
+ *
+ * Every error response carries the request id so a user reporting a problem
+ * can quote one short string that appears on every log line for the request.
+ */
+export const errorResponseSchema = {
+  type: 'object',
+  required: ['error', 'requestId'],
+  additionalProperties: true,
+  properties: {
+    error: { type: 'string' },
+    requestId: { type: 'string' },
+    statusCode: { type: 'integer' },
+    message: { type: 'string' },
+  },
+} as const
+
+/**
  * Install response-shape validation on a Fastify instance.
  *
  * Default Fastify behaviour is to *serialize* against the response schema,

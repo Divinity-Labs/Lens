@@ -22,6 +22,14 @@ function makePairKey(a: string, b: string): string {
 }
 
 /**
+ * Build an error body that carries the request id, so a user reporting a
+ * failure can quote one short string and it can be found in the logs.
+ */
+function errorBody(req: { id: string }, message: string) {
+  return { error: message, requestId: req.id }
+}
+
+/**
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
@@ -105,7 +113,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      if (!pair) return reply.status(404).send(errorBody(req, `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       // Cache key is network-scoped so testnet/mainnet prices for the same
       // asset codes never collide.
@@ -148,8 +156,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const amount = parseFloat(req.query.amount ?? '1000')
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
+      if (!pair) return reply.status(404).send(errorBody(req, `Pair ${assetA}/${assetB} not watched on ${network}`))
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send(errorBody(req, 'amount must be a positive number'))
 
       return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
     }
@@ -170,7 +178,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const network = req.network ?? activeNetwork
 
       if (!['1m', '5m', '1h', '24h'].includes(window)) {
-        return reply.status(400).send({ error: 'window must be one of: 1m, 5m, 1h, 24h' })
+        return reply.status(400).send(errorBody(req, 'window must be one of: 1m, 5m, 1h, 24h'))
       }
 
       const result = await pgPool.query(
@@ -252,8 +260,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
 
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
+      if (!pair) return reply.status(404).send(errorBody(req, `Pair ${assetA}/${assetB} not watched on ${network}`))
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send(errorBody(req, 'amount must be a positive number'))
 
       // NOTE: getDepth reads order-book data with no network column yet — see L048.
       const depthResult = await getDepth(pair.pairKey, amount)

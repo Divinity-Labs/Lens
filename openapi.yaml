@@ -23,6 +23,11 @@ info:
     Per-caller responses (`/usage/me`), operator routes
     (`/admin/*`), mutations and error responses are `no-store` and must never
     sit in a shared cache.
+
+    Request tracing: every response carries an `x-request-id` header. An
+    inbound `x-request-id` request header is honoured; otherwise one is
+    generated. The same id appears on every log line for that request and in
+    error bodies as `requestId`, so a user can quote one short string.
   version: 0.1.0
   license:
     name: MIT
@@ -83,6 +88,7 @@ paths:
       summary: Get API status and indexer state
       security: []
       parameters:
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -90,6 +96,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -172,6 +180,7 @@ paths:
           schema:
             type: string
           example: USDC
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -179,6 +188,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -213,6 +224,7 @@ paths:
           schema:
             type: number
             default: 1000
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -220,6 +232,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -259,6 +273,7 @@ paths:
             type: integer
             default: 100
             maximum: 1000
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -266,6 +281,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -294,6 +311,7 @@ paths:
       security:
         - x402: []
       parameters:
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -301,6 +319,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -369,12 +389,15 @@ paths:
           schema:
             type: string
             format: date-time
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Candle data
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -460,6 +483,7 @@ paths:
             type: string
             enum: [json, csv]
             default: json
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -467,6 +491,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             text/csv:
               schema:
@@ -516,6 +542,7 @@ paths:
       summary: List all active trading pairs
       security: []
       parameters:
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -523,6 +550,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -606,6 +635,7 @@ paths:
           schema:
             type: number
             default: 1000
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -613,6 +643,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -670,10 +702,14 @@ paths:
             minimum: 0.001
             maximum: 0.1
             default: 0.01
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
           description: Book levels with per-venue provenance; unavailable venues are identified in the response.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -731,6 +767,7 @@ paths:
             type: string
             enum: [iqr, modified_zscore]
             default: iqr
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -738,6 +775,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -791,12 +830,15 @@ paths:
             type: string
             enum: [iqr, modified_zscore]
             default: iqr
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: VWAP result
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -832,6 +874,7 @@ paths:
             type: string
             enum: [24h, 7d, 30d]
             default: 24h
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -839,6 +882,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -874,6 +919,7 @@ paths:
             type: string
             enum: [5m, 15m, 1h, 24h]
             default: 5m
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -881,6 +927,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -904,6 +952,7 @@ paths:
           schema:
             type: string
           example: XLM
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -911,6 +960,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -984,6 +1035,7 @@ paths:
             minimum: 1
             maximum: 100
             default: 20
+        - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -991,6 +1043,8 @@ paths:
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1020,12 +1074,15 @@ paths:
           schema:
             type: string
             default: USD
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Benchmark statistics
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1065,12 +1122,15 @@ paths:
           style: form
           explode: true
           example: [0.6, 0.4]
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Basket price
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1129,12 +1189,15 @@ paths:
             type: integer
             minimum: 0
             default: 0
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Paginated catalog page
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1209,12 +1272,16 @@ paths:
       summary: Get usage and quota for the calling API key
       security:
         - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Usage summary for the authenticated key
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1229,12 +1296,16 @@ paths:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
       security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: Supported payment kinds and extensions
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1322,12 +1393,15 @@ paths:
           required: false
           schema:
             type: string
+        - $ref: '#/components/parameters/RequestId'
       responses:
         '200':
           description: GraphQL result
           headers:
             Cache-Control:
               $ref: '#/components/headers/CacheControl'
+            x-request-id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -1380,6 +1454,17 @@ components:
         `Authorization: Bearer <key>`.
 
   parameters:
+    RequestId:
+      name: x-request-id
+      in: header
+      required: false
+      description: >-
+        Caller-supplied request id. When present it is echoed on the response
+        and used on every log line for the request; when absent one is
+        generated. Either way the value is returned in the `x-request-id`
+        response header and in error bodies as `requestId`.
+      schema:
+        type: string
     NetworkQuery:
       name: network
       in: query
@@ -1421,6 +1506,8 @@ components:
                 type: string
               description:
                 type: string
+              requestId:
+                type: string
     TooManyRequests:
       description: Rate limit exceeded
       headers:
@@ -1445,8 +1532,17 @@ components:
                 type: string
               retryAfter:
                 type: string
+              requestId:
+                type: string
 
   headers:
+    RequestId:
+      description: >-
+        The request id for this request — the inbound `x-request-id` when one
+        was supplied, otherwise a generated id. Also present in error bodies
+        as `requestId`.
+      schema:
+        type: string
     CacheControl:
       description: >-
         Per-route cache policy (see "Cache policy" in the API description).

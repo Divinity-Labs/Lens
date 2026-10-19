@@ -29,6 +29,7 @@ import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
 import { registerSettleRoute } from './routes/facilitator'
 import { registerCachePolicy } from './middleware/cachePolicy'
+import { registerRequestId } from './middleware/requestId'
 import { getMetrics } from './metrics'
 import { loggerOptions, createDestination } from './logger'
 
@@ -70,7 +71,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, { origin: true })
   await app.register(compress)
 
-  // HTTP request/latency metrics. Registered FIRST, ahead of the network
+  // Request id (issue #265). Registered FIRST so every request — including
+  // ones rejected by the network selector, API-key auth, the rate limiter or
+  // x402 below — gets an id, has it bound to the logger, and returns it as a
+  // response header. An inbound x-request-id is honoured rather than replaced.
+  await app.register(registerRequestId)
+
+  // HTTP request/latency metrics. Registered ahead of the network
   // selector, API-key auth, the rate limiter and x402, so that requests those
   // plugins reject (400/401/402/429) still have their timer started and are
   // counted. See src/middleware/httpMetrics.ts.
@@ -108,7 +115,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       statusCode: 429,
       error: 'Too Many Requests',
       message: `Rate limit exceeded, retry in ${context.after}`,
-      retryAfter: context.after
+      retryAfter: context.after,
+      requestId: req.id
+    })
+  })
+
+  // Central error handler (issue #265): every error body carries the request
+  // id so a user reporting a problem can quote one short string. Covers errors
+  // thrown by route handlers and plugins alike.
+  app.setErrorHandler((error, request, reply) => {
+    const statusCode =
+      typeof error.statusCode === 'number' && error.statusCode >= 400
+        ? error.statusCode
+        : 500
+
+    if (statusCode >= 500) {
+      request.log.error({ err: error }, 'request failed')
+    } else {
+      request.log.warn({ err: error }, 'request rejected')
+    }
+
+    reply.status(statusCode).send({
+      statusCode,
+      error: error.name || 'Error',
+      message: statusCode >= 500 ? 'Internal Server Error' : error.message,
+      requestId: request.id
     })
   })
 

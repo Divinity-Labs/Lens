@@ -17,10 +17,39 @@
  * so it reads `process.env` directly to avoid a cycle.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import pino, { type Logger, type DestinationStream } from 'pino'
 
 /** Default level when `LOG_LEVEL` is unset. */
 export const DEFAULT_LOG_LEVEL = 'info'
+
+/** Header (and log field) name carrying the request id. */
+export const REQUEST_ID_KEY = 'x-request-id'
+
+/** Log field name the request id is emitted under. */
+export const requestIdKey = 'requestId'
+
+/** Per-request context propagated through async calls. */
+export interface RequestContext {
+  requestId: string
+}
+
+/**
+ * Async-local store holding the current request's context. Populated by
+ * `runWithRequestId` for the lifetime of a request so every log line emitted
+ * while handling it can pick up the id without callers passing it explicitly.
+ */
+export const requestContext = new AsyncLocalStorage<RequestContext>()
+
+/** Runs `fn` with `id` as the current request id. */
+export function runWithRequestId<T>(id: string, fn: () => T): T {
+  return requestContext.run({ requestId: id }, fn)
+}
+
+/** Returns the current request id, or `undefined` outside a request. */
+export function currentRequestId(): string | undefined {
+  return requestContext.getStore()?.requestId
+}
 
 /** True when logs should be rendered for humans rather than emitted as JSON. */
 export const prettyEnabled = process.env.NODE_ENV !== 'production'
@@ -138,11 +167,13 @@ export function formatPretty(line: string): string {
   const color = LEVEL_COLOR[level] ?? ''
   const label = color ? `${color}${level.toUpperCase().padEnd(5)}${RESET}` : level.toUpperCase().padEnd(5)
   const component = obj.component ? `[${obj.component}] ` : ''
+  const requestId = typeof obj[requestIdKey] === 'string' ? `[req:${obj[requestIdKey]}] ` : ''
 
   const { time: _t, level: _l, component: _c, msg, err, ...extra } = obj
+  delete extra[requestIdKey]
   const extraKeys = Object.keys(extra).filter((key) => extra[key] !== undefined)
 
-  let out = `${time} ${label} ${component}${msg ?? ''}`
+  let out = `${time} ${label} ${component}${requestId}${msg ?? ''}`
   if (extraKeys.length > 0) {
     out += ` ${JSON.stringify(extra)}`
   }
@@ -183,6 +214,10 @@ export function loggerOptions(
     formatters: { level: (label) => ({ level: label }) },
     timestamp: pino.stdTimeFunctions.isoTime,
     redact: { paths: REDACT_PATHS, censor: '[redacted]' },
+    mixin() {
+      const requestId = currentRequestId()
+      return requestId ? { [requestIdKey]: requestId } : {}
+    },
   }
 }
 
