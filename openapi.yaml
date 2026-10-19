@@ -37,6 +37,10 @@ paths:
     get:
       operationId: getVenueRegistry
       summary: List registered venues and their network liveness
+      x-question: "Which venue adapters (order books, AMMs, oracles) are registered and live?"
+      x-example: "GET /venues/registry?network=testnet"
+      x-order: 22
+      x-category: "System Health & Venue Infrastructure"
       description: Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.
       security: []
       parameters:
@@ -81,6 +85,10 @@ paths:
     get:
       operationId: getStatus
       summary: Get API status and indexer state
+      x-question: "Is the Lens indexer healthy, up to date, and what is the latest processed ledger?"
+      x-example: "GET /status?network=testnet"
+      x-order: 21
+      x-category: "System Health & Venue Infrastructure"
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
@@ -121,6 +129,10 @@ paths:
     get:
       operationId: getPrice
       summary: Get aggregated price for a pair
+      x-question: "What is the current market price and 24-hour volume for an asset pair?"
+      x-example: "GET /price/XLM/USDC?network=testnet"
+      x-order: 1
+      x-category: "Core Pricing & Trade Execution"
       security:
         - x402: []
       parameters:
@@ -158,6 +170,10 @@ paths:
     get:
       operationId: getBestRoute
       summary: Get best swap route for a pair and amount
+      x-question: "Where can I execute a swap for the best return at a given trade size?"
+      x-example: "GET /price/XLM/USDC/route?amount=1000&network=testnet"
+      x-order: 2
+      x-category: "Core Pricing & Trade Execution"
       security:
         - x402: []
       parameters:
@@ -197,6 +213,10 @@ paths:
     get:
       operationId: getPriceHistory
       summary: Get price history buckets
+      x-question: "What were the historical price buckets for a pair over a recent window?"
+      x-example: "GET /price/XLM/USDC/history?window=1h&network=testnet"
+      x-order: 15
+      x-category: "Historical Trends & Robust Averages"
       security: []
       parameters:
         - name: assetA
@@ -255,6 +275,10 @@ paths:
     get:
       operationId: getPools
       summary: Get AMM liquidity pool reserves and spot prices
+      x-question: "Which AMM liquidity pools are being watched, and what are their reserves?"
+      x-example: "GET /pools?network=testnet"
+      x-order: 7
+      x-category: "Market Overview & Liquidity Pools"
       security:
         - x402: []
       parameters:
@@ -301,6 +325,10 @@ paths:
     get:
       operationId: getCandles
       summary: Get OHLCV candle data
+      x-question: "What are the historical OHLCV candlestick bars for a trading pair?"
+      x-example: "GET /candles/XLM/USDC?interval=1h&network=testnet"
+      x-order: 14
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -381,6 +409,10 @@ paths:
     get:
       operationId: getPriceSnapshots
       summary: Get historical 1-minute price snapshots
+      x-question: "Where can I query raw 1-minute historical snapshots or export them as CSV?"
+      x-example: "GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet"
+      x-order: 16
+      x-category: "Historical Trends & Robust Averages"
       description: >-
         Returns minute-resolution price snapshots for a pair over [from, to],
         optionally aggregated into 5m or 1h buckets. Snapshots are retained for
@@ -478,6 +510,10 @@ paths:
     get:
       operationId: listPairs
       summary: List all active trading pairs
+      x-question: "Which trading pairs are currently tracked by Lens on the active network?"
+      x-example: "GET /pairs?network=testnet"
+      x-order: 5
+      x-category: "Market Overview & Liquidity Pools"
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
@@ -515,6 +551,10 @@ paths:
     post:
       operationId: addPair
       summary: Add a new trading pair (Admin only)
+      x-question: "How do I configure Lens to track a new trading pair?"
+      x-example: "POST /pairs"
+      x-order: 6
+      x-category: "Market Overview & Liquidity Pools"
       security:
         - adminAuth: []
       requestBody:
@@ -546,6 +586,10 @@ paths:
     get:
       operationId: getDepth
       summary: Get order-book depth and execution slippage for a pair
+      x-question: "What is the simulated order-book depth and expected slippage for a trade size?"
+      x-example: "GET /price/XLM/USDC/depth?amount=1000&network=testnet"
+      x-order: 4
+      x-category: "Core Pricing & Trade Execution"
       description: >-
         Simulates an order of `amount` units of assetA and returns the price
         ladder plus the execution price and slippage versus the spot price.
@@ -594,6 +638,10 @@ paths:
     get:
       operationId: getBook
       summary: Get the aggregated SDEX and AMM price ladder for a pair
+      x-question: "What does the combined order book look like across SDEX and AMM liquidity pools?"
+      x-example: "GET /book/XLM/USDC?depth=0.1&step=0.01&network=testnet"
+      x-order: 3
+      x-category: "Core Pricing & Trade Execution"
       description: >-
         Returns asks and bids as cumulative assetA size at each price. Live
         SDEX levels are reported as observed; AMM levels are synthetic,
@@ -657,6 +705,10 @@ paths:
     get:
       operationId: getTwap
       summary: Get a manipulation-resistant time-weighted average price
+      x-question: "What is the manipulation-resistant time-weighted average price (TWAP) for settlement?"
+      x-example: "GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet"
+      x-order: 17
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -719,6 +771,10 @@ paths:
     get:
       operationId: getVwap
       summary: Get a volume-weighted average price
+      x-question: "What is the volume-weighted average price (VWAP) across venues for a pair?"
+      x-example: "GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet"
+      x-order: 18
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -778,6 +834,10 @@ paths:
     get:
       operationId: getVolumes
       summary: Get cross-venue traded volume for an asset
+      x-question: "What is the total cross-venue trading volume for an asset over time?"
+      x-example: "GET /volumes/XLM?window=24h&network=testnet"
+      x-order: 8
+      x-category: "Market Overview & Liquidity Pools"
       description: >-
         Sums traded volume for `asset` across every pair and venue it appears
         in, measured in the asset's own units, with a per-venue breakdown.
@@ -818,6 +878,10 @@ paths:
     get:
       operationId: getSpreads
       summary: Get the tightest per-venue bid/ask spread for an asset
+      x-question: "Which venues offer the tightest bid/ask spread for an asset right now?"
+      x-example: "GET /spreads/XLM?window=5m&network=testnet"
+      x-order: 9
+      x-category: "Comparative Analytics & Market Quality"
       description: >-
         Reports, for every (venue, pair) that quoted `asset` inside the window,
         the observed low, high and spread in basis points, tightest first.
@@ -860,6 +924,10 @@ paths:
     get:
       operationId: compareAsset
       summary: Compare Lens prices with every configured external oracle
+      x-question: "How do Lens aggregated prices compare against external oracles?"
+      x-example: "GET /compare/XLM?network=testnet"
+      x-order: 12
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -888,6 +956,10 @@ paths:
     get:
       operationId: screenPairs
       summary: Screen pairs by volume, change, liquidity and price
+      x-question: "Which pairs currently have the highest volume, price changes, or liquidity?"
+      x-example: "GET /screener?sortBy=volume&order=desc&limit=20&network=testnet"
+      x-order: 10
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: volume
@@ -970,6 +1042,10 @@ paths:
     get:
       operationId: getBenchmark
       summary: Get peg-deviation statistics for an asset against a target
+      x-question: "How closely is a pegged or wrapped asset tracking its peg target?"
+      x-example: "GET /benchmark/USDC?target=USD&network=testnet"
+      x-order: 11
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -1005,6 +1081,10 @@ paths:
     get:
       operationId: getBasket
       summary: Compute the weighted price of a basket of assets
+      x-question: "What is the weighted price of a custom portfolio basket of assets?"
+      x-example: "GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet"
+      x-order: 13
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -1050,6 +1130,10 @@ paths:
     get:
       operationId: listDiscoveryResources
       summary: Browse the x402 Bazaar catalog of discoverable resources
+      x-question: "What payable endpoints and datasets are discoverable in the x402 Bazaar catalog?"
+      x-example: "GET /discovery/resources?network=testnet"
+      x-order: 24
+      x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
         - name: type
@@ -1110,6 +1194,10 @@ paths:
     post:
       operationId: createWebhook
       summary: Subscribe to a price-threshold webhook
+      x-question: "How can my application receive push alerts when a price crosses a threshold?"
+      x-example: "POST /webhooks"
+      x-order: 25
+      x-category: "Automation, Discovery & Payments"
       description: >-
         Registers an HTTPS endpoint to be called when the pair's price crosses
         `threshold` in the given `direction`. The response contains the signing
@@ -1154,6 +1242,10 @@ paths:
     delete:
       operationId: deleteWebhook
       summary: Delete a webhook subscription
+      x-question: "How do I cancel an existing price threshold alert webhook?"
+      x-example: "DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet"
+      x-order: 26
+      x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
         - name: id
@@ -1171,6 +1263,10 @@ paths:
     get:
       operationId: getMyUsage
       summary: Get usage and quota for the calling API key
+      x-question: "How many requests have I made and what is my remaining API key quota?"
+      x-example: "GET /usage/me"
+      x-order: 23
+      x-category: "System Health & Venue Infrastructure"
       security:
         - apiKeyAuth: []
       responses:
@@ -1192,6 +1288,10 @@ paths:
     get:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
+      x-question: "Which payment schemes and token mechanisms does this x402 facilitator support?"
+      x-example: "GET /supported"
+      x-order: 27
+      x-category: "Automation, Discovery & Payments"
       security: []
       responses:
         '200':
@@ -1208,6 +1308,10 @@ paths:
     post:
       operationId: verifyPayment
       summary: Verify an x402 payment payload
+      x-question: "How do I verify a signed x402 payment payload before fulfilling a service?"
+      x-example: "POST /verify"
+      x-order: 28
+      x-category: "Automation, Discovery & Payments"
       security: []
       requestBody:
         required: true
@@ -1239,6 +1343,10 @@ paths:
     post:
       operationId: settlePayment
       summary: Settle an x402 payment (idempotent)
+      x-question: "How do I submit and settle an x402 payment on the Stellar network?"
+      x-example: "POST /settle"
+      x-order: 29
+      x-category: "Automation, Discovery & Payments"
       description: >-
         Submits the payment transaction and records the attempt keyed on its
         transaction hash. Retrying the same payload replays the stored answer
@@ -1268,6 +1376,10 @@ paths:
     get:
       operationId: graphqlGet
       summary: Execute a GraphQL query over HTTP GET
+      x-question: "How do I query multiple prices, routes, and analytics in a single GET request?"
+      x-example: "GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D"
+      x-order: 19
+      x-category: "Multi-Query & Streaming"
       security: []
       parameters:
         - name: query
@@ -1299,6 +1411,10 @@ paths:
     post:
       operationId: graphqlPost
       summary: Execute a GraphQL query, mutation or subscription handshake
+      x-question: "How do I execute complex GraphQL operations or initiate WebSocket subscriptions?"
+      x-example: "POST /graphql"
+      x-order: 20
+      x-category: "Multi-Query & Streaming"
       security:
         - x402: []
       requestBody:

@@ -12,35 +12,41 @@ Aggregates price data from Stellar's Classic Order Book (SDEX) and AMM Liquidity
 ## Endpoints
 
 ### REST
-| Method | Path | Description |
-|---|---|---|
-| GET | `/price/:assetA/:assetB` | Current VWAP, 24h volume, best route |
-| GET | `/price/:assetA/:assetB/route?amount=1000` | Best execution route for a given amount |
-| GET | `/price/:assetA/:assetB/depth?amount=1000` | Simulated order-book depth and execution slippage |
-| GET | `/book/:assetA/:assetB?depth=0.1&step=0.01&network=testnet` | Aggregated SDEX book and synthetic AMM price ladder with cumulative size and venue provenance |
-| GET | `/price/:assetA/:assetB/history?window=1h` | OHLCV history (`1m`, `5m`, `1h`, `24h`) |
-| GET | `/price/twap/:assetA/:assetB?window=60&sampleInterval=60&method=iqr` | Manipulation-resistant time-weighted average price |
-| GET | `/price/vwap/:assetA/:assetB?window=60&source=SDEX&method=iqr` | Volume-weighted average price |
-| GET | `/candles/:assetA/:assetB?interval=1h&from=…&to=…` | OHLCV candles (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) |
-| GET | `/prices/history?pair=XLM/USDC&from=…&to=…&interval=1m` | Historical 1-minute price snapshots, optionally aggregated (`1m`, `5m`, `1h`); honours `?network=`; `?format=csv` serves the points as `text/csv` (`ts,price,volume`); ~30-day retention |
-| GET | `/pools` | Active AMM pools being watched |
-| GET | `/pairs` | Watched trading pairs |
-| GET | `/volumes/:asset?window=24h` | Cross-venue traded volume (`24h`, `7d`, `30d`) with a per-venue breakdown |
-| GET | `/spreads/:asset?window=5m` | Per-venue bid/ask spread, tightest first (`5m`, `15m`, `1h`, `24h`) |
-| GET | `/compare/:asset` | Lens vs configured oracle prices, with per-oracle deviation and availability |
-| GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
-| GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
-| GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
-| GET | `/status` | Indexer health |
-| GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
-| GET | `/usage/me` | Usage and quota for the calling API key (requires `Authorization: Bearer <key>`) |
-| GET | `/supported` | Payment kinds and extensions this facilitator supports |
-| POST | `/verify` | Verify an x402 payment payload |
-| POST | `/settle` | Settle an x402 payment (idempotent — retries replay the stored result) |
-| POST | `/webhooks` | Subscribe to a price-threshold webhook |
-| DELETE | `/webhooks/:id` | Delete a webhook subscription |
-| GET/POST | `/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md)) |
+The API routes below are organized by plain-English question and ordered by what a newcomer asks first (from immediate spot pricing and routing to market pools, spreads, historical trends, and infrastructure). For the complete question guide and newcomer rationale, see [`docs/what-lens-knows.md`](docs/what-lens-knows.md).
 
+<!-- QUESTION_INDEX_START -->
+| Question | Route | Example |
+|---|---|---|
+| What is the current market price and 24-hour volume for an asset pair? | `GET /price/:assetA/:assetB` | `GET /price/XLM/USDC?network=testnet` |
+| Where can I execute a swap for the best return at a given trade size? | `GET /price/:assetA/:assetB/route` | `GET /price/XLM/USDC/route?amount=1000&network=testnet` |
+| What does the combined order book look like across SDEX and AMM liquidity pools? | `GET /book/:assetA/:assetB` | `GET /book/XLM/USDC?depth=0.1&step=0.01&network=testnet` |
+| What is the simulated order-book depth and expected slippage for a trade size? | `GET /price/:assetA/:assetB/depth` | `GET /price/XLM/USDC/depth?amount=1000&network=testnet` |
+| Which trading pairs are currently tracked by Lens on the active network? | `GET /pairs` | `GET /pairs?network=testnet` |
+| How do I configure Lens to track a new trading pair? | `POST /pairs` | `POST /pairs` |
+| Which AMM liquidity pools are being watched, and what are their reserves? | `GET /pools` | `GET /pools?network=testnet` |
+| What is the total cross-venue trading volume for an asset over time? | `GET /volumes/:asset` | `GET /volumes/XLM?window=24h&network=testnet` |
+| Which venues offer the tightest bid/ask spread for an asset right now? | `GET /spreads/:asset` | `GET /spreads/XLM?window=5m&network=testnet` |
+| Which pairs currently have the highest volume, price changes, or liquidity? | `GET /screener` | `GET /screener?sortBy=volume&order=desc&limit=20&network=testnet` |
+| How closely is a pegged or wrapped asset tracking its peg target? | `GET /benchmark/:asset` | `GET /benchmark/USDC?target=USD&network=testnet` |
+| How do Lens aggregated prices compare against external oracles? | `GET /compare/:asset` | `GET /compare/XLM?network=testnet` |
+| What is the weighted price of a custom portfolio basket of assets? | `GET /basket` | `GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet` |
+| What are the historical OHLCV candlestick bars for a trading pair? | `GET /candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` |
+| What were the historical price buckets for a pair over a recent window? | `GET /price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` |
+| Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` |
+| What is the manipulation-resistant time-weighted average price (TWAP) for settlement? | `GET /price/twap/:assetA/:assetB` | `GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet` |
+| What is the volume-weighted average price (VWAP) across venues for a pair? | `GET /price/vwap/:assetA/:assetB` | `GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet` |
+| How do I query multiple prices, routes, and analytics in a single GET request? | `GET /graphql` | `GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D` |
+| How do I execute complex GraphQL operations or initiate WebSocket subscriptions? | `POST /graphql` | `POST /graphql` |
+| Is the Lens indexer healthy, up to date, and what is the latest processed ledger? | `GET /status` | `GET /status?network=testnet` |
+| Which venue adapters (order books, AMMs, oracles) are registered and live? | `GET /venues/registry` | `GET /venues/registry?network=testnet` |
+| How many requests have I made and what is my remaining API key quota? | `GET /usage/me` | `GET /usage/me` |
+| What payable endpoints and datasets are discoverable in the x402 Bazaar catalog? | `GET /discovery/resources` | `GET /discovery/resources?network=testnet` |
+| How can my application receive push alerts when a price crosses a threshold? | `POST /webhooks` | `POST /webhooks` |
+| How do I cancel an existing price threshold alert webhook? | `DELETE /webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` |
+| Which payment schemes and token mechanisms does this x402 facilitator support? | `GET /supported` | `GET /supported` |
+| How do I verify a signed x402 payment payload before fulfilling a service? | `POST /verify` | `POST /verify` |
+| How do I submit and settle an x402 payment on the Stellar network? | `POST /settle` | `POST /settle` |
+<!-- QUESTION_INDEX_END -->
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
 missing from the spec. Operator-only and non-HTTP routes (`/admin/keys*`,
