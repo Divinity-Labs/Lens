@@ -25,9 +25,16 @@ interface RotateKeyBody {
   overlapHours?: number
 }
 
+interface ListKeysQuery {
+  limit?: string | number
+  offset?: string | number
+  includeRevoked?: string | boolean
+}
+
 /**
  * Registers admin-only endpoints for minting, listing, and revoking API keys.
  *
+ * - `GET /admin/keys`    — list keys with pagination and revoked filter.
  * - `POST /admin/keys`   — mint a new key (returns the plaintext key ONCE).
  * - `GET /admin/keys`    — list all existing keys with metadata and scopes.
  * - `DELETE /admin/keys/:id` — revoke an existing key.
@@ -36,7 +43,7 @@ interface RotateKeyBody {
  * them; they enforce their own `ADMIN_TOKEN` check instead.
  */
 export async function registerAdminRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { limit?: string } }>(
+app.get<{ Querystring: { limit?: string } }>(
     '/admin/webhook-delivery-failures',
     { config: { public: true } },
     async (req, reply) => {
@@ -55,6 +62,70 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     },
   )
 
+  app.get<{ Querystring: ListKeysQuery }>(
+    '/admin/keys',
+    { config: { public: true } },
+    async (req: FastifyRequest<{ Querystring: ListKeysQuery }>, reply: FastifyReply) => {
+      if (!isAdminAuthorized(req)) {
+        admin_auth_failures_total.inc()
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          code: 'admin_unauthorized',
+          message: 'Provide a valid X-Admin-Token header.',
+        })
+      }
+
+      const limit = Math.min(Math.max(1, parseInt(String(req.query?.limit ?? 50), 10) || 50), 100)
+      const offset = Math.max(0, parseInt(String(req.query?.offset ?? 0), 10) || 0)
+      const includeRevoked = req.query?.includeRevoked === 'true' || req.query?.includeRevoked === true
+
+      const where = includeRevoked ? {} : { revokedAt: null }
+
+      const [total, records] = await Promise.all([
+        prisma.apiKey.count({ where }),
+        prisma.apiKey.findMany({
+          where,
+          select: {
+            id: true,
+            label: true,
+            ratePerMin: true,
+            ratePerDay: true,
+            monthlyQuotaCents: true,
+            dailyQuotaCents: true,
+            overagePolicy: true,
+            createdAt: true,
+            revokedAt: true,
+            expiresAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: offset,
+          take: limit,
+        }),
+      ])
+
+      const keys = records.map((r) => ({
+        id: r.id,
+        label: r.label,
+        ratePerMin: r.ratePerMin,
+        ratePerDay: r.ratePerDay,
+        monthlyQuotaCents: r.monthlyQuotaCents,
+        dailyQuotaCents: r.dailyQuotaCents,
+        overagePolicy: r.overagePolicy,
+        createdAt: r.createdAt,
+        revokedAt: r.revokedAt,
+        expiresAt: r.expiresAt,
+        isRevoked: r.revokedAt !== null,
+      }))
+
+      return reply.send({
+        keys,
+        total,
+        limit,
+        offset,
+        hasMore: offset + keys.length < total,
+      })
+    },
+  )
   app.post<{ Body: CreateKeyBody }>(
     '/admin/keys',
     { config: { public: true } },
