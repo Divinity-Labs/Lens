@@ -1,6 +1,5 @@
 import Redis from 'ioredis'
 import { config, activeNetwork, type NetworkName } from './config'
-import { config, activeNetwork } from './config'
 import { createLogger } from './logger'
 
 const log = createLogger('redis')
