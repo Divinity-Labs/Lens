@@ -5,7 +5,20 @@ import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
 import { fetchWithTimeout } from '../fetch.js';
 import { config } from '../config.js';
+import { z } from 'zod';
 import { ssrfSafeFetch, SsrfError, type SsrfFetchOptions } from '../net/ssrf.js';
+
+export const BazaarSearchArgsSchema = z.object({
+  url: z.string({ required_error: 'url is required' }).min(1, 'url cannot be empty').url('url must be a valid URL'),
+  query: z.string().optional(),
+});
+
+export const PaidCallArgsSchema = z.object({
+  url: z.string({ required_error: 'url is required' }).min(1, 'url cannot be empty').url('url must be a valid URL'),
+  method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'], {
+    errorMap: () => ({ message: 'method must be a valid HTTP method (GET, POST, PUT, DELETE, PATCH, HEAD)' }),
+  }).default('GET'),
+});
 
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
@@ -112,8 +125,17 @@ export class BazaarMcpServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name === 'bazaar_search') {
-        const url = String(request.params.arguments?.url);
-        const query = request.params.arguments?.query ? String(request.params.arguments?.query) : undefined;
+        const parseResult = BazaarSearchArgsSchema.safeParse(request.params.arguments ?? {});
+        if (!parseResult.success) {
+          const issue = parseResult.error.issues[0];
+          const field = issue.path.join('.') || 'arguments';
+          return this.createErrorResponse(
+            'ERR_BAD_REQUEST',
+            `Missing or invalid argument "${field}": ${issue.message}`
+          );
+        }
+
+        const { url, query } = parseResult.data;
         
         try {
           const endpoint = query 
@@ -147,8 +169,17 @@ export class BazaarMcpServer {
       }
 
       if (request.params.name === 'paid_call') {
-        const url = String(request.params.arguments?.url);
-        const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
+        const parseResult = PaidCallArgsSchema.safeParse(request.params.arguments ?? {});
+        if (!parseResult.success) {
+          const issue = parseResult.error.issues[0];
+          const field = issue.path.join('.') || 'arguments';
+          return this.createErrorResponse(
+            'ERR_BAD_REQUEST',
+            `Missing or invalid argument "${field}": ${issue.message}`
+          );
+        }
+
+        const { url, method } = parseResult.data;
 
         // Gate before the fetch: fetchWithPayment answers a 402 by paying, so
         // by the time a request leaves this process the money is already spent.
@@ -215,6 +246,7 @@ export class BazaarMcpServer {
       isError: true,
       code,
       reason,
+      message: reason,
     };
     return {
       content: [{ type: 'text', text: JSON.stringify(payload) }],

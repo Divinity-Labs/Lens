@@ -199,4 +199,58 @@ describe('BazaarMcpServer bazaar_search SSRF guard (#407)', () => {
     expect(response.isError).toBeFalsy();
     expect(JSON.parse(response.content[0].text).resources[0].name).toBe('x');
   });
+
+  describe('Zod Argument Validation (#411)', () => {
+    it('rejects bazaar_search with missing url and returns ERR_BAD_REQUEST', async () => {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const handler = captureHandler(server);
+      const response = await handler({ params: { name: 'bazaar_search', arguments: {} } });
+
+      expect(response.isError).toBe(true);
+      const content = JSON.parse(response.content[0].text);
+      expect(content.code).toBe('ERR_BAD_REQUEST');
+      expect(content.message).toContain('url');
+    });
+
+    it('rejects bazaar_search with malformed url', async () => {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const handler = captureHandler(server);
+      const response = await handler({ params: { name: 'bazaar_search', arguments: { url: 'not-a-valid-url' } } });
+
+      expect(response.isError).toBe(true);
+      const content = JSON.parse(response.content[0].text);
+      expect(content.code).toBe('ERR_BAD_REQUEST');
+      expect(content.message).toContain('url');
+    });
+
+    it('rejects paid_call with missing url', async () => {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+      const handler = captureHandler(server);
+      const response = await handler({ params: { name: 'paid_call', arguments: {} } });
+
+      expect(response.isError).toBe(true);
+      const content = JSON.parse(response.content[0].text);
+      expect(content.code).toBe('ERR_BAD_REQUEST');
+      expect(content.message).toContain('url');
+    });
+
+    it('rejects paid_call with invalid HTTP method', async () => {
+      const server = new BazaarMcpServer({ fetchWithPayment: vi.fn(), paidCallAllowlist: ['example.com'] });
+      const handler = captureHandler(server);
+      const response = await handler({
+        params: {
+          name: 'paid_call',
+          arguments: {
+            url: 'https://example.com/api',
+            method: 'INVALID_VERB',
+          },
+        },
+      });
+
+      expect(response.isError).toBe(true);
+      const content = JSON.parse(response.content[0].text);
+      expect(content.code).toBe('ERR_BAD_REQUEST');
+      expect(content.message).toContain('method');
+    });
+  });
 });
