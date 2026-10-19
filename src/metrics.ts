@@ -76,6 +76,13 @@ export const admin_auth_failures_total = new Counter({
   registers: [register]
 })
 
+export const api_key_cache_requests_total = new Counter({
+  name: 'api_key_cache_requests_total',
+  help: 'Total number of API key cache lookups by result',
+  labelNames: ['result'],
+  registers: [register]
+})
+
 export const rate_limit_rejections_total = new Counter({
   name: 'rate_limit_rejections_total',
   help: 'Total number of requests rejected by the per-key or fallback IP rate limiter',

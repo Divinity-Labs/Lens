@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
 import { admin_auth_failures_total } from '../metrics'
-import { hashApiKey, isAdminAuthorized } from './auth'
+import { hashApiKey, isAdminAuthorized, invalidateApiKeyCache } from './auth'
 import { copyUsageHistory } from '../x402/metering'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
@@ -180,6 +180,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         where: { id },
         data: { revokedAt: new Date() },
       })
+      invalidateApiKeyCache()
 
       return reply.status(200).send({ id, revoked: true })
     },

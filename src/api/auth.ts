@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
-import { api_key_auth_failures_total } from '../metrics'
+import { api_key_auth_failures_total, api_key_cache_requests_total } from '../metrics'
 
 type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired' | 'insufficient_scope'
 
@@ -57,6 +57,40 @@ export function extractBearer(header: string | undefined): string | null {
   return match ? match[1].trim() : null
 }
 
+
+interface KeyLookupCacheEntry {
+  result: { context: ApiKeyContext | null; failureReason?: ApiKeyAuthFailureReason }
+  cachedAt: number
+}
+
+// In-memory cache for API key lookups keyed by SHA-256 hash.
+// Caches both positive lookups and negative lookups (unknown/revoked/expired).
+const apiKeyLookupCache = new Map<string, KeyLookupCacheEntry>()
+
+/**
+ * Returns the configured cache TTL in milliseconds.
+ * Default is 10 seconds to keep revocation window short while eliminating
+ * redundant database queries on repeated traffic.
+ * Worst-case revocation lag without manual invalidation: 10 seconds.
+ * With admin revocation calling `invalidateApiKeyCache()`, lag is 0ms (immediate).
+ */
+export function getApiKeyCacheTtlMs(): number {
+  if (process.env.NODE_ENV === 'test' && !process.env.API_KEY_CACHE_TTL_SECONDS) {
+    return 0
+  }
+  const seconds = parseInt(process.env.API_KEY_CACHE_TTL_SECONDS ?? '10', 10)
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 10) * 1000
+}
+
+/** Clears all cached key lookups or invalidates a specific hash. */
+export function invalidateApiKeyCache(hash?: string): void {
+  if (hash) {
+    apiKeyLookupCache.delete(hash)
+  } else {
+    apiKeyLookupCache.clear()
+  }
+}
+
 /**
  * Looks up an API key by its plaintext value, returning the key context only
  * when the key exists and has not been revoked or expired.
@@ -69,13 +103,34 @@ async function lookupApiKeyResult(
   plaintext: string,
 ): Promise<{ context: ApiKeyContext | null; failureReason?: ApiKeyAuthFailureReason }> {
   const hash = hashApiKey(plaintext)
-  const record = await prisma.apiKey.findUnique({ where: { hash } })
-  if (!record) return { context: null, failureReason: 'unknown' }
-  if (record.revokedAt) return { context: null, failureReason: 'revoked' }
-  if (record.expiresAt && record.expiresAt <= new Date()) {
-    return { context: null, failureReason: 'expired' }
+  const now = Date.now()
+  const ttlMs = getApiKeyCacheTtlMs()
+
+  const cached = apiKeyLookupCache.get(hash)
+  if (cached && now - cached.cachedAt < ttlMs) {
+    api_key_cache_requests_total.inc({ result: 'hit' })
+    return cached.result
   }
-  return {
+
+  api_key_cache_requests_total.inc({ result: 'miss' })
+  const record = await prisma.apiKey.findUnique({ where: { hash } })
+  if (!record) {
+    const res = { context: null, failureReason: 'unknown' as const }
+    apiKeyLookupCache.set(hash, { result: res, cachedAt: now })
+    return res
+  }
+  if (record.revokedAt) {
+    const res = { context: null, failureReason: 'revoked' as const }
+    apiKeyLookupCache.set(hash, { result: res, cachedAt: now })
+    return res
+  }
+  if (record.expiresAt && record.expiresAt <= new Date()) {
+    const res = { context: null, failureReason: 'expired' as const }
+    apiKeyLookupCache.set(hash, { result: res, cachedAt: now })
+    return res
+  }
+
+  const res = {
     context: {
       id: record.id,
       label: record.label,
@@ -84,6 +139,8 @@ async function lookupApiKeyResult(
       scopes: record.scopes ?? [],
     },
   }
+  apiKeyLookupCache.set(hash, { result: res, cachedAt: now })
+  return res
 }
 
 /**
