@@ -72,6 +72,8 @@ function hostOf(url: string): string {
   }
 }
 
+export const VALID_MCP_TOOLS = ['bazaar_search', 'paid_call'] as const;
+
 export interface McpServerConfig {
   fetchWithPayment: typeof fetch;
   /**
@@ -479,7 +481,13 @@ export class BazaarMcpServer {
         }
       }
 
-      throw new Error(`Unknown tool: ${request.params.name}`);
+      const rawName = String(request.params?.name ?? '');
+      const sanitizedName = rawName.slice(0, 64).replace(/[^\x20-\x7E]/g, '');
+      return this.createErrorResponse(
+        'ERR_UNKNOWN_TOOL',
+        `Unknown tool '${sanitizedName}'. Available tools: ${VALID_MCP_TOOLS.join(', ')}`,
+        VALID_MCP_TOOLS
+      );
     });
   }
 
@@ -494,7 +502,7 @@ export class BazaarMcpServer {
     return { limit, offset: requested.offset ?? 0 };
   }
 
-  /**
+/**
    * Serialize a successful result compactly — indentation is for humans and
    * costs the agent context — and within `budget`, so no upstream response,
    * large or hostile, can fill a context window in one call. Truncation is
@@ -567,13 +575,13 @@ export class BazaarMcpServer {
     );
   }
 
-  private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown>) {
-    // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
+  private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown>) {    // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
     const payload = {
       isError: true,
       code,
       reason,
       ...(details ? { details } : {}),
+      ...((details as any)?.validTools ? { validTools: (details as any).validTools } : {}),
     };
     return {
       content: [{ type: 'text', text: JSON.stringify(payload) }],

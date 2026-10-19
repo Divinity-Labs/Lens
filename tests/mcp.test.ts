@@ -854,3 +854,69 @@ describe('cumulative spend budget', () => {
     expect(() => parseUsdToNanodollars('$1.0000000000')).toThrow(/more than 9 decimal places/);
   })
 })
+describe('BazaarMcpServer — Unknown Tool Handling (#415)', () => {
+  function captureToolHandler(server: any) {
+    let handler: any = null;
+    server.server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) handler = fn;
+    };
+    server.setupHandlers();
+    return handler;
+  }
+
+  it('returns a structured error instead of throwing a raw exception', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const handler = captureToolHandler(server);
+
+    // Call with unknown tool name
+    const response = await handler({
+      params: { name: 'non_existent_tool_123', arguments: {} },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content).toHaveLength(1);
+    expect(response.content[0].type).toBe('text');
+
+    const error = JSON.parse(response.content[0].text);
+    expect(error.code).toBe('ERR_UNKNOWN_TOOL');
+    expect(error.reason).toContain('non_existent_tool_123');
+  });
+
+  it('lists all valid tool names in the error response', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const handler = captureToolHandler(server);
+
+    const response = await handler({
+      params: { name: 'random_tool', arguments: {} },
+    });
+
+    const error = JSON.parse(response.content[0].text);
+    expect(error.validTools).toBeDefined();
+    expect(error.validTools).toContain('bazaar_search');
+    expect(error.validTools).toContain('paid_call');
+    expect(error.reason).toContain('bazaar_search');
+    expect(error.reason).toContain('paid_call');
+  });
+
+  it('length-bounds and sanitises untrusted input in tool name echo', async () => {
+    const server = new BazaarMcpServer({ fetchWithPayment: vi.fn() });
+    const handler = captureToolHandler(server);
+
+    // Huge name with control characters
+    const dirtyHugeName = 'A'.repeat(200) + '\x00\x1f\x7f' + 'B'.repeat(50);
+    const response = await handler({
+      params: { name: dirtyHugeName, arguments: {} },
+    });
+
+    expect(response.isError).toBe(true);
+    const error = JSON.parse(response.content[0].text);
+    expect(error.code).toBe('ERR_UNKNOWN_TOOL');
+
+    // The echoed tool name in reason must be bounded to 64 chars and have no control characters
+    expect(error.reason).not.toContain('\x00');
+    expect(error.reason).not.toContain('\x1f');
+    // Ensure the 250-character input was capped
+    expect(error.reason.length).toBeLessThan(160);
+  });
+});
+
