@@ -22,6 +22,21 @@ interface CreateKeyBody {
   monthlyQuotaCents?: number
   dailyQuotaCents?: number
   overagePolicy?: 'block' | 'charge_402' | 'allow_overage'
+  expiresAt?: string
+}
+
+/**
+ * Calculates the default expiration date for API keys based on the
+ * API_KEY_DEFAULT_LIFETIME_DAYS environment variable.
+ *
+ * Returns null if the lifetime is 0 (no expiry) or if the variable is not set.
+ */
+function getDefaultExpiration(): Date | null {
+  const lifetimeDays = parseInt(process.env.API_KEY_DEFAULT_LIFETIME_DAYS ?? '365', 10)
+  if (lifetimeDays <= 0) return null
+  const expiresAt = new Date()
+  expiresAt.setDate(expiresAt.getDate() + lifetimeDays)
+  return expiresAt
 }
 
 interface CreateAdminCredentialBody {
@@ -53,10 +68,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })
       }
 
-      const { label, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy } = req.body ?? {}
+      const { label, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, expiresAt } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
         return reply.status(400).send({ error: 'label is required' })
       }
+
+      // Determine expiration: use explicit value if provided, otherwise use default
+      const expiration = expiresAt ? new Date(expiresAt) : getDefaultExpiration()
 
       // Generate the key, store only its hash, and return the plaintext once.
       const plaintext = generateApiKey()
@@ -70,6 +88,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           ...(monthlyQuotaCents !== undefined ? { monthlyQuotaCents } : {}),
           ...(dailyQuotaCents !== undefined ? { dailyQuotaCents } : {}),
           ...(overagePolicy !== undefined ? { overagePolicy } : {}),
+          ...(expiration ? { expiresAt: expiration } : {}),
         },
       })
 
@@ -81,6 +100,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         monthlyQuotaCents: record.monthlyQuotaCents,
         dailyQuotaCents: record.dailyQuotaCents,
         overagePolicy: record.overagePolicy,
+        expiresAt: record.expiresAt,
         key: plaintext,
         createdAt: record.createdAt,
       })

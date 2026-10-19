@@ -16,6 +16,14 @@ export interface ApiKeyContext {
 }
 
 /**
+ * Result of an API key lookup, including whether the key is expired.
+ */
+export interface ApiKeyLookupResult {
+  context: ApiKeyContext | null
+  expired: boolean
+}
+
+/**
  * Metadata for an authenticated admin credential, attached to each request as
  * `req.adminCredential` once the credential has been validated.
  */
@@ -52,15 +60,36 @@ export function extractBearer(header: string | undefined): string | null {
  * when the key exists and has not been revoked.
  */
 export async function lookupApiKey(plaintext: string): Promise<ApiKeyContext | null> {
+  const result = await lookupApiKeyWithExpiry(plaintext)
+  return result.expired ? null : result.context
+}
+
+/**
+ * Looks up an API key by its plaintext value, returning both the context and
+ * whether the key is expired. This allows the caller to distinguish between
+ * invalid keys and expired keys.
+ */
+export async function lookupApiKeyWithExpiry(plaintext: string): Promise<ApiKeyLookupResult> {
   const hash = hashApiKey(plaintext)
   const record = await prisma.apiKey.findUnique({ where: { hash } })
-  if (!record || record.revokedAt) return null
+  if (!record || record.revokedAt) {
+    return { context: null, expired: false }
+  }
+
+  // Check if the key has expired
+  if (record.expiresAt && new Date() > record.expiresAt) {
+    return { context: null, expired: true }
+  }
+
   return {
-    id: record.id,
-    label: record.label,
-    ratePerMin: record.ratePerMin,
-    ratePerDay: record.ratePerDay,
-    createdByAdminId: record.createdByAdminId ?? undefined,
+    context: {
+      id: record.id,
+      label: record.label,
+      ratePerMin: record.ratePerMin,
+      ratePerDay: record.ratePerDay,
+      createdByAdminId: record.createdByAdminId ?? undefined,
+    },
+    expired: false,
   }
 }
 
@@ -137,11 +166,11 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
       })
     }
 
-    const keyContext = await lookupApiKey(token)
+    const { context: keyContext, expired } = await lookupApiKeyWithExpiry(token)
     if (!keyContext) {
       return reply.status(401).send({
         error: 'Unauthorized',
-        message: 'Invalid or revoked API key.',
+        message: expired ? 'API key has expired.' : 'Invalid or revoked API key.',
       })
     }
 

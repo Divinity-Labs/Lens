@@ -26,6 +26,7 @@ import {
   hashApiKey,
   extractBearer,
   lookupApiKey,
+  lookupApiKeyWithExpiry,
   lookupAdminCredential,
   resolveAdminIdentity,
 } from '../api/auth'
@@ -106,6 +107,71 @@ describe('lookupApiKey', () => {
     })
     expect(await lookupApiKey('lens_plain')).toBeNull()
   })
+
+  it('returns null for an expired key', async () => {
+    const pastDate = new Date()
+    pastDate.setDate(pastDate.getDate() - 1)
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: null, expiresAt: pastDate,
+    })
+    expect(await lookupApiKey('lens_plain')).toBeNull()
+  })
+
+  it('returns context for a key with future expiry', async () => {
+    const futureDate = new Date()
+    futureDate.setDate(futureDate.getDate() + 30)
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: null, expiresAt: futureDate,
+    })
+    const ctx = await lookupApiKey('lens_plain')
+    expect(ctx).toEqual({ id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, createdByAdminId: undefined })
+  })
+
+  it('returns context for a key with null expiry (no expiration)', async () => {
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: null, expiresAt: null,
+    })
+    const ctx = await lookupApiKey('lens_plain')
+    expect(ctx).toEqual({ id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, createdByAdminId: undefined })
+  })
+})
+
+describe('lookupApiKeyWithExpiry', () => {
+  it('returns context and expired=false for a valid key', async () => {
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 50000, revokedAt: null,
+    })
+    const result = await lookupApiKeyWithExpiry('lens_plain')
+    expect(result.context).toEqual({ id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 50000, createdByAdminId: undefined })
+    expect(result.expired).toBe(false)
+  })
+
+  it('returns null context and expired=false for an unknown key', async () => {
+    mockFindUnique.mockResolvedValue(null)
+    const result = await lookupApiKeyWithExpiry('nope')
+    expect(result.context).toBeNull()
+    expect(result.expired).toBe(false)
+  })
+
+  it('returns null context and expired=true for an expired key', async () => {
+    const pastDate = new Date()
+    pastDate.setDate(pastDate.getDate() - 1)
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: null, expiresAt: pastDate,
+    })
+    const result = await lookupApiKeyWithExpiry('lens_plain')
+    expect(result.context).toBeNull()
+    expect(result.expired).toBe(true)
+  })
+
+  it('returns null context and expired=false for a revoked key', async () => {
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: new Date(),
+    })
+    const result = await lookupApiKeyWithExpiry('lens_plain')
+    expect(result.context).toBeNull()
+    expect(result.expired).toBe(false)
+  })
 })
 
 describe('API key auth hook', () => {
@@ -139,6 +205,22 @@ describe('API key auth hook', () => {
       headers: { authorization: 'Bearer revoked' },
     })
     expect(res.statusCode).toBe(401)
+  })
+
+  it('returns 401 for an expired key with distinguishable message', async () => {
+    const pastDate = new Date()
+    pastDate.setDate(pastDate.getDate() - 1)
+    mockFindUnique.mockResolvedValue({
+      id: 'key-1', label: 'acme', ratePerMin: 60, ratePerDay: 1000, revokedAt: null, expiresAt: pastDate,
+    })
+    const app = await buildAuthedApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/price/test',
+      headers: { authorization: 'Bearer expired' },
+    })
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toMatchObject({ error: 'Unauthorized', message: 'API key has expired.' })
   })
 
   it('allows a valid key through and attaches metadata', async () => {
@@ -333,6 +415,46 @@ describe('admin endpoints', () => {
     expect(body.monthlyQuotaCents).toBe(20000)
     expect(body.dailyQuotaCents).toBe(1000)
     expect(body.overagePolicy).toBe('allow_overage')
+  })
+
+  it('accepts explicit expiresAt on key creation', async () => {
+    const futureDate = new Date()
+    futureDate.setDate(futureDate.getDate() + 30)
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/keys',
+      headers: { authorization: 'Bearer admin-secret' },
+      payload: { label: 'acme', expiresAt: futureDate.toISOString() },
+    })
+    expect(res.statusCode).toBe(201)
+    const body = res.json()
+    expect(new Date(body.expiresAt).getTime()).toBe(futureDate.getTime())
+  })
+
+  it('applies default expiration when not provided', async () => {
+    const ORIGINAL = process.env.API_KEY_DEFAULT_LIFETIME_DAYS
+    process.env.API_KEY_DEFAULT_LIFETIME_DAYS = '30'
+    const futureDate = new Date()
+    futureDate.setDate(futureDate.getDate() + 30)
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/keys',
+      headers: { authorization: 'Bearer admin-secret' },
+      payload: { label: 'acme' },
+    })
+    expect(res.statusCode).toBe(201)
+    const body = res.json()
+    expect(body.expiresAt).toBeTruthy()
+    if (ORIGINAL === undefined) delete process.env.API_KEY_DEFAULT_LIFETIME_DAYS
+    else process.env.API_KEY_DEFAULT_LIFETIME_DAYS = ORIGINAL
   })
 
   it('revokes a key by id', async () => {

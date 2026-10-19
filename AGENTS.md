@@ -60,9 +60,10 @@ model AdminCredential {
 ```
 
 #### Modified Model: ApiKey
-Added field:
+Added fields:
 ```prisma
 createdByAdminId String? @map("created_by_admin_id")
+expiresAt        DateTime? @map("expires_at")
 ```
 
 ### Migration Steps
@@ -82,3 +83,40 @@ createdByAdminId String? @map("created_by_admin_id")
 - Test file: `src/__tests__/auth.test.ts`
 - Covers: credential generation, hashing, lookup, and admin route authentication
 - Legacy token compatibility is tested via the `resolveAdminIdentity` function
+
+## API Key Expiration
+
+### Overview
+API keys now support optional expiration dates. Keys with an `expiresAt` set to a past date are rejected with a distinguishable error message ("API key has expired." vs "Invalid or revoked API key."). Existing keys with no expiry (null `expiresAt`) continue to work indefinitely.
+
+### Configuration
+Default lifetime for new API keys is controlled by `API_KEY_DEFAULT_LIFETIME_DAYS` environment variable:
+- Default: 365 days
+- Set to 0 to disable default expiration (keys never expire unless explicitly set)
+- Can be overridden on a per-key basis via the `expiresAt` parameter when creating keys
+
+### API Changes
+
+#### Modified Endpoint: POST /admin/keys
+New optional parameter:
+- `expiresAt` (ISO 8601 date string) - Explicit expiration date for the key
+
+If not provided, the default lifetime from `API_KEY_DEFAULT_LIFETIME_DAYS` is applied.
+
+### Database Schema Changes
+
+#### Modified Model: ApiKey
+Added field:
+```prisma
+expiresAt DateTime? @map("expires_at")
+```
+
+### Behavior
+- Keys with `expiresAt` in the past are rejected during lookup
+- Keys with `expiresAt` in the future or null are accepted
+- Expired keys return a specific error message: "API key has expired."
+- Invalid/revoked keys return: "Invalid or revoked API key."
+
+### Testing
+- Test file: `src/__tests__/auth.test.ts`
+- Covers: expired keys, null expiry, future expiry, and distinguishable error messages
