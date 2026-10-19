@@ -17,6 +17,7 @@ interface CreateKeyBody {
   monthlyQuotaCents?: number
   dailyQuotaCents?: number
   overagePolicy?: 'block' | 'charge_402' | 'allow_overage'
+  scopes?: string[]
 }
 
 /**
@@ -42,7 +43,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })
       }
 
-      const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy } = req.body ?? {}
+      const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, scopes } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
         return reply.status(400).send({ error: 'label is required' })
       }
@@ -52,6 +53,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const expiration = expiresAt === undefined ? undefined : new Date(expiresAt)
       if (expiration && (!Number.isFinite(expiration.getTime()) || expiration <= new Date())) {
         return reply.status(400).send({ error: 'expiresAt must be a valid future date' })
+      }
+      if (scopes !== undefined) {
+        if (!Array.isArray(scopes) || scopes.some(s => typeof s !== 'string' || s.trim().length === 0)) {
+          return reply.status(400).send({ error: 'scopes must be an array of non-empty strings' })
+        }
       }
 
       // Generate the key, store only its hash, and return the plaintext once.
@@ -66,6 +72,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           ...(monthlyQuotaCents !== undefined ? { monthlyQuotaCents } : {}),
           ...(dailyQuotaCents !== undefined ? { dailyQuotaCents } : {}),
           ...(overagePolicy !== undefined ? { overagePolicy } : {}),
+          ...(scopes !== undefined ? { scopes: scopes.map(s => s.trim()) } : {}),
         },
       })
 
@@ -78,6 +85,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         monthlyQuotaCents: record.monthlyQuotaCents,
         dailyQuotaCents: record.dailyQuotaCents,
         overagePolicy: record.overagePolicy,
+        scopes: (record as any).scopes ?? [],
         key: plaintext,
         createdAt: record.createdAt,
       })

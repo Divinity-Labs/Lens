@@ -15,6 +15,7 @@ export interface ApiKeyContext {
   label: string
   ratePerMin: number
   ratePerDay: number
+  scopes?: string[]
 }
 
 declare module 'fastify' {
@@ -24,6 +25,8 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** When true, the API-key auth hook skips this route (e.g. health, admin). */
     public?: boolean
+    /** Required capability scope for this route (e.g. 'read:prices', 'read:history'). */
+    scope?: string
   }
 }
 
@@ -63,6 +66,7 @@ async function lookupApiKeyResult(
       label: record.label,
       ratePerMin: record.ratePerMin,
       ratePerDay: record.ratePerDay,
+      ...(record.scopes && record.scopes.length > 0 ? { scopes: record.scopes } : {}),
     },
   }
 }
@@ -157,6 +161,20 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     }
 
     req.apiKey = keyContext
+
+    const requiredScope = routeConfig.scope
+    if (requiredScope) {
+      const keyScopes = keyContext.scopes ?? []
+      // Existing keys with no scopes recorded mean "everything" (unrestricted access)
+      if (keyScopes.length > 0 && !keyScopes.includes(requiredScope) && !keyScopes.includes('*')) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          code: 'insufficient_scope',
+          message: `Insufficient scope. Required: ${requiredScope}`,
+          requiredScope,
+        })
+      }
+    }
   })
 }
 
