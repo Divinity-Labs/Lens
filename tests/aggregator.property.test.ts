@@ -125,7 +125,11 @@ describe('Price aggregator property tests', () => {
             } else {
               expect(result.route).toBe('AMM')
             }
-            expect(result.estimatedOutput).toBeCloseTo(Math.max(sdexPrice, ammPrice) * amount, 6)
+            if (result.route === 'SPLIT') {
+              expect(result.estimatedOutput).toBeCloseTo((sdexPrice * 0.5 + ammPrice * 0.5) * amount, 6)
+            } else {
+              expect(result.estimatedOutput).toBeCloseTo(Math.max(sdexPrice, ammPrice) * amount, 6)
+            }
           }
         }
       ),
