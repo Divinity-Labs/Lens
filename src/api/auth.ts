@@ -180,8 +180,7 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     }
 
     req.apiKey = keyContext
-
-    const requiredScopes = routeConfig.scopes ?? (routeConfig.scope ? [routeConfig.scope] : [])
+const requiredScopes = routeConfig.scopes ?? (routeConfig.scope ? [routeConfig.scope] : [])
     for (const scope of requiredScopes) {
       if (!hasScope(keyContext, scope)) {
         api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
@@ -194,7 +193,44 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
         })
       }
     }
+
+    recordKeyLastUsed(keyContext.id)
   })
+}
+
+const lastUsedCache = new Map<string, number>()
+
+export function getLastUsedThrottleMs(): number {
+  const seconds = parseInt(process.env.API_KEY_LAST_USED_THROTTLE_SECONDS ?? '60', 10)
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 60) * 1000
+}
+
+export function clearLastUsedCache(): void {
+  lastUsedCache.clear()
+}
+
+export function recordKeyLastUsed(keyId: string): boolean {
+  const now = Date.now()
+  const lastRecorded = lastUsedCache.get(keyId) ?? 0
+  const throttleMs = getLastUsedThrottleMs()
+  if (now - lastRecorded < throttleMs) {
+    return false
+  }
+  lastUsedCache.set(keyId, now)
+  try {
+    const updatePromise = prisma.apiKey.update({
+      where: { id: keyId },
+      data: { lastUsedAt: new Date(now) },
+    })
+    if (updatePromise && typeof updatePromise.catch === 'function') {
+      updatePromise.catch(() => {
+        // Fire-and-forget: do not block or fail auth if lastUsedAt update errors
+      })
+    }
+  } catch {
+    // Fire-and-forget: swallow errors if mock or DB client throws synchronously
+  }
+  return true
 }
 
 export const registerApiKeyAuth = fp(apiKeyAuthPlugin, { name: 'api-key-auth' })

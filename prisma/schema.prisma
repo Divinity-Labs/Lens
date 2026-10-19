@@ -303,6 +303,7 @@ model ApiKey {
   dailyQuotaCents  Int?      @default(500) @map("daily_quota_cents")
   overagePolicy    String    @default("block") @map("overage_policy")
   scopes           String[]  @default([])
+  lastUsedAt       DateTime? @map("last_used_at")
 
   @@map("api_keys")
 }
