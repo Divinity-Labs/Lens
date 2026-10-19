@@ -25,6 +25,7 @@ import { ssrfSafeFetch, SsrfError, type SsrfFetchOptions } from '../net/ssrf.js'
 import { defaultResources, snapshotResource, type LensResourceDescriptor } from './resources.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { McpRateLimiter, type McpThrottleConfig } from './rateLimiter.js';
 
 /**
  * The version advertised to MCP clients, read from `package.json` so it cannot
@@ -113,6 +114,10 @@ export interface McpServerConfig {
    * same split `priceQueries` makes for {@link LENS_PRICE_TOOL_NAME}.
    */
   resources?: LensResourceDescriptor[];
+  /**
+   * Concurrency and rate limiting policy for tool calls (#417).
+   */
+  throttle?: McpThrottleConfig;
 }
 
 export class BazaarMcpServer {
@@ -124,6 +129,7 @@ export class BazaarMcpServer {
   private budget?: SpendBudget;
   private limits: McpLimits;
   private resources: LensResourceDescriptor[];
+  private rateLimiter: McpRateLimiter;
 
   constructor(config_: McpServerConfig) {
     this.fetchWithPayment = config_.fetchWithPayment;
@@ -148,6 +154,7 @@ export class BazaarMcpServer {
     };
     this.resources =
       config_.resources ?? defaultResources({ serverName: SERVER_NAME, serverVersion: SERVER_VERSION });
+    this.rateLimiter = new McpRateLimiter(config_.throttle);
     this.server = new Server(
       {
         name: SERVER_NAME,
@@ -274,6 +281,12 @@ export class BazaarMcpServer {
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const toolName = request.params.name;
+      const throttle = this.rateLimiter.acquire(toolName);
+      if (!throttle.allowed) {
+        return this.createErrorResponse(throttle.code, throttle.reason, { retryAfterMs: throttle.retryAfterMs });
+      }
+      try {
       if (request.params.name === LENS_PRICE_TOOL_NAME) {
         if (!this.priceQueries) {
           return this.createErrorResponse(
@@ -479,7 +492,10 @@ export class BazaarMcpServer {
         }
       }
 
-      throw new Error(`Unknown tool: ${request.params.name}`);
+        throw new Error(`Unknown tool: ${request.params.name}`);
+      } finally {
+        throttle.release();
+      }
     });
   }
 
@@ -567,13 +583,13 @@ export class BazaarMcpServer {
     );
   }
 
-  private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown>) {
+  private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown> | { retryAfterMs?: number }) {
     // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
     const payload = {
       isError: true,
       code,
       reason,
-      ...(details ? { details } : {}),
+      ...(details ? (('retryAfterMs' in details) ? details : { details }) : {}),
     };
     return {
       content: [{ type: 'text', text: JSON.stringify(payload) }],

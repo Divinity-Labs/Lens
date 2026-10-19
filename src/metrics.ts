@@ -180,6 +180,13 @@ export const db_query_duration_seconds = new Histogram({
   registers: [register]
 })
 
+export const mcp_tool_rejections_total = new Counter({
+  name: 'mcp_tool_rejections_total',
+  help: 'Total number of MCP tool calls rejected due to rate limiting or concurrency caps',
+  labelNames: ['tool', 'reason'],
+  registers: [register],
+})
+
 export async function getMetrics() {
   return await register.metrics()
 }

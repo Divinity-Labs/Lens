@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BazaarMcpServer, SERVER_VERSION, SERVER_NAME } from '../src/mcp/server';
 import { CallToolRequestSchema, ListToolsRequestSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import { PAID_CALL_HTTP_METHODS } from '../src/mcp/toolSchemas';
+import { mcp_tool_rejections_total } from '../src/metrics.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -854,3 +855,156 @@ describe('cumulative spend budget', () => {
     expect(() => parseUsdToNanodollars('$1.0000000000')).toThrow(/more than 9 decimal places/);
   })
 })
+describe('BazaarMcpServer — Rate Limiting & Concurrency (#417)', () => {
+  function captureToolHandler(server: any) {
+    let handler: any = null;
+    server.server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) handler = fn;
+    };
+    server.setupHandlers();
+    return handler;
+  }
+
+  it('throttles when per-tool rate limit is exceeded with structured error and retry hint', async () => {
+    const mockFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ ok: true }),
+      })
+    );
+    const server = new BazaarMcpServer({
+      fetchWithPayment: mockFetch,
+      paidCallAllowlist: ['example.com'],
+      throttle: {
+        rateLimits: {
+          paid_call: { maxCalls: 2, windowMs: 10_000 },
+        },
+      },
+    });
+
+    const handler = captureToolHandler(server);
+
+    // Call 1: succeeds
+    const res1 = await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/item1' } } });
+    expect(res1.isError).toBeFalsy();
+
+    // Call 2: succeeds
+    const res2 = await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/item2' } } });
+    expect(res2.isError).toBeFalsy();
+
+    // Call 3: throttled
+    const res3 = await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/item3' } } });
+    expect(res3.isError).toBe(true);
+
+    const payload = JSON.parse(res3.content[0].text);
+    expect(payload.code).toBe('ERR_RATE_LIMITED');
+    expect(payload.reason).toMatch(/rate limit.*exceeded/i);
+    expect(payload.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it('caps concurrent in-flight tool calls and returns ERR_CONCURRENCY_EXCEEDED with retry hint', async () => {
+    let resolveFirstCall: (value: any) => void;
+    const pendingPromise = new Promise((resolve) => {
+      resolveFirstCall = resolve;
+    });
+
+    const mockFetch = vi.fn().mockImplementation(() => pendingPromise);
+
+    const server = new BazaarMcpServer({
+      fetchWithPayment: mockFetch,
+      paidCallAllowlist: ['example.com'],
+      throttle: {
+        toolConcurrency: {
+          paid_call: 1, // Only 1 concurrent call allowed
+        },
+      },
+    });
+
+    const handler = captureToolHandler(server);
+
+    // Call 1: starts and remains in-flight
+    const call1Promise = handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/call1' } } });
+
+    // Call 2: issued while Call 1 is still in flight -> immediately rejected with ERR_CONCURRENCY_EXCEEDED
+    const res2 = await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/call2' } } });
+    expect(res2.isError).toBe(true);
+
+    const payload = JSON.parse(res2.content[0].text);
+    expect(payload.code).toBe('ERR_CONCURRENCY_EXCEEDED');
+    expect(payload.reason).toMatch(/concurrent.*exceeded/i);
+    expect(payload.retryAfterMs).toBeDefined();
+
+    // Release Call 1
+    resolveFirstCall!(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const res1 = await call1Promise;
+    expect(res1.isError).toBeFalsy();
+  });
+
+  it('increments mcp_tool_rejections_total metric on throttle rejections', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn(),
+      paidCallAllowlist: ['example.com'],
+      throttle: {
+        rateLimits: {
+          paid_call: { maxCalls: 1, windowMs: 60_000 },
+        },
+      },
+    });
+
+    const handler = captureToolHandler(server);
+
+    // Call 1: ok
+    await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/1' } } });
+
+    // Call 2: rejected
+    const rejected = await handler({ params: { name: 'paid_call', arguments: { url: 'http://example.com/2' } } });
+    expect(rejected.isError).toBe(true);
+
+    const metricsSnapshot = await (mcp_tool_rejections_total as any).get();
+    const rateLimitMetric = metricsSnapshot.values.find(
+      (v: any) => v.labels.tool === 'paid_call' && v.labels.reason === 'rate_limit'
+    );
+    expect(rateLimitMetric).toBeDefined();
+    expect(rateLimitMetric.value).toBeGreaterThanOrEqual(1);
+  });
+
+  it('bursts are throttled immediately without queuing or blocking indefinitely', async () => {
+    const server = new BazaarMcpServer({
+      fetchWithPayment: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })),
+      paidCallAllowlist: ['example.com'],
+      throttle: {
+        rateLimits: {
+          bazaar_search: { maxCalls: 3, windowMs: 5000 },
+        },
+      },
+    });
+
+    const handler = captureToolHandler(server);
+
+    const start = Date.now();
+    // Burst of 10 requests sent at once
+    const requests = Array.from({ length: 10 }).map((_, i) =>
+      handler({
+        params: {
+          name: 'bazaar_search',
+          arguments: { url: `https://ok.example`, query: `q${i}` },
+        },
+      })
+    );
+
+    const results = await Promise.all(requests);
+    const elapsed = Date.now() - start;
+
+    // Must return fast (< 1500ms), proving requests are rejected immediately rather than queued
+    expect(elapsed).toBeLessThan(1500);
+
+    const throttled = results.filter((r) => {
+      if (!r.isError) return false;
+      const parsed = JSON.parse(r.content[0].text);
+      return parsed.code === 'ERR_RATE_LIMITED' || parsed.code === 'ERR_CONCURRENCY_EXCEEDED';
+    });
+    expect(throttled.length).toBeGreaterThan(0);
+  });
+});
+
