@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import { z } from 'zod'
 import { Networks, StrKey } from '@stellar/stellar-sdk'
+import { createLogger } from './logger'
 import type { WatchedPair, AssetId } from './types'
 
 // ── Environment Schema & Validation (#338) ────────────────────────────────────
@@ -73,6 +74,7 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
 }
 
 export const validatedEnv = validateEnv()
+const log = createLogger('config')
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -138,6 +140,21 @@ function makePairKey(a: AssetId, b: AssetId): string {
   return [aStr, bStr].sort().join('/')
 }
 
+/**
+ * Parse a comma-separated hostname allowlist into a normalized, de-duplicated
+ * list. Empty entries and surrounding whitespace are dropped; hostnames are
+ * lowercased and any IPv6 brackets / trailing dot are stripped so the stored
+ * form matches what net/ssrf.ts compares against.
+ */
+function parseAllowedHosts(raw: string): string[] {
+  const seen = new Set<string>()
+  for (const part of raw.split(',')) {
+    const host = part.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '')
+    if (host.length > 0) seen.add(host)
+  }
+  return Array.from(seen)
+}
+
 const MAINNET_DEFAULT_PAIRS =
   'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM'
 
@@ -175,8 +192,9 @@ function parseWatchedPairs(raw: string): WatchedPair[] {
 function isUsableContractId(id: string, envVar: string): boolean {
   if (id === '') return false
   if (StrKey.isValidContract(id)) return true
-  console.warn(
-    `[config] ${envVar}="${id}" is not a valid Soroban contract id (expected a 56-character C... address); the feature that needs it is disabled`
+  log.warn(
+    { envVar, value: id },
+    'invalid Soroban contract id; the feature that needs it is disabled'
   )
   return false
 }
@@ -327,6 +345,14 @@ const globalConfig = {
   http: {
     timeoutMs: validatedEnv.HTTP_TIMEOUT_MS,
   },
+  outbound: {
+    // One operator-maintained list for every outbound fetch the app makes to a
+    // caller-supplied target (Bazaar MCP discovery now, payment endpoints later).
+    // Empty = "any public host"; a non-empty list narrows reach to these
+    // hostnames. It never re-opens a private/link-local/metadata address — that
+    // block is unconditional (see net/ssrf.ts).
+    allowedHosts: parseAllowedHosts(process.env.OUTBOUND_ALLOWED_HOSTS ?? ''),
+  },
 } as const
 
 // ── Per-network map ───────────────────────────────────────────────────────────
@@ -407,6 +433,7 @@ export const config = {
   indexer: globalConfig.indexer,
   cache:   globalConfig.cache,
   http:    globalConfig.http,
+  outbound: globalConfig.outbound,
 
   // ── Auth, Security, Facilitator & Feature flags (#338) ──────────────────────
   get adminToken() { return process.env.ADMIN_TOKEN },

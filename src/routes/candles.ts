@@ -4,15 +4,7 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { formatZodError } from '../validation/formatter'
 import '../middleware/network'
-
-const INTERVAL_SECONDS: Record<string, number> = {
-  '1m': 60,
-  '5m': 300,
-  '15m': 900,
-  '1h': 3600,
-  '4h': 14_400,
-  '1d': 86_400,
-}
+import { INTERVAL_SECONDS } from '../candleIntervals'
 
 const CandleParamsSchema = z.object({
   assetA: z.string().min(1, 'assetA is required'),

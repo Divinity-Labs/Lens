@@ -192,7 +192,8 @@ export interface CompareResponse {
   price: number | null;
   timestamp: string | null;
   deviationPct: number | null;
-  status: 'available' | 'unreachable' | 'not_configured'
+  status: 'available' | 'unreachable' | 'empty' | 'not_configured';
+  ageSeconds: number | null
 }[]
 }
 

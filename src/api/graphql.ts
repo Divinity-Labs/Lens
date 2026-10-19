@@ -8,26 +8,38 @@ import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork } from '../config'
+import { config, activeNetwork, type NetworkName } from '../config'
 import { parseAssetStr } from '../pairsRegistry'
+import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
+import type { OracleAdapter } from '../ingest/oracles/adapter'
+import { compareOracles } from '../services/oracleComparison'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
+import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
+
+const WINDOW_SECONDS: Record<string, number> = {
+  ...HISTORY_INTERVAL_SECONDS,
+  '24h': 86400,
+}
 
 // Mercurius pubsub topic that carries every new price. A single app-level
 // listener bridges the ingesters' in-process `priceEmitter` onto this topic;
 // each subscriber then filters it down to the pair they asked for.
 const PRICE_TOPIC = 'PRICE_UPDATED'
-
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked.
-const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED', 'QUOTA_EXCEEDED'])
+const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
 function isUserFacing(err: GraphQLError): boolean {
+  // No originalError means graphql-js itself rejected the document (syntax or
+  // validation), which only describes the caller's own query.
   const original = err.originalError as
     | { extensions?: { code?: unknown }; errors?: unknown; statusCode?: unknown }
     | undefined
   if (!original) return true
+  // Mercurius wraps document validation failures (and other request-level
+  // 4xx faults) in a Fastify error before they reach the formatter.
   if (Array.isArray(original.errors)) return true
   if (typeof original.statusCode === 'number' && original.statusCode < 500) return true
   const code = original.extensions?.code
@@ -50,10 +62,6 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
   return defaultErrorFormatter({ ...execution, errors }, ctx)
 }
 
-/**
- * Custom Decimal scalar preserving 18-decimal precision (#371).
- * Serializes as a string to avoid IEEE 754 double precision loss on large/small monetary figures.
- */
 export const DecimalScalar = new GraphQLScalarType({
   name: 'Decimal',
   description: 'High-precision decimal amount represented as a string without float rounding',
@@ -82,34 +90,23 @@ export const DecimalScalar = new GraphQLScalarType({
   },
 })
 
-
-const schema = `
-  """
-  High-precision monetary amount preserving full 18-decimal precision without IEEE 754 float rounding.
-  Serializes as a string.
-  """
+export const schema = `
   scalar Decimal
-
   type AggregatedPrice {
     assetA: String!
     assetB: String!
     pairKey: String!
     price: Float!
-    priceDecimal: Decimal!
     sdexPrice: Float!
-    sdexPriceDecimal: Decimal
     ammPrice: Float!
-    ammPriceDecimal: Decimal
     bestRoute: String!
     volume24h: Float!
-    volume24hDecimal: Decimal
     sdexVolume24h: Float!
     ammVolume24h: Float!
     vwap1m: Float!
     vwap5m: Float!
     vwap1h: Float!
     vwap24h: Float!
-    vwap24hDecimal: Decimal
     priceChange24h: Float!
     lastUpdated: String!
     sources: Int!
@@ -143,10 +140,40 @@ const schema = `
   type PriceUpdate {
     pair: String!
     price: Float!
-    priceDecimal: Decimal!
     ts: String!
     """Which chain the price came from — testnet or mainnet."""
     network: String!
+  }
+
+  enum OracleSourceStatus {
+    NOT_CONFIGURED
+    AVAILABLE
+    UNREACHABLE
+    EMPTY
+  }
+
+  type OracleSource {
+    name: String!
+    price: Float
+    timestamp: String
+    deviationPct: Float
+    """
+    UNREACHABLE means the adapter failed; EMPTY means it is configured but
+    returned no quote.
+    """
+    status: OracleSourceStatus!
+    ageSeconds: Int
+  }
+
+  type OracleComparison {
+    asset: String!
+    network: String!
+    lens: Float
+    reflector: Float
+    deviationPct: Float
+    status: String!
+    fetchedAt: String!
+    oracles: [OracleSource!]!
   }
 
   type Query {
@@ -159,57 +186,65 @@ const schema = `
       a GraphQL error whose extensions.code is PAIR_NOT_FOUND.
     - A tracked pair with no trade data yet is not an error: it resolves to an
       AggregatedPrice with zeroed figures rather than null or an error.
+
+    The result is only null if the resolver itself cannot produce a payload;
+    clients should branch on extensions.code, not on null.
     """
     getPrice(assetA: String!, assetB: String!): AggregatedPrice
-
-    """
-    Best execution route between two assets for a given trade size.
-    Returns null when the pair is unknown or has no liquidity.
-    """
     getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-
     """
-    Historical aggregated OHLCV candle buckets for a pair and window
-    (e.g. window "1h"). Returns empty list when no buckets exist yet.
+    Returns historical price aggregate buckets for a pair over an optional [from, to] time range.
+
+    The time range is inclusive at both ends: a bucket is included if bucket >= from and bucket <= to.
+    Because both endpoints are inclusive, querying adjacent windows (e.g. [t0, t1] and [t1, t2]) will
+    return the boundary bucket at t1 in both results.
     """
     getPriceHistory(
       assetA: String!
       assetB: String!
       window: String!
       limit: Int
-    ): [PriceBucket!]!
-
-    """List of pair keys currently being tracked by the aggregator."""
-    listPairs: [String!]!
+      from: String
+      to: String
+    ): [PriceBucket]
+    listPairs: [String]!
+    """
+    Compares the Lens price for an asset against every configured oracle.
+    The network argument defaults to the active network.
+    """
+    oracle(asset: String!, network: String): OracleComparison
   }
 
   type Subscription {
     """
-    Real-time price feed for a pair.
+    Streams a PriceUpdate every time an ingester records a new price for the
+    given pair.
 
-    The client filters by pair (required, e.g. "XLM/USDC"). When 'network' is
-    omitted (or null), updates from every enabled chain are pushed; pass
-    "testnet" or "mainnet" to restrict the stream to one chain.
+    The network argument narrows the stream to one chain. It is optional, and
+    omitting it delivers every enabled network — the right default only if you
+    read the network field on each message, since a dual-network deployment
+    otherwise interleaves two chains prices on one stream.
     """
     priceUpdated(pair: String!, network: String): PriceUpdate!
   }
 `
 
 function makePairKey(a: string, b: string): string {
-  const norm = (s: string) => s.toLowerCase() === 'native' ? 'XLM' : s.toUpperCase()
-  return [norm(a), norm(b)].sort().join('/')
+  return [a, b].sort().join('/')
 }
 
 function findPair(assetA: string, assetB: string) {
   const normalize = (a: string) => a.toLowerCase() === 'native' ? 'XLM' : a.split(':')[0].toUpperCase()
   const cA = normalize(assetA)
   const cB = normalize(assetB)
-  return config.pairs?.find(p => {
+  return config.pairs.find(p => {
     const pA = p.assetA.code.toUpperCase()
     const pB = p.assetB.code.toUpperCase()
     return (cA === pA && cB === pB) || (cA === pB && cB === pA)
   })
 }
+
+const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
 
 const resolvers = {
   Decimal: DecimalScalar,
@@ -234,6 +269,13 @@ const resolvers = {
       }
       const pairKey = pair.pairKey
 
+      // These queries carry no network argument, so they resolve against the
+      // active network's pair list (findPair above) and read that same
+      // network's price data — scoped, not pooled across both chains.
+      // Per-request network selection on the GraphQL surface is separate work.
+      // The cache key is network-prefixed to match the REST route and the
+      // refresh worker, so no deployment can serve another network's cached
+      // payload under a network-less key.
       const cacheKey = `${activeNetwork}:${pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
@@ -243,15 +285,7 @@ const resolvers = {
       const agg = await getAggregatedPrice(pairKey, activeNetwork)
       const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
       return {
-        assetA,
-        assetB,
-        pairKey,
-        ...agg,
-        priceDecimal: (agg as any).priceDecimal ?? String(agg.price),
-        sdexPriceDecimal: (agg as any).sdexPriceDecimal ?? String(agg.sdexPrice),
-        ammPriceDecimal: (agg as any).ammPriceDecimal ?? String(agg.ammPrice),
-        volume24hDecimal: (agg as any).volume24hDecimal ?? String(agg.volume24h),
-        vwap24hDecimal: (agg as any).vwap24hDecimal ?? String(agg.vwap24h),
+        assetA, assetB, pairKey, ...agg,
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
       }
@@ -268,21 +302,86 @@ const resolvers = {
 
     async getPriceHistory(
       _: unknown,
-      { assetA, assetB, window, limit = 100 }: { assetA: string; assetB: string; window: string; limit?: number }
+      {
+        assetA,
+        assetB,
+        window,
+        limit = 100,
+        from,
+        to,
+      }: {
+        assetA: string
+        assetB: string
+        window: string
+        limit?: number
+        from?: string
+        to?: string
+      }
     ) {
+      let fromDate: Date | undefined
+      let toDate: Date | undefined
+
+      if (from !== undefined && from !== null) {
+        fromDate = new Date(from)
+        if (isNaN(fromDate.getTime())) {
+          throw new ErrorWithProps('from must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+        }
+      }
+
+      if (to !== undefined && to !== null) {
+        toDate = new Date(to)
+        if (isNaN(toDate.getTime())) {
+          throw new ErrorWithProps('to must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+        }
+      }
+
+      if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+        throw new ErrorWithProps('from must be before to', { code: 'INVALID_INPUT' })
+      }
+
+      const intervalSecs = WINDOW_SECONDS[window] ?? HISTORY_INTERVAL_SECONDS[window] ?? 60
+
+      if (fromDate || toDate) {
+        const effectiveTo = toDate ?? new Date()
+        const effectiveFrom = fromDate ?? new Date(effectiveTo.getTime() - 24 * 60 * 60 * 1000)
+        const spanSecs = (effectiveTo.getTime() - effectiveFrom.getTime()) / 1000
+        if (spanSecs / intervalSecs > MAX_HISTORY_POINTS) {
+          throw new ErrorWithProps(
+            `requested window is too large for interval=${window} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`,
+            { code: 'INVALID_INPUT' }
+          )
+        }
+      }
+
       const pairKey = makePairKey(assetA, assetB)
+      const conditions: string[] = ['pair_key = $1', 'window = $2']
+      const params: any[] = [pairKey, window]
+
+      if (fromDate) {
+        params.push(fromDate)
+        conditions.push(`bucket >= $${params.length}`)
+      }
+
+      if (toDate) {
+        params.push(toDate)
+        conditions.push(`bucket <= $${params.length}`)
+      }
+
+      params.push(Math.min(limit, 1000))
+      const limitParam = `$${params.length}`
+
       const result = await pgPool.query(
         `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
                 volume::float, trade_count, open_price::float, close_price::float,
                 high_price::float, low_price::float
          FROM price_aggregates
-         WHERE pair_key = $1 AND window = $2
+         WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
-         LIMIT $3`,
-        [pairKey, window, Math.min(limit, 1000)]
+         LIMIT ${limitParam}`,
+        params
       )
       return result.rows.map(r => ({
-        bucket: r.bucket.toISOString(),
+        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
         window: r.window,
         vwap: r.vwap,
         sdexVwap: r.sdex_vwap,
@@ -297,7 +396,26 @@ const resolvers = {
     },
 
     listPairs() {
-      return (config.pairs ?? []).map(p => p.pairKey)
+      return config.pairs.map(p => p.pairKey)
+    },
+
+    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
+      if (network != null && network !== 'testnet' && network !== 'mainnet') {
+        throw new ErrorWithProps('network must be one of: testnet, mainnet', {
+          code: 'INVALID_INPUT',
+          field: 'network',
+        })
+      }
+      const comparison = await compareOracles(
+        asset.toUpperCase(),
+        (network ?? activeNetwork) as NetworkName,
+        oracleAdapters
+      )
+      if (!comparison) return null
+      return {
+        ...comparison,
+        oracles: comparison.oracles.map(o => ({ ...o, status: o.status.toUpperCase() })),
+      }
     },
   },
 
@@ -310,85 +428,39 @@ const resolvers = {
         { pair: string; network?: string | null }
       >(
         (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
+        // Both loops publish to one topic, so the network filter has to happen
+        // here. Omitting `network` keeps every chain — the message carries its
+        // own `network` field, so the subscriber can still tell them apart.
         (payload, { pair, network }) =>
           payload.priceUpdated.pair === pair &&
+          // == null, not === undefined: a client that passes the variable
+          // explicitly sends null rather than omitting it, and both mean
+          // "every network". Comparing against undefined alone would filter
+          // out every message for those clients.
           (network == null || payload.priceUpdated.network === network)
       ),
-      resolve: (payload: { priceUpdated: PricePublishedEvent }) => {
-        const p = payload.priceUpdated
-        return {
-          ...p,
-          priceDecimal: p.priceDecimal ?? String(p.price),
-        }
-      },
     },
   },
 }
 
-export const activeSubscriptionsPerKey = new Map<string, number>()
-
 export async function registerGraphQL(app: FastifyInstance) {
-  const maxWsConcurrent = config.maxWsSubscriptionsPerKey ?? 10
-  const isGraphiqlEnabled =
-    config.enableGraphiql !== undefined
-      ? config.enableGraphiql === 'true'
-      : config.nodeEnv !== 'production'
-
   await app.register(mercurius, {
     schema,
     resolvers,
-    graphiql: isGraphiqlEnabled,
+    graphiql: true,
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
+      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
+      // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
-      onConnect: (data) => {
-        const params = (data.connectionParams ?? {}) as Record<string, unknown>
-        const apiKey = (params.apiKey || params.authToken || params.authorization) as string | undefined
-
-        // Enforce authentication if requireApiKey is enabled and running in production or explicit auth required
-        const isAuthRequired = (config as any).requireSubscriptionAuth ?? (config.nodeEnv === 'production')
-        if (isAuthRequired && !apiKey) {
-          return false
-        }
-
-        if (apiKey) {
-          const currentCount = activeSubscriptionsPerKey.get(apiKey) ?? 0
-          if (currentCount >= maxWsConcurrent) {
-            throw new Error(`Quota exceeded: Maximum ${maxWsConcurrent} concurrent subscriptions reached for this API key`)
-          }
-          activeSubscriptionsPerKey.set(apiKey, currentCount + 1)
-        }
-        return { apiKey }
-      },
-      onDisconnect: (ctx) => {
-        const apiKey = (ctx as any)?.apiKey
-        if (apiKey && activeSubscriptionsPerKey.has(apiKey)) {
-          const count = activeSubscriptionsPerKey.get(apiKey)!
-          if (count <= 1) {
-            activeSubscriptionsPerKey.delete(apiKey)
-          } else {
-            activeSubscriptionsPerKey.set(apiKey, count - 1)
-          }
-        }
-      },
     },
   })
 
-  const forwardGraphQL = async (req: any, reply: any) => {
-    const res = await app.inject({
-      method: req.method,
-      url: '/graphql',
-      payload: req.body,
-      query: req.query,
-      headers: req.headers,
-    })
-    return reply.code(res.statusCode).headers(res.headers).send(res.body)
-  }
-  app.get('/v1/graphql', { config: { public: true } }, forwardGraphQL)
-  app.post('/v1/graphql', { config: { public: true } }, forwardGraphQL)
-
+  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
+  // topic. Mercurius wraps the payload under the subscription field name so
+  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
     app.graphql.pubsub.publish({
       topic: PRICE_TOPIC,
@@ -397,8 +469,9 @@ export async function registerGraphQL(app: FastifyInstance) {
   }
   priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
 
+  // Detach the listener when the server shuts down so repeated
+  // register/close cycles (e.g. in tests) don't leak listeners.
   app.addHook('onClose', async () => {
     priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
   })
 }
-
