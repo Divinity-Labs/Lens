@@ -36,6 +36,34 @@ export const statusResponseSchema = {
   },
 } as const
 
+/** GET /live (#334) */
+export const liveResponseSchema = {
+  type: 'object',
+  required: ['status'],
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', const: 'live' },
+  },
+} as const
+
+/** GET /ready (#334) */
+export const readyResponseSchema = {
+  type: 'object',
+  required: ['status', 'checks'],
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', enum: ['ready', 'unhealthy'] },
+    checks: {
+      type: 'object',
+      required: ['database', 'redis'],
+      properties: {
+        database: { type: 'boolean' },
+        redis: { type: 'boolean' },
+      },
+    },
+  },
+} as const
+
 /** GET /price/:assetA/:assetB */
 export const priceResponseSchema = {
   type: 'object',
