@@ -267,6 +267,17 @@ model ApiKey {
   monthlyQuotaCents Int?     @default(10000) @map("monthly_quota_cents")
   dailyQuotaCents  Int?      @default(500) @map("daily_quota_cents")
   overagePolicy    String    @default("block") @map("overage_policy")
+  createdByAdminId String?   @map("created_by_admin_id")
 
   @@map("api_keys")
+}
+
+model AdminCredential {
+  id         String    @id @default(uuid())
+  name       String    @unique
+  hash       String    @unique
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("admin_credentials")
 }
