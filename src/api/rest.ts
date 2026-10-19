@@ -4,6 +4,7 @@ import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
+import { getCachedSchemaVerification, verifyDatabaseSchema } from '../db/schemaVerify'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
@@ -95,6 +96,42 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   })
 
+
+  // GET /ready — public readiness probe (no API key required). Reports the
+  // schema verification captured at startup; if boot has not run it yet (for
+  // example in a test harness), verify now so the answer is still live.
+  app.get('/ready', { config: { public: true } }, async (req, reply) => {
+    let schema = getCachedSchemaVerification()
+    if (!schema) {
+      try {
+        schema = await verifyDatabaseSchema(pgPool)
+      } catch (err) {
+        req.log.error({ err }, 'readiness schema check failed')
+        return reply.status(503).send({
+          ready: false,
+          checks: { schema: { ok: false, error: 'database_unavailable' } },
+        })
+      }
+    }
+    if (!schema.valid) {
+      return reply.status(503).send({
+        ready: false,
+        checks: {
+          schema: {
+            ok: false,
+            missingTables: schema.missingTables,
+            missingColumns: schema.missingColumns,
+          },
+        },
+        checkedAt: schema.checkedAt,
+      })
+    }
+    return {
+      ready: true,
+      checks: { schema: { ok: true } },
+      checkedAt: schema.checkedAt,
+    }
+  })
 
   // GET /price/:assetA/:assetB
   app.get<{ Params: { assetA: string; assetB: string } }>(

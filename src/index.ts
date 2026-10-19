@@ -9,6 +9,7 @@ import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
 import { pgPool } from './db'
+import { assertSchemaValid } from './db/schemaVerify'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
@@ -51,6 +52,11 @@ async function main() {
 
   await pgPool.connect()
   log.info('postgresql connected')
+
+  // Fail before listening if the database does not have the tables/columns
+  // this build expects. The guard is cached, so /ready is a memory read.
+  await assertSchemaValid(pgPool)
+  log.info('database schema verified')
 
   // ── Load persisted runtime pairs ──────────────────────────────────────────
   await loadPersistedPairs()
