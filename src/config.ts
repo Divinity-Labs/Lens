@@ -269,6 +269,7 @@ const globalConfig = {
   },
   cache: {
     priceTtl: parseInt(process.env.PRICE_CACHE_TTL ?? '10', 10),
+    assetTtl: parseInt(process.env.ASSET_CACHE_TTL ?? '3600', 10),
   },
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),

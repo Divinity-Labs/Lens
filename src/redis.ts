@@ -63,3 +63,24 @@ export async function setCachedPrice(pairKey: string, data: object, ttlSeconds: 
     // Redis cache miss is non-fatal
   }
 }
+
+export async function getCachedAsset(network: string, assetKey: string): Promise<string | null> {
+  try {
+    return await redis.get(`lens:${network}:asset:${assetKey}`)
+  } catch {
+    return null
+  }
+}
+
+export async function setCachedAsset(
+  network: string,
+  assetKey: string,
+  data: object,
+  ttlSeconds: number
+): Promise<void> {
+  try {
+    await redis.set(`lens:${network}:asset:${assetKey}`, JSON.stringify(data), 'EX', ttlSeconds)
+  } catch {
+    // Redis cache miss is non-fatal
+  }
+}

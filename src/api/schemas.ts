@@ -318,6 +318,98 @@ export const benchmarkResponseSchema = {
   },
 } as const
 
+/** Asset metadata object */
+export const assetMetadataSchema = {
+  type: 'object',
+  required: [
+    'code',
+    'issuer',
+    'name',
+    'homeDomain',
+    'domain',
+    'decimals',
+    'status',
+    'verified',
+    'checkedAt',
+    'dateChecked',
+  ],
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string' },
+    issuer: { type: ['string', 'null'] },
+    name: { type: ['string', 'null'] },
+    homeDomain: { type: ['string', 'null'] },
+    domain: { type: ['string', 'null'] },
+    decimals: { type: 'integer' },
+    displayDecimals: { type: ['integer', 'null'] },
+    status: { type: 'string', enum: ['verified', 'unverified'] },
+    verified: { type: 'boolean' },
+    checkedAt: { type: 'string' },
+    dateChecked: { type: 'string' },
+    contractId: { type: ['string', 'null'] },
+    tomlUrl: { type: ['string', 'null'] },
+    verification: {
+      type: 'object',
+      required: ['status', 'verified', 'checkedAt', 'tomlUrl'],
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['verified', 'unverified'] },
+        verified: { type: 'boolean' },
+        checkedAt: { type: 'string' },
+        tomlUrl: { type: ['string', 'null'] },
+      },
+    },
+    provenance: {
+      type: 'object',
+      required: ['source', 'checkedAt', 'tomlUrl', 'verified'],
+      additionalProperties: false,
+      properties: {
+        source: { type: 'string' },
+        checkedAt: { type: 'string' },
+        tomlUrl: { type: ['string', 'null'] },
+        verified: { type: 'boolean' },
+      },
+    },
+  },
+} as const
+
+/** GET /assets */
+export const assetsResponseSchema = {
+  type: 'object',
+  required: ['network', 'assets'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    assets: {
+      type: 'array',
+      items: assetMetadataSchema,
+    },
+  },
+} as const
+
+/** GET /assets/:code */
+export const assetDetailResponseSchema = {
+  type: 'object',
+  required: [
+    'network',
+    'code',
+    'issuer',
+    'name',
+    'homeDomain',
+    'domain',
+    'decimals',
+    'status',
+    'verified',
+    'checkedAt',
+    'dateChecked',
+  ],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    ...assetMetadataSchema.properties,
+  },
+} as const
+
 /**
  * Install response-shape validation on a Fastify instance.
  *

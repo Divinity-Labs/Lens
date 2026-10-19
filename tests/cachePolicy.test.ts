@@ -24,6 +24,12 @@ describe('cachePolicyFor', () => {
     expect(cachePolicyFor('GET', '/prices/history', 200)).toBe('public, max-age=60')
   })
 
+  it('gives /discovery/resources and /assets a long max-age (1h)', () => {
+    expect(cachePolicyFor('GET', '/discovery/resources', 200)).toBe('public, max-age=3600')
+    expect(cachePolicyFor('GET', '/assets', 200)).toBe('public, max-age=3600')
+    expect(cachePolicyFor('GET', '/assets/:code', 200)).toBe('public, max-age=3600')
+  })
+
   it('marks per-caller responses no-store', () => {
     expect(cachePolicyFor('GET', '/usage/me', 200)).toBe('no-store')
     expect(cachePolicyFor('GET', '/admin/keys', 200)).toBe('no-store')

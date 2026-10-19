@@ -31,9 +31,10 @@ beforeAll(async () => {
     onRoute: (route: RouteOptions) => {
       const methods = Array.isArray(route.method) ? route.method : [route.method]
       for (const method of methods) {
-        // HEAD is auto-generated from GET and OPTIONS is framework-level;
-        // neither needs its own OpenAPI operation.
-        if (method === 'HEAD' || method === 'OPTIONS') continue
+        // HEAD is auto-generated from GET, OPTIONS is framework-level,
+        // and QUERY is an experimental HTTP method not supported in OpenAPI 3.0;
+        // none of them need their own OpenAPI operation.
+        if (method === 'HEAD' || method === 'OPTIONS' || method === 'QUERY') continue
         registered.push({ method, path: toOpenApiPath(route.url) })
       }
     },
