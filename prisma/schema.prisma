@@ -271,3 +271,23 @@ model ApiKey {
 
   @@map("api_keys")
 }
+
+model OracleComparison {
+  id              String    @id @default(uuid())
+  network         String    @default("testnet")
+  asset           String
+  oracle          String
+  lensPrice       Decimal?  @map("lens_price") @db.Decimal(36, 18)
+  oraclePrice     Decimal?  @map("oracle_price") @db.Decimal(36, 18)
+  deviationPct    Decimal?  @map("deviation_pct") @db.Decimal(10, 4)
+  status          String
+  venues          String[]  @default([])
+  sampleCount     Int       @default(0) @map("sample_count")
+  oracleTimestamp DateTime? @map("oracle_timestamp")
+  ageSeconds      Int?      @map("age_seconds")
+  timestamp       DateTime  @default(now())
+
+  @@index([network, asset, timestamp(sort: Desc)])
+  @@index([network, asset, oracle, timestamp(sort: Desc)])
+  @@map("oracle_comparisons")
+}

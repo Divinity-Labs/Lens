@@ -152,6 +152,8 @@ export function cachePolicyFor(
     case '/price/vwap/:assetA/:assetB':
     case '/prices/history':
     case '/compare/:asset':
+    case '/compare/:asset/history':
+    case '/compare/:asset/summary':
     case '/spreads/:asset':
       policy = 'public, max-age=60'
       break

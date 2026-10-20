@@ -991,6 +991,154 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /compare/{asset}/history:
+    get:
+      operationId: compareAssetHistory
+      summary: Query historical oracle comparison series and window summary statistics
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: oracle
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to comparisons for a specific oracle adapter
+          example: reflector
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [5m, 15m, 1h, 24h, 7d, 30d]
+          description: Lookback window ending now (ignored if both from and to are specified)
+          example: 24h
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start of the query window (ISO 8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End of the query window (ISO 8601)
+        - name: band
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            default: 1.0
+          description: Deviation percentage threshold for outside-band duration calculation
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+          description: Maximum number of history points to return
+      responses:
+        '200':
+          description: Historical oracle comparison points and window summary statistics
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleComparisonHistoryResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /compare/{asset}/summary:
+    get:
+      operationId: compareAssetSummary
+      summary: Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band)
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: oracle
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to comparisons for a specific oracle adapter
+          example: reflector
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [5m, 15m, 1h, 24h, 7d, 30d]
+          description: Lookback window ending now (ignored if both from and to are specified)
+          example: 24h
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start of the query window (ISO 8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End of the query window (ISO 8601)
+        - name: band
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            default: 1.0
+          description: Deviation percentage threshold for outside-band duration calculation
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+          description: Maximum number of comparisons evaluated
+      responses:
+        '200':
+          description: Oracle summary statistics over the window
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleComparisonSummaryResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /screener:
     get:
       operationId: screenPairs
@@ -2320,6 +2468,151 @@ components:
               ageSeconds:
                 type: integer
                 nullable: true
+
+    OracleComparisonPoint:
+      type: object
+      required: [timestamp, oracle, lensPrice, oraclePrice, deviationPct, status, venues, sampleCount, oracleTimestamp, ageSeconds]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        oracle:
+          type: string
+        lensPrice:
+          type: number
+          nullable: true
+        oraclePrice:
+          type: number
+          nullable: true
+        deviationPct:
+          type: number
+          nullable: true
+        status:
+          type: string
+        venues:
+          type: array
+          items:
+            type: string
+          description: Venues that contributed to the Lens VWAP calculation
+        sampleCount:
+          type: integer
+          description: Number of trade observations in the Lens VWAP window
+        oracleTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        ageSeconds:
+          type: integer
+          nullable: true
+
+    OracleSummaryStatistic:
+      type: object
+      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, bandPct, samples, venues, freshestComparison, oldestComparison, status]
+      additionalProperties: true
+      properties:
+        oracle:
+          type: string
+        meanDeviationPct:
+          type: number
+          nullable: true
+          description: Mean percentage deviation from Lens VWAP across valid samples
+        worstDeviationPct:
+          type: number
+          nullable: true
+          description: Maximum observed percentage deviation from Lens VWAP in the window
+        timeOutsideBandSeconds:
+          type: integer
+          nullable: true
+          description: Total seconds in the window where the oracle deviated beyond bandPct
+        outsideBandSeconds:
+          type: integer
+          nullable: true
+          description: Alias for timeOutsideBandSeconds
+        outsideBandPct:
+          type: number
+          nullable: true
+          description: Percentage of window duration spent outside bandPct
+        bandPct:
+          type: number
+          description: Deviation percentage threshold applied for outside-band calculations
+        samples:
+          type: integer
+          description: Number of comparison samples in the window
+        venues:
+          type: array
+          items:
+            type: string
+          description: Distinct venues that contributed to Lens VWAPs across all samples
+        freshestComparison:
+          type: string
+          format: date-time
+          nullable: true
+        oldestComparison:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          description: Latest status or alignment health
+
+    OracleComparisonHistoryResponse:
+      type: object
+      required: [asset, network, from, to, band, points, summary]
+      additionalProperties: true
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          nullable: true
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        band:
+          type: number
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleComparisonPoint'
+        summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleSummaryStatistic'
+
+    OracleComparisonSummaryResponse:
+      type: object
+      required: [asset, network, from, to, band, summary]
+      additionalProperties: true
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          nullable: true
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        band:
+          type: number
+        summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleSummaryStatistic'
 
     ScreenerRow:
       type: object
