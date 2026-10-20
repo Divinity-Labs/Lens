@@ -2,6 +2,7 @@ import type { NetworkName } from '../../config'
 import type { WatchedPair } from '../../types'
 
 export interface VenuePricePoint {
+  network?: string
   assetA: string
   assetB: string
   pairKey: string

@@ -12,7 +12,7 @@ import { pgPool } from './db'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
-import { venueAdapters, startVenueAdapter } from './ingest/venues'
+import { getEnabledAdapters, startVenueAdapter } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
@@ -197,7 +197,7 @@ async function main() {
   const enabledNetworks = getEnabledNetworks()
   log.info({ networks: enabledNetworks }, 'starting ingesters')
   for (const network of enabledNetworks) {
-    for (const adapter of venueAdapters) {
+    for (const adapter of getEnabledAdapters()) {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))
