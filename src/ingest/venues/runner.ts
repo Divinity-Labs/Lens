@@ -51,9 +51,14 @@ export async function writeVenuePricePoints(
 ): Promise<void> {
   if (points.length === 0) return
 
-  await upsertPricePoints(points as any, network)
+  const res = await upsertPricePoints(points as any, network)
+  const acceptedPoints: VenuePricePoint[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+    ? (res as any).acceptedPoints
+    : points
 
-  const latest = points[points.length - 1]
+  if (acceptedPoints.length === 0) return
+
+  const latest = acceptedPoints[acceptedPoints.length - 1]
   const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
 
   publishPriceUpdate({

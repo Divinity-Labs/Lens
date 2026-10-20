@@ -30,6 +30,30 @@ model PricePoint {
   @@map("price_points")
 }
 
+model QuarantinedPricePoint {
+  id              String   @id @default(uuid())
+  network         String   @default("testnet")
+  assetA          String   @map("asset_a")
+  assetB          String   @map("asset_b")
+  pairKey         String   @map("pair_key")
+  source          String
+  poolId          String?  @map("pool_id")
+  price           Decimal  @db.Decimal(36, 18)
+  baseVolume      Decimal  @map("base_volume") @db.Decimal(36, 7)
+  counterVolume   Decimal  @map("counter_volume") @db.Decimal(36, 7)
+  ledger          Int      @default(0)
+  timestamp       DateTime
+  eventId         String?  @map("event_id")
+  referenceMedian Decimal  @map("reference_median") @db.Decimal(36, 18)
+  rejectionReason String   @map("rejection_reason")
+  rejectionBound  Decimal? @map("rejection_bound") @db.Decimal(36, 18)
+  quarantinedAt   DateTime @default(now()) @map("quarantined_at")
+
+  @@index([network, pairKey, timestamp(sort: Desc)])
+  @@index([network, pairKey, quarantinedAt(sort: Desc)])
+  @@map("quarantined_price_points")
+}
+
 model PoolSnapshot {
   id          String   @default(uuid())
   network     String   @default("testnet")

@@ -266,6 +266,15 @@ const globalConfig = {
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
     sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
     ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    get plausibilityThreshold(): number {
+      return parseFloat(process.env.INGEST_PLAUSIBILITY_THRESHOLD ?? '0.20')
+    },
+    get plausibilityWindowMinutes(): number {
+      return parseInt(process.env.INGEST_PLAUSIBILITY_WINDOW_MINUTES ?? '60', 10)
+    },
+    get plausibilityMinSamples(): number {
+      return parseInt(process.env.INGEST_PLAUSIBILITY_MIN_SAMPLES ?? '1', 10)
+    },
   },
   cache: {
     priceTtl: parseInt(process.env.PRICE_CACHE_TTL ?? '10', 10),
