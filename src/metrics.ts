@@ -59,6 +59,27 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+export const pools_discovered_total = new Counter({
+  name: 'pools_discovered_total',
+  help: 'Total number of pools discovered across all venues',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
+export const pools_added_total = new Counter({
+  name: 'pools_added_total',
+  help: 'Total number of pools added during discovery cycles',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
+export const pools_removed_total = new Counter({
+  name: 'pools_removed_total',
+  help: 'Total number of pools removed during discovery cycles',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
