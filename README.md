@@ -125,6 +125,35 @@ The GraphQL schema is exported as a canonical Schema Definition Language (SDL) a
 - **Drift Guard & Validation**: CI runs `src/__tests__/graphqlSchemaDrift.test.ts` to assert that `schema.graphql` matches the code-defined schema in `src/api/graphql.ts`, guarantees deterministic output, validates SDL syntax for client generators, and detects breaking schema changes.
 
 
+## Rate Limits
+
+Lens applies tiered rate limiting across route classes to protect service availability and enforce quotas. All limits operate on a 1-minute rolling window unless otherwise specified.
+
+| Route Class | Rate Limit | Window | Scope | Description |
+|---|---|---|---|---|
+| Public routes | 100 | 1 minute | Per IP | Unauthenticated requests and public endpoints (`RATE_LIMIT_IP_MAX`) |
+| Authenticated routes | 60 | 1 minute | Per API key | Default quota for issued API keys (`ApiKey.ratePerMin`) |
+| Write routes | 10 | 1 minute | Per payTo | Bazaar catalog write operations (`BAZAAR_CATALOG_WRITES_PER_MIN`) |
+
+When a rate limit is exceeded, Lens responds with HTTP 429 (`Too Many Requests`), including standard rate limit headers and a machine-readable JSON body:
+
+- `Retry-After`: The number of seconds until requests will be accepted again
+- `X-RateLimit-Limit`: Maximum requests permitted in the window
+- `X-RateLimit-Remaining`: Remaining request quota in the active window (0 when exceeded)
+- `X-RateLimit-Reset`: Number of seconds until the window resets
+
+Response body:
+```json
+{
+  "code": "rate_limited",
+  "retryAfter": 60,
+  "message": "Rate limit exceeded. Retry after 60 seconds."
+}
+```
+
+The `retryAfter` value in the response body matches the `Retry-After` header exactly. Infrastructure health and readiness probes (`/status`, `/live`, `/ready`) are allow-listed and exempt from rate limiting.
+
+
 ## Observability
 
 Prometheus metrics are exposed on `GET /metrics` (public, no API key required).

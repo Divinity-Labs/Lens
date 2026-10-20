@@ -286,6 +286,12 @@ const globalConfig = {
     // block is unconditional (see net/ssrf.ts).
     allowedHosts: parseAllowedHosts(process.env.OUTBOUND_ALLOWED_HOSTS ?? ''),
   },
+  rateLimit: {
+    get public() { return parseInt(process.env.RATE_LIMIT_IP_MAX ?? '100', 10) },
+    get authenticated() { return 60 },
+    get write() { return parseInt(process.env.BAZAAR_CATALOG_WRITES_PER_MIN ?? '10', 10) },
+    get global() { return parseInt(process.env.GLOBAL_RATE_LIMIT_MAX ?? '1000', 10) },
+  },
 } as const
 
 // ── Per-network map ───────────────────────────────────────────────────────────
@@ -367,4 +373,5 @@ export const config = {
   cache:   globalConfig.cache,
   http:    globalConfig.http,
   outbound: globalConfig.outbound,
+  rateLimit: globalConfig.rateLimit,
 }

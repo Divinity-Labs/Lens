@@ -120,12 +120,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     allowList: (req) => PROBE_PATHS.has(req.url),
     errorResponseBuilder: (req, context) => {
       rate_limit_rejections_total.inc({ scope: req.apiKey ? 'key' : 'ip' })
+      const retryAfter = Math.ceil(context.ttl / 1000)
       return {
         statusCode: 429,
         error: 'Too Many Requests',
-        code: req.apiKey ? 'PER_KEY_RATE_LIMITED' : 'IP_RATE_LIMITED',
-        message: `Rate limit exceeded, retry in ${context.after}`,
-        retryAfter: context.after
+        code: 'rate_limited',
+        message: `Rate limit exceeded. Retry after ${retryAfter} seconds.`,
+        retryAfter
       }
     }
   })

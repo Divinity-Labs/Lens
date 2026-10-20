@@ -76,6 +76,8 @@ paths:
                           type: string
                           format: date-time
                           nullable: true
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /live:
     get:
@@ -1305,6 +1307,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SupportedResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /verify:
     post:
@@ -1330,6 +1334,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VerifyResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal verification error
           content:
@@ -1365,6 +1371,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SettleResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /graphql:
     get:
@@ -1398,6 +1406,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GraphQlResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
     post:
       operationId: graphqlPost
       summary: Execute a GraphQL query, mutation or subscription handshake
@@ -1426,6 +1436,8 @@ paths:
                 $ref: '#/components/schemas/GraphQlResponse'
         '402':
           $ref: '#/components/responses/PaymentRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
 components:
   securitySchemes:
@@ -1494,23 +1506,42 @@ components:
           schema:
             type: integer
           description: Seconds to wait before retrying
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: Maximum requests allowed in current window
         X-RateLimit-Remaining:
           schema:
             type: integer
           description: Remaining requests in current window
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+          description: Seconds until the rate limit resets
       content:
         application/json:
           schema:
             type: object
+            required:
+              - code
+              - retryAfter
+              - message
             properties:
               statusCode:
                 type: integer
+                example: 429
               error:
                 type: string
+                example: Too Many Requests
+              code:
+                type: string
+                example: rate_limited
+              retryAfter:
+                type: integer
+                example: 60
               message:
                 type: string
-              retryAfter:
-                type: string
+                example: Rate limit exceeded. Retry after 60 seconds.
 
   headers:
     CacheControl:

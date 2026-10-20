@@ -101,6 +101,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       }
@@ -1982,6 +1985,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       }
@@ -2021,6 +2027,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "500": {
             "description": "Internal verification error",
@@ -2071,6 +2080,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       }
@@ -2122,6 +2134,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       },
@@ -2170,6 +2185,9 @@
           },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       }
@@ -2261,29 +2279,54 @@
             },
             "description": "Seconds to wait before retrying"
           },
+          "X-RateLimit-Limit": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Maximum requests allowed in current window"
+          },
           "X-RateLimit-Remaining": {
             "schema": {
               "type": "integer"
             },
             "description": "Remaining requests in current window"
+          },
+          "X-RateLimit-Reset": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Seconds until the rate limit resets"
           }
         },
         "content": {
           "application/json": {
             "schema": {
               "type": "object",
+              "required": [
+                "code",
+                "retryAfter",
+                "message"
+              ],
               "properties": {
                 "statusCode": {
-                  "type": "integer"
+                  "type": "integer",
+                  "example": 429
                 },
                 "error": {
-                  "type": "string"
+                  "type": "string",
+                  "example": "Too Many Requests"
                 },
-                "message": {
-                  "type": "string"
+                "code": {
+                  "type": "string",
+                  "example": "rate_limited"
                 },
                 "retryAfter": {
-                  "type": "string"
+                  "type": "integer",
+                  "example": 60
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Rate limit exceeded. Retry after 60 seconds."
                 }
               }
             }
