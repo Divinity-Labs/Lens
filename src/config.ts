@@ -44,6 +44,15 @@ export interface NetworkConfig {
   }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
+  fiat: {
+    /** Supported fiat currency codes (uppercase) */
+    supportedCurrencies: string[]
+    /** Default fiat rates per base currency (e.g. USD -> { NGN: 1600 }) */
+    rates: Record<string, Record<string, { rate: number; source: string; timestamp?: string }>>
+    /** Max age in seconds before a fiat rate is marked stale (default 300) */
+    staleThresholdSeconds: number
+  }
+
   facilitator: {
     /** Secret key for the facilitator's fee-paying account */
     secretKey?: string
@@ -86,6 +95,36 @@ function parseAllowedHosts(raw: string): string[] {
 
 const MAINNET_DEFAULT_PAIRS =
   'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM'
+
+const DEFAULT_SUPPORTED_FIAT_CURRENCIES = ['NGN', 'USD', 'EUR', 'GBP']
+
+const DEFAULT_FIAT_RATES: Record<string, Record<string, { rate: number; source: string; timestamp?: string }>> = {
+  USD: {
+    USD: { rate: 1.0, source: 'base_identity' },
+    NGN: { rate: 1600.0, source: 'cbn_interbank' },
+    EUR: { rate: 0.92, source: 'ecb_reference' },
+    GBP: { rate: 0.79, source: 'boe_reference' },
+  },
+  EUR: {
+    EUR: { rate: 1.0, source: 'base_identity' },
+    USD: { rate: 1.087, source: 'ecb_reference' },
+    NGN: { rate: 1740.0, source: 'cbn_interbank' },
+  },
+}
+
+function parseSupportedCurrencies(raw?: string): string[] {
+  if (!raw || !raw.trim()) return DEFAULT_SUPPORTED_FIAT_CURRENCIES
+  return raw.split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+}
+
+function parseFiatRates(raw?: string): Record<string, Record<string, { rate: number; source: string; timestamp?: string }>> {
+  if (!raw || !raw.trim()) return DEFAULT_FIAT_RATES
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return DEFAULT_FIAT_RATES
+  }
+}
 
 function parseWatchedPairs(raw: string): WatchedPair[] {
   if (!raw.trim()) return []
@@ -245,6 +284,20 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     },
     oracle: { enabled: oracleEnabled, reflectorContractId },
     pairs: parseWatchedPairs(rawPairs),
+    fiat: {
+      supportedCurrencies: parseSupportedCurrencies(
+        process.env[`FIAT_SUPPORTED_CURRENCIES_${suffix}`] || process.env.FIAT_SUPPORTED_CURRENCIES
+      ),
+      rates: parseFiatRates(
+        process.env[`FIAT_RATES_JSON_${suffix}`] || process.env.FIAT_RATES_JSON
+      ),
+      staleThresholdSeconds: parseInt(
+        process.env[`FIAT_STALE_THRESHOLD_SECONDS_${suffix}`] ||
+          process.env.FIAT_STALE_THRESHOLD_SECONDS ||
+          '300',
+        10
+      ),
+    },
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
 }
@@ -357,6 +410,7 @@ export const config = {
   get aquarius() { return resolveNetwork(activeNetwork).aquarius },
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
+  get fiat()     { return resolveNetwork(activeNetwork).fiat },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 
   // ── Global / network-agnostic ──────────────────────────────────────────────

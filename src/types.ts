@@ -69,3 +69,26 @@ export interface PriceBucket {
   high: number | null
   low: number | null
 }
+
+export interface FiatRateLeg {
+  base: string
+  quote: string
+  rate: number
+  source: string
+  ageSeconds: number | null
+  stale: boolean
+}
+
+export interface FiatPriceResponse {
+  asset: string
+  currency: string
+  price: number
+  network: string
+  source: string
+  rateAgeSeconds: number | null
+  stale: boolean
+  isCrossRate: boolean
+  legs?: [FiatRateLeg, FiatRateLeg]
+  asOf: string
+}
+

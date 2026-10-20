@@ -660,6 +660,50 @@ export const snapshotResponseSchema = {
   },
 } as const
 
+/** GET /price/:asset/fiat */
+export const fiatPriceResponseSchema = {
+  type: 'object',
+  required: [
+    'asset',
+    'currency',
+    'price',
+    'network',
+    'source',
+    'rateAgeSeconds',
+    'stale',
+    'isCrossRate',
+    'asOf',
+  ],
+  additionalProperties: false,
+  properties: {
+    asset: { type: 'string' },
+    currency: { type: 'string' },
+    price: { type: 'number' },
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    source: { type: 'string' },
+    rateAgeSeconds: { type: ['integer', 'null'] },
+    stale: { type: 'boolean' },
+    isCrossRate: { type: 'boolean' },
+    legs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['base', 'quote', 'rate', 'source', 'ageSeconds', 'stale'],
+        additionalProperties: false,
+        properties: {
+          base: { type: 'string' },
+          quote: { type: 'string' },
+          rate: { type: 'number' },
+          source: { type: 'string' },
+          ageSeconds: { type: ['integer', 'null'] },
+          stale: { type: 'boolean' },
+        },
+      },
+    },
+    asOf: { type: 'string' },
+  },
+} as const
+
 /**
  * Install response-shape validation on a Fastify instance.
  *

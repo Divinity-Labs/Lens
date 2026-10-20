@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { formatValidationError } from '../validation'
 import '../middleware/network'
 import { activeNetwork, type NetworkName } from '../config'
+import { computeFiatPrice } from '../services/fiatPrice'
 
 export const TWAP_WINDOW_MIN_MINUTES = 1
 export const TWAP_WINDOW_MAX_MINUTES = 1440
@@ -28,6 +29,12 @@ const VwapQuerySchema = z.object({
   source: z.enum(['SDEX', 'AMM']).optional(),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
 })
+
+const FiatQuerySchema = z.object({
+  currency: z.string().min(1, 'currency query parameter is required'),
+  network: z.enum(['testnet', 'mainnet']).optional(),
+})
+
 
 /**
  * Register manipulation-resistant TWAP/VWAP pricing endpoints.
@@ -134,6 +141,40 @@ export async function registerPriceRoutes(app: FastifyInstance) {
         // Same as TWAP above: the driver message can contain credentials.
         log.error({ err }, 'VWAP computation failed')
         return reply.status(500).send({ error: 'VWAP computation failed' })
+      }
+    }
+  )
+
+  // ─── FIAT ────────────────────────────────────────────────────────────────────
+  app.get<{
+    Params: { asset: string }
+    Querystring: {
+      currency?: string
+      network?: string
+    }
+  }>(
+    '/price/:asset/fiat',
+    async (req, reply) => {
+      const log = req.log.child({ component: 'route:price:fiat' })
+      const { asset } = req.params
+      const parsed = FiatQuerySchema.safeParse(req.query)
+      if (!parsed.success) {
+        return reply.status(400).send(formatValidationError(parsed.error))
+      }
+      const network: NetworkName = req.network ?? (parsed.data.network as NetworkName) ?? activeNetwork
+
+      try {
+        const result = await computeFiatPrice(asset, parsed.data.currency, network)
+        if (!result.success) {
+          return reply.status(result.status).send({
+            error: result.error,
+            ...(result.supportedCurrencies ? { supportedCurrencies: result.supportedCurrencies } : {}),
+          })
+        }
+        return result.data
+      } catch (err) {
+        log.error({ err }, 'Fiat price computation failed')
+        return reply.status(500).send({ error: 'Fiat price computation failed' })
       }
     }
   )
