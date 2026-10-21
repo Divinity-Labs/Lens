@@ -88,7 +88,7 @@ export async function snapshotPool(
 
     // Also record spot price as a price point (no volume — it's a snapshot, not a trade)
     if (spotPrice > 0) {
-      await upsertPricePoints(
+      const res = await upsertPricePoints(
         [
           {
             assetA: pair.assetA.code,
@@ -106,24 +106,29 @@ export async function snapshotPool(
         ],
         network
       )
+      const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+        ? (res as any).acceptedPoints
+        : [spotPrice]
 
-      const trackerKey = pair.pairKey
-      const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
+      if (acceptedPoints.length > 0) {
+        const trackerKey = pair.pairKey
+        const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
 
-      publishPriceUpdate({
-        pair: pair.pairKey,
-        price: spotPrice,
-        ts: new Date().toISOString(),
-        network,
-      })
+        publishPriceUpdate({
+          pair: pair.pairKey,
+          price: spotPrice,
+          ts: new Date().toISOString(),
+          network,
+        })
 
-      dispatchPriceUpdate({
-        assetA: pair.assetA.code,
-        assetB: pair.assetB.code,
-        previousPrice,
-        currentPrice: spotPrice,
-        network,
-      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+        dispatchPriceUpdate({
+          assetA: pair.assetA.code,
+          assetB: pair.assetB.code,
+          previousPrice,
+          currentPrice: spotPrice,
+          network,
+        }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+      }
     }
   } catch (err) {
     log.error({ pool: pool.id, err }, 'snapshot error')
@@ -184,39 +189,46 @@ export async function ingestPoolTrades(
     })
 
     const trackerKey = pair.pairKey
-    const { previousPrice, currentPrice } = setLastPrice(
-      'AMM',
-      network,
-      trackerKey,
-      points[points.length - 1].price
-    )
 
-    await upsertPricePoints(points, network)
+    const res = await upsertPricePoints(points, network)
+    const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+      ? (res as any).acceptedPoints
+      : points
 
-    trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
-    last_trade_timestamp.set(
-      { pair: pair.pairKey, network },
-      Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
-    )
+    if (acceptedPoints.length > 0) {
+      const latest = acceptedPoints[acceptedPoints.length - 1]
+      const { previousPrice, currentPrice } = setLastPrice(
+        'AMM',
+        network,
+        trackerKey,
+        latest.price
+      )
+
+      trades_ingested_total.inc({ pair: pair.pairKey, network }, acceptedPoints.length)
+      last_trade_timestamp.set(
+        { pair: pair.pairKey, network },
+        Math.floor(latest.timestamp.getTime() / 1000)
+      )
+
+      publishPriceUpdate({
+        pair: pair.pairKey,
+        price: currentPrice,
+        ts: latest.timestamp.toISOString(),
+        network,
+      })
+
+      dispatchPriceUpdate({
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        previousPrice,
+        currentPrice,
+        network,
+      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+    }
 
     const lastRecord = records[records.length - 1]
     await setIndexerCursor(stateId, lastRecord.paging_token, network, ledgers[ledgers.length - 1])
-    log.info({ pair: pair.pairKey, pool: pool.id, trades: points.length }, 'ingested pool trades')
-
-    publishPriceUpdate({
-      pair: pair.pairKey,
-      price: currentPrice,
-      ts: points[points.length - 1].timestamp.toISOString(),
-      network,
-    })
-
-    dispatchPriceUpdate({
-      assetA: pair.assetA.code,
-      assetB: pair.assetB.code,
-      previousPrice,
-      currentPrice,
-      network,
-    }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+    log.info({ pair: pair.pairKey, pool: pool.id, trades: points.length, accepted: acceptedPoints.length }, 'ingested pool trades')
   } catch (err) {
     log.error({ pool: pool.id, err }, 'trade ingest error')
   }

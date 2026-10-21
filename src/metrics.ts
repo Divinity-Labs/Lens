@@ -26,6 +26,22 @@ export const trades_ingested_total = new Counter({
   registers: [register]
 })
 
+export const price_points_accepted_total = new Counter({
+  name: 'price_points_accepted_total',
+  help: 'Total number of price points accepted by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_quarantined_total = new Counter({
+  name: 'price_points_quarantined_total',
+  help: 'Total number of price points quarantined by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_rejected_total = price_points_quarantined_total
+
 export const amm_snapshots_total = new Counter({
   name: 'amm_snapshots_total',
   help: 'Total number of AMM pool snapshots captured',
