@@ -14,6 +14,7 @@ import { assertSchemaValid } from './db/schemaVerify'
 import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
+import { initRevocationSubscriber } from './ws/connectionRegistry'
 
 import { venueAdapters, getEnabledAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
 import { startSnapshotIngester } from './ingest/snapshot'
@@ -99,6 +100,14 @@ async function main() {
     log.info('websocket fan-out manager initialized')
   } catch (err) {
     log.warn({ err }, 'websocket fan-out init skipped')
+  }
+
+  // ── Key revocation subscriber (requires Redis for multi-instance) ────────
+  try {
+    await initRevocationSubscriber()
+    log.info('key revocation subscriber initialized')
+  } catch (err) {
+    log.warn({ err }, 'key revocation subscriber init skipped')
   }
 
   // ── Aggregate refresh worker (non-blocking — requires Redis) ─────────────

@@ -17,6 +17,7 @@ import { registerNetworkSelector } from './middleware/network'
 import { registerHttpMetrics } from './middleware/httpMetrics'
 import { registerETag } from './middleware/etag'
 import { registerWebSocket } from './api/websocket'
+import { destroyRevocationSubscriber } from './ws/connectionRegistry'
 import { registerApiKeyAuth, registerAdminAuth, isAdminConfigured } from './api/auth'
 import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
@@ -280,6 +281,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     req.log.error(error)
     return reply.send(error)
+  })
+
+  app.addHook('onClose', async () => {
+    await destroyRevocationSubscriber()
   })
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)
