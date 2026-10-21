@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { getActivePairs, parseAssetStr, makePairKey, registerPair, persistPair, hasPair } from '../pairsRegistry'
 import { pgPool } from '../db'
 import { activeNetwork } from '../config'
+import { getTradeableStatusForPairs } from '../pricing/tradeable'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import { admin_auth_failures_total } from '../metrics'
 
@@ -17,23 +18,57 @@ export async function registerPairsRoutes(app: FastifyInstance) {
   // the probe still finds its last print, and the response carries that print's
   // real `lastUpdated`, so a caller can see it is old. A pair with no rows on
   // this network at all comes back with null price and timestamp.
-  app.get('/pairs', async (req) => {
+  app.get<{
+    Querystring: {
+      network?: string
+      volumeWindowHours?: string
+      minVolume?: string
+      minVenues?: string
+      referenceSize?: string
+      maxSlippagePct?: string
+    }
+  }>('/pairs', async (req) => {
     const activePairs = getActivePairs()
     const network = req.network ?? activeNetwork
 
-    const result = await pgPool.query(
-      `SELECT p.pair_key, l.price, l.timestamp
-         FROM unnest($2::text[]) AS p(pair_key)
-        CROSS JOIN LATERAL (
-              SELECT price, timestamp
-                FROM price_points
-               WHERE network = $1
-                 AND pair_key = p.pair_key
-               ORDER BY timestamp DESC
-               LIMIT 1
-             ) l`,
-      [network, activePairs.map(p => p.pairKey)]
-    )
+    const query = req.query ?? {}
+    const criteriaOverrides: Partial<import('../pricing/tradeable').TradeableCriteria> = {}
+    if (query.volumeWindowHours && !isNaN(Number(query.volumeWindowHours))) {
+      criteriaOverrides.volumeWindowHours = Number(query.volumeWindowHours)
+    }
+    if (query.minVolume && !isNaN(Number(query.minVolume))) {
+      criteriaOverrides.minVolume = Number(query.minVolume)
+    }
+    if (query.minVenues && !isNaN(Number(query.minVenues))) {
+      criteriaOverrides.minVenues = Number(query.minVenues)
+    }
+    if (query.referenceSize && !isNaN(Number(query.referenceSize))) {
+      criteriaOverrides.referenceSize = Number(query.referenceSize)
+    }
+    if (query.maxSlippagePct && !isNaN(Number(query.maxSlippagePct))) {
+      criteriaOverrides.maxSlippagePct = Number(query.maxSlippagePct)
+    }
+
+    const [result, tradeableData] = await Promise.all([
+      pgPool.query(
+        `SELECT p.pair_key, l.price, l.timestamp
+           FROM unnest($2::text[]) AS p(pair_key)
+          CROSS JOIN LATERAL (
+                SELECT price, timestamp
+                  FROM price_points
+                 WHERE network = $1
+                   AND pair_key = p.pair_key
+                 ORDER BY timestamp DESC
+                 LIMIT 1
+               ) l`,
+        [network, activePairs.map(p => p.pairKey)]
+      ),
+      getTradeableStatusForPairs(
+        activePairs.map(p => p.pairKey),
+        network,
+        criteriaOverrides
+      ),
+    ])
 
     const latestPrices = new Map<string, { price: number; timestamp: Date }>()
     result.rows.forEach(row => {
@@ -44,16 +79,45 @@ export async function registerPairsRoutes(app: FastifyInstance) {
     })
 
     return {
+      network,
+      criteria: tradeableData.criteria,
       pairs: activePairs.map(p => {
         const latest = latestPrices.get(p.pairKey)
+        const evalData = tradeableData.evaluations.get(p.pairKey)
+
         return {
           pairKey: p.pairKey,
           assetA: p.assetA,
           assetB: p.assetB,
           latestPrice: latest?.price ?? null,
           lastUpdated: latest?.timestamp ?? null,
+          tradeable: evalData?.tradeable ?? false,
+          reasons: evalData?.reasons ?? ['No trading activity or liquidity observed'],
+          criteriaPassed: evalData?.criteriaPassed ?? {
+            volume: false,
+            venues: false,
+            depth: false,
+          },
+          metrics: {
+            volume: evalData?.volume ?? 0,
+            venueCount: evalData?.venueCount ?? 0,
+            depth: evalData?.depth ?? {
+              referenceSize: tradeableData.criteria.referenceSize,
+              available: false,
+              spotPrice: null,
+              executionPrice: null,
+              slippagePct: null,
+              poolsEvaluated: 0,
+            },
+          },
+          provenance: evalData?.provenance ?? {
+            venues: [],
+            sampleCount: 0,
+            freshnessSeconds: null,
+            lastSeen: null,
+          },
         }
-      })
+      }),
     }
   })
 
