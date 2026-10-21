@@ -5,6 +5,7 @@ import { Gauge, Counter } from 'prom-client'
 import { register } from '../metrics'
 import { createLogger } from '../logger'
 import { resolveBackpressureLimits, CLOSE_CODE_SLOW_CONSUMER } from './backpressure'
+import { connectionRegistry } from './connectionRegistry'
 
 const log = createLogger('ws:fanout')
 
@@ -78,6 +79,7 @@ function pairMetricLabel(pairKey: string): 'other' | null {
 // ─── Client wrapper with backpressure & coalescing ────────────────────────────
 export interface FanOutClient {
   id: string
+  keyHash?: string
   /**
    * Queues `data` on the socket.
    *
@@ -178,6 +180,9 @@ class FanOutManager {
       congestedSince: null,
     }
 
+    if (socket.keyHash) {
+      connectionRegistry.register(socket.keyHash, socket)
+    }
     this.clients.set(id, client)
     let clients = this.pairClients.get(pairKey)
     if (!clients) {
@@ -204,6 +209,9 @@ class FanOutManager {
     // the whole point of bounding the buffer is that the bytes go away with it.
     client.pendingUpdate = null
 
+    if (client.socket.keyHash) {
+      connectionRegistry.deregister(client.socket.keyHash, client.socket)
+    }
     this.clients.delete(id)
     const clients = this.pairClients.get(client.pairKey)
     if (clients) {
