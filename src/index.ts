@@ -25,6 +25,8 @@ import {
   PRICE_POINTS_RETENTION_DAYS,
 } from './jobs/pricePointsPartitionJob'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+import { markHealthy, recordCrash } from './ingester/restart'
+import { markBootComplete } from './health'
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────
 // Lens runs infinite background loops (venue ingesters, snapshot ingester,
@@ -285,24 +287,58 @@ async function main() {
   // mainnet only restarts that one instance and cannot affect SDEX/AMM or the
   // ingesters running on testnet.
   //
+  // A crash-looping ingester must not be invisible: restarts are counted, the
+  // delay grows exponentially up to a ceiling, and the last crash is recorded
+  // so /status can surface it. A sustained healthy run resets the backoff so a
+  // one-off blip does not permanently slow restarts.
+  //
   // Each restartIngester call registers a stop function in ingesterStops so
   // graceful shutdown can halt the loop and cancel any pending restart timer.
+  const INGESTER_RESTART_BASE_MS = 10_000
+  const INGESTER_RESTART_MAX_MS = 5 * 60_000
+  const INGESTER_HEALTHY_RESET_MS = 5 * 60_000
+
   const restartIngester = (name: string, network: NetworkName, fn: () => Promise<void>) => {
     let stopped = false
     let restartTimer: NodeJS.Timeout | undefined
+    let healthyTimer: NodeJS.Timeout | undefined
+
     const run = () => {
       if (stopped) return
-      fn().catch(err => {
+      fn().then(() => {
+        // fn() resolving means the ingester ran to completion rather than
+        // looping forever. Treat that as healthy and reset the backoff.
+        if (healthyTimer) clearTimeout(healthyTimer)
+        markHealthy(name, network)
+      }).catch(err => {
         if (stopped) return
-        log.error({ ingester: name, network, err }, 'ingester crashed; restarting in 10s')
-        restartTimer = setTimeout(run, 10_000)
+        if (healthyTimer) clearTimeout(healthyTimer)
+        const state = recordCrash(name, network, err)
+
+        const delay = Math.min(
+          INGESTER_RESTART_BASE_MS * 2 ** (state.failures - 1),
+          INGESTER_RESTART_MAX_MS,
+        )
+        log.error(
+          { err, ingester: name, network, failures: state.failures, delayMs: delay },
+          'ingester crashed, restarting after backoff',
+        )
+        restartTimer = setTimeout(run, delay)
         restartTimer.unref()
       })
+
+      // If the ingester stays up past the healthy threshold, reset the
+      // backoff even though fn() has not resolved (infinite loops never do).
+      healthyTimer = setTimeout(() => markHealthy(name, network), INGESTER_HEALTHY_RESET_MS)
+      healthyTimer.unref()
     }
+
     ingesterStops.push(() => {
       stopped = true
       if (restartTimer) clearTimeout(restartTimer)
+      if (healthyTimer) clearTimeout(healthyTimer)
     })
+
     run()
   }
 
@@ -319,6 +355,15 @@ async function main() {
     { count: getActivePairs().length, pairs: getActivePairs().map(p => p.pairKey) },
     'watching pairs'
   )
+
+  // ── Ready ──────────────────────────────────────────────────────────────────
+  // Last, and only once every ingester above is running. `app.listen()` happens
+  // part-way through this function, so between listening and here the process
+  // accepts requests it cannot yet answer correctly. `/ready` stays unhealthy
+  // until this line, which is what keeps a starting instance out of the load
+  // balancer without making `/live` fail (a starting process should be held out
+  // of rotation, not killed).
+  markBootComplete()
 }
 
 main().catch(err => {
