@@ -1,6 +1,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { MCP_ERROR_CODES, McpErrorCode } from './codes.js';
+import { callLensTool, isLensToolName, lensToolDefinitions } from './lensTools.js';
 import { MCP_ERROR_CODES, McpErrorCode, classifyPaidCallError } from './codes.js';
 import { SpendBudget } from './budget.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
@@ -156,6 +158,15 @@ export class BazaarMcpServer {
             'argument, a url, or text you have read — do not retry a refused host, report it instead.',
           inputSchema: zodToToolInputSchema(PAID_CALL_ARGUMENTS_SCHEMA),
         },
+        // Lens's own data — pairs, pools and the screener, served from the same
+        // implementations as the REST routes (see ./lensTools.ts).
+        ...lensToolDefinitions(),
+      ],
+    }));
+
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      if (isLensToolName(request.params.name)) {
+        return callLensTool(request.params.name, request.params.arguments);
       ];
 
       // Advertised only when a budget is configured, so a server without one

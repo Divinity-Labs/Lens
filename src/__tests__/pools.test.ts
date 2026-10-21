@@ -7,16 +7,7 @@ vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
 
-vi.mock('../redis', () => ({
-  getCachedPrice: vi.fn(),
-  setCachedPrice: vi.fn(),
-}))
-
-vi.mock('../aggregator/bestRoute', () => ({
-  getBestRoute: vi.fn(),
-}))
-
-import { registerRESTRoutes } from '../api/rest'
+import { registerPoolsRoutes } from '../routes/pools'
 import { activeNetwork } from '../config'
 
 async function buildApp(network?: 'testnet' | 'mainnet') {
@@ -27,7 +18,7 @@ async function buildApp(network?: 'testnet' | 'mainnet') {
       req.network = network
     })
   }
-  await registerRESTRoutes(app)
+  await registerPoolsRoutes(app)
   await app.ready()
   return app
 }
