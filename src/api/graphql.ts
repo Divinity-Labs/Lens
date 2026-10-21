@@ -16,6 +16,8 @@ import { compareOracles } from '../services/oracleComparison'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
 import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
+import { hashApiKey, lookupApiKey, extractBearer } from './auth'
+import { connectionRegistry } from '../ws/connectionRegistry'
 
 const WINDOW_SECONDS: Record<string, number> = {
   ...HISTORY_INTERVAL_SECONDS,
@@ -413,6 +415,34 @@ const resolvers = {
   },
 }
 
+function extractTokenFromConnection(connContext: any, data: any): string | null {
+  const payload = data?.payload
+  if (payload) {
+    if (typeof payload.authorization === 'string') {
+      const b = extractBearer(payload.authorization)
+      return b ?? payload.authorization.trim()
+    }
+    if (typeof payload.headers?.authorization === 'string') {
+      const b = extractBearer(payload.headers.authorization)
+      return b ?? payload.headers.authorization.trim()
+    }
+    if (typeof payload.apiKey === 'string') return payload.apiKey.trim()
+    if (typeof payload.key === 'string') return payload.key.trim()
+    if (typeof payload.token === 'string') return payload.token.trim()
+  }
+  const req = connContext?.request
+  if (req) {
+    const authHeader = req.headers?.['authorization']
+    const b = extractBearer(authHeader)
+    if (b) return b
+    if (typeof req.headers?.['x-api-key'] === 'string') return req.headers['x-api-key'].trim()
+    const query = req.query as Record<string, string | undefined> | undefined
+    if (query?.apiKey) return query.apiKey.trim()
+    if (query?.key) return query.key.trim()
+    if (query?.token) return query.token.trim()
+  }
+  return null
+}
 export async function registerGraphQL(app: FastifyInstance) {
   const maxQueryDepth = getMaxGraphQLQueryDepth()
 
@@ -434,6 +464,26 @@ export async function registerGraphQL(app: FastifyInstance) {
       // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
+      onConnect: async function (this: any, data: any) {
+        const token = extractTokenFromConnection(this.context, data)
+        if (token) {
+          const keyContext = await lookupApiKey(token)
+          if (!keyContext) {
+            return false
+          }
+          const keyHash = hashApiKey(token)
+          if (this.socket) {
+            connectionRegistry.register(keyHash, this.socket)
+          }
+          return { apiKey: keyContext, keyHash }
+        }
+        return true
+      },
+      onDisconnect: async function (this: any, context: any) {
+        if (context?.keyHash && this?.socket) {
+          connectionRegistry.deregister(context.keyHash, this.socket)
+        }
+      },
     },
   })
 

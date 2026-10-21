@@ -3,6 +3,12 @@ import { randomBytes } from 'crypto'
 import { prisma } from '../db'
 import { admin_auth_failures_total } from '../metrics'
 import { hashApiKey, isAdminAuthorized } from './auth'
+import {
+  connectionRegistry,
+  publishRevocation,
+  CLOSE_CODE_KEY_REVOKED,
+  CLOSE_REASON_KEY_REVOKED,
+} from '../ws/connectionRegistry'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -110,6 +116,15 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         where: { id },
         data: { revokedAt: new Date() },
       })
+
+      if (existing.hash) {
+        connectionRegistry.closeConnectionsForKey(
+          existing.hash,
+          CLOSE_CODE_KEY_REVOKED,
+          CLOSE_REASON_KEY_REVOKED,
+        )
+        await publishRevocation(existing.hash)
+      }
 
       return reply.status(200).send({ id, revoked: true })
     },
