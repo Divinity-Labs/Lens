@@ -328,6 +328,16 @@
             "example": "USDC"
           },
           {
+            "name": "staleThreshold",
+            "in": "query",
+            "required": false,
+            "description": "Max age in seconds before the price is marked stale (overrides default staleness bound).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
             "$ref": "#/components/parameters/NetworkQuery"
           }
         ],
@@ -1326,6 +1336,16 @@
             }
           },
           {
+            "name": "staleThreshold",
+            "in": "query",
+            "required": false,
+            "description": "Max age in seconds before the price is marked stale (overrides default staleness bound).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
             "$ref": "#/components/parameters/NetworkQuery"
           }
         ],
@@ -1422,6 +1442,16 @@
                 "modified_zscore"
               ],
               "default": "iqr"
+            }
+          },
+          {
+            "name": "staleThreshold",
+            "in": "query",
+            "required": false,
+            "description": "Max age in seconds before the price is marked stale (overrides default staleness bound).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         ],
@@ -3237,6 +3267,24 @@
           "lastTradeAgeSeconds": {
             "type": "integer",
             "nullable": true
+          },
+          "newestInputObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Observation timestamp of the newest input data point used."
+          },
+          "inputCount": {
+            "type": "integer",
+            "description": "Count of input data points used in the calculation."
+          },
+          "stalenessThresholdSeconds": {
+            "type": "integer",
+            "description": "Configured staleness threshold in seconds for this response."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds."
           }
         }
       },
@@ -3871,7 +3919,11 @@
           "endTime",
           "sampleCount",
           "outlierRejected",
-          "filterMethod"
+          "filterMethod",
+          "newestInputObservedAt",
+          "inputCount",
+          "stalenessThresholdSeconds",
+          "stale"
         ],
         "additionalProperties": false,
         "properties": {
@@ -3920,6 +3972,24 @@
               "iqr",
               "modified_zscore"
             ]
+          },
+          "newestInputObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Observation timestamp of the newest input data point used."
+          },
+          "inputCount": {
+            "type": "integer",
+            "description": "Count of input data points used in the calculation."
+          },
+          "stalenessThresholdSeconds": {
+            "type": "integer",
+            "description": "Configured staleness threshold in seconds for this response."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds."
           }
         }
       },
@@ -3937,7 +4007,11 @@
           "sampleCount",
           "volumeTotal",
           "outlierRejected",
-          "filterMethod"
+          "filterMethod",
+          "newestInputObservedAt",
+          "inputCount",
+          "stalenessThresholdSeconds",
+          "stale"
         ],
         "additionalProperties": false,
         "properties": {
@@ -3982,6 +4056,24 @@
               "iqr",
               "modified_zscore"
             ]
+          },
+          "newestInputObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Observation timestamp of the newest input data point used."
+          },
+          "inputCount": {
+            "type": "integer",
+            "description": "Count of input data points used in the calculation."
+          },
+          "stalenessThresholdSeconds": {
+            "type": "integer",
+            "description": "Configured staleness threshold in seconds for this response."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds."
           }
         }
       },

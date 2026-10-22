@@ -33,6 +33,9 @@ export interface AggregatedPrice {
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
+  newestInputObservedAt: string | null
+  inputCount: number
+  stalenessThresholdSeconds: number
   stale: boolean
 }
 

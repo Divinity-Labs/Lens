@@ -21,12 +21,15 @@ const TwapQuerySchema = z.object({
   sampleInterval: z.coerce.number().int().min(TWAP_SAMPLE_INTERVAL_MIN_SECONDS).max(TWAP_SAMPLE_INTERVAL_MAX_SECONDS).default(TWAP_SAMPLE_INTERVAL_DEFAULT_SECONDS),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
   network: z.enum(['testnet', 'mainnet']).optional(),
+  staleThreshold: z.coerce.number().int().positive().optional(),
 })
 
 const VwapQuerySchema = z.object({
   window: z.coerce.number().int().min(VWAP_WINDOW_MIN_MINUTES).max(VWAP_WINDOW_MAX_MINUTES).default(VWAP_WINDOW_DEFAULT_MINUTES),
   source: z.enum(['SDEX', 'AMM']).optional(),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
+  network: z.enum(['testnet', 'mainnet']).optional(),
+  staleThreshold: z.coerce.number().int().positive().optional(),
 })
 
 /**
@@ -44,6 +47,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       sampleInterval?: string
       method?: 'iqr' | 'modified_zscore'
       network?: string
+      staleThreshold?: string
     }
   }>(
     '/price/twap/:assetA/:assetB',
@@ -55,7 +59,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.status(400).send(formatValidationError(parsed.error))
       }
-      const { window: windowMinutes, sampleInterval, method } = parsed.data
+      const { window: windowMinutes, sampleInterval, method, staleThreshold } = parsed.data
       const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
 
       const pairKey = [assetA, assetB].sort().join('/')
@@ -65,6 +69,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           sampleIntervalSeconds: sampleInterval,
           outlierMethod: method,
           network,
+          staleThresholdSeconds: staleThreshold,
         })
 
         return {
@@ -80,6 +85,10 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           sampleCount: result.sampleCount,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          newestInputObservedAt: result.newestInputObservedAt,
+          inputCount: result.inputCount,
+          stalenessThresholdSeconds: result.stalenessThresholdSeconds,
+          stale: result.stale,
         }
       } catch (err) {
         // A driver error message can carry the connection string, and so the
@@ -97,6 +106,8 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       window?: string
       source?: 'SDEX' | 'AMM'
       method?: 'iqr' | 'modified_zscore'
+      network?: string
+      staleThreshold?: string
     }
   }>(
     '/price/vwap/:assetA/:assetB',
@@ -108,7 +119,8 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.status(400).send(formatValidationError(parsed.error))
       }
-      const { window: windowMinutes, source, method } = parsed.data
+      const { window: windowMinutes, source, method, staleThreshold } = parsed.data
+      const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
 
       const pairKey = [assetA, assetB].sort().join('/')
 
@@ -116,6 +128,8 @@ export async function registerPriceRoutes(app: FastifyInstance) {
         const result = await computeVWAP(pairKey, windowMinutes, {
           source,
           outlierMethod: method,
+          network,
+          staleThresholdSeconds: staleThreshold,
         })
 
         return {
@@ -131,6 +145,10 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           volumeTotal: result.volumeTotal,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          newestInputObservedAt: result.newestInputObservedAt,
+          inputCount: result.inputCount,
+          stalenessThresholdSeconds: result.stalenessThresholdSeconds,
+          stale: result.stale,
         }
       } catch (err) {
         // Same as TWAP above: the driver message can contain credentials.

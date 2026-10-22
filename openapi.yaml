@@ -249,6 +249,13 @@ paths:
           schema:
             type: string
           example: USDC
+        - name: staleThreshold
+          in: query
+          required: false
+          description: Max age in seconds before the price is marked stale (overrides default staleness bound).
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -893,6 +900,13 @@ paths:
             type: string
             enum: [iqr, modified_zscore]
             default: iqr
+        - name: staleThreshold
+          in: query
+          required: false
+          description: Max age in seconds before the price is marked stale (overrides default staleness bound).
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
@@ -953,6 +967,13 @@ paths:
             type: string
             enum: [iqr, modified_zscore]
             default: iqr
+        - name: staleThreshold
+          in: query
+          required: false
+          description: Max age in seconds before the price is marked stale (overrides default staleness bound).
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
           description: VWAP result
@@ -2160,6 +2181,20 @@ components:
         lastTradeAgeSeconds:
           type: integer
           nullable: true
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
 
     RouteHop:
       type: object
@@ -2502,7 +2537,7 @@ components:
 
     TwapResponse:
       type: object
-      required: [assetA, assetB, pairKey, network, twap, windowMinutes, sampleIntervalSeconds, startTime, endTime, sampleCount, outlierRejected, filterMethod]
+      required: [assetA, assetB, pairKey, network, twap, windowMinutes, sampleIntervalSeconds, startTime, endTime, sampleCount, outlierRejected, filterMethod, newestInputObservedAt, inputCount, stalenessThresholdSeconds, stale]
       additionalProperties: false
       properties:
         assetA:
@@ -2533,10 +2568,24 @@ components:
         filterMethod:
           type: string
           enum: [iqr, modified_zscore]
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
 
     VwapResponse:
       type: object
-      required: [assetA, assetB, pairKey, vwap, windowMinutes, source, startTime, endTime, sampleCount, volumeTotal, outlierRejected, filterMethod]
+      required: [assetA, assetB, pairKey, vwap, windowMinutes, source, startTime, endTime, sampleCount, volumeTotal, outlierRejected, filterMethod, newestInputObservedAt, inputCount, stalenessThresholdSeconds, stale]
       additionalProperties: false
       properties:
         assetA:
@@ -2566,6 +2615,20 @@ components:
         filterMethod:
           type: string
           enum: [iqr, modified_zscore]
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
 
     VolumeResponse:
       type: object

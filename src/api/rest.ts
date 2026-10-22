@@ -113,7 +113,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
 
 
   // GET /price/:assetA/:assetB
-  app.get<{ Params: { assetA: string; assetB: string } }>(
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { staleThreshold?: string; staleThresholdSeconds?: string }
+  }>(
     '/price/:assetA/:assetB',
     { config: { scope: 'read:prices' }, schema: { response: { 200: priceResponseSchema } } },
     async (req, reply) => {
@@ -123,9 +126,20 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const pair = findPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
 
+      const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
+      let staleThreshold: number | undefined
+      if (rawThreshold !== undefined) {
+        staleThreshold = parseInt(rawThreshold, 10)
+        if (isNaN(staleThreshold) || staleThreshold <= 0) {
+          return reply.status(400).send({ error: 'staleThreshold must be a positive integer' })
+        }
+      }
+
       // Cache key is network-scoped so testnet/mainnet prices for the same
-      // asset codes never collide.
-      const cacheKey = `${network}:${pair.pairKey}`
+      // asset codes never collide, and scoped to staleThreshold if customized.
+      const cacheKey = staleThreshold !== undefined
+        ? `${network}:${pair.pairKey}:stale_${staleThreshold}`
+        : `${network}:${pair.pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
         try {
@@ -134,7 +148,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pair.pairKey, network)
+      const agg = await getAggregatedPrice(pair.pairKey, network, { staleThresholdSeconds: staleThreshold })
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
       const result = {
         assetA: pair.assetA.code,
