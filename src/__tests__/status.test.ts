@@ -157,3 +157,4 @@ describe('GET /status', () => {
     expect(typeof body.crashes[0].at).toBe('string')
   })
 })
+

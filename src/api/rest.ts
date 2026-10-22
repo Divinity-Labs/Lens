@@ -16,6 +16,7 @@ import {
   installResponseValidation,
 } from './schemas'
 import { getDepth } from '../pricing/depth'
+import { isAdminTokenConfigured } from './auth'
 import { listCrashes } from '../ingester/restart'
 
 function makePairKey(a: string, b: string): string {
@@ -86,6 +87,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
     return {
       ok: true,
+      adminConfigured: isAdminTokenConfigured(),
       network,
       watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
       lastIndexedLedger: result.rows[0]?.last_ledger ?? null,

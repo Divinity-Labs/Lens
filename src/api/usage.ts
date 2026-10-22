@@ -2,21 +2,14 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import fp from 'fastify-plugin'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
 import { admin_auth_failures_total, api_key_auth_failures_total } from '../metrics'
-import { isAdminAuthorized } from './auth'
+import { requireAdminAuth } from './auth'
 
 export async function registerUsageRoutes(app: FastifyInstance) {
   app.get<{ Params: { keyId: string } }>(
     '/admin/usage/:keyId',
     { config: { public: true } },
     async (req, reply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      if (!requireAdminAuth(req, reply)) return
       const { keyId } = req.params
       const summary = await getUsageSummary(keyId)
       return reply.send(summary)
@@ -27,14 +20,7 @@ export async function registerUsageRoutes(app: FastifyInstance) {
     '/admin/usage',
     { config: { public: true } },
     async (req, reply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      if (!requireAdminAuth(req, reply)) return
       const summaries = await getAllUsageSummaries()
       return reply.send({ keys: summaries })
     }

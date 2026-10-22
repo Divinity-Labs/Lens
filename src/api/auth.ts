@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
-import { api_key_auth_failures_total } from '../metrics'
+import { api_key_auth_failures_total, admin_auth_failures_total } from '../metrics'
 
 type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired'
 
@@ -76,17 +76,7 @@ async function lookupApiKeyResult(
  * usage), so the two surfaces cannot drift apart.
  */
 export function isAdminAuthorized(req: FastifyRequest): boolean {
-  const adminToken = process.env.ADMIN_TOKEN
-  if (!adminToken) return false
-  const supplied =
-    (req.headers['x-admin-token'] as string | undefined) ??
-    req.headers['authorization']?.replace(/^Bearer\s+/i, '')
-  if (!supplied) return false
-  const a = Buffer.from(supplied)
-  const b = Buffer.from(adminToken)
-  // Constant-time comparison (timingSafeEqual requires equal-length buffers).
-  // The length guard is not itself a meaningful leak for a high-entropy token.
-  return a.length === b.length && timingSafeEqual(a, b)
+  return checkAdminAuth(req).authorized
 }
 
 /**
@@ -161,3 +151,68 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
 }
 
 export const registerApiKeyAuth = fp(apiKeyAuthPlugin, { name: 'api-key-auth' })
+
+export type AdminAuthResult =
+  | { authorized: true }
+  | { authorized: false; reason: 'not_configured' | 'unauthorized'; detail?: 'unset' | 'weak_token' }
+
+const WEAK_ADMIN_TOKEN_PLACEHOLDERS = new Set([
+  'super-secret-admin-token',
+  'change-me',
+  'changeme',
+  'admin',
+  'password',
+  'secret',
+  'token',
+  'placeholder',
+  'your-admin-token',
+  'example',
+  'default',
+])
+
+export function resolveAdminTokenConfig(): { token: string | null; reason?: 'unset' | 'weak_token' } {
+  const raw = process.env.ADMIN_TOKEN
+  if (raw === undefined) return { token: null, reason: 'unset' }
+  const trimmed = raw.trim()
+  if (trimmed.length === 0 || WEAK_ADMIN_TOKEN_PLACEHOLDERS.has(trimmed.toLowerCase())) {
+    return { token: null, reason: 'weak_token' }
+  }
+  return { token: trimmed }
+}
+
+export function isAdminTokenConfigured(): boolean {
+  return resolveAdminTokenConfig().token !== null
+}
+
+export function checkAdminAuth(req: FastifyRequest): AdminAuthResult {
+  const { token: adminToken, reason } = resolveAdminTokenConfig()
+  if (!adminToken) return { authorized: false, reason: 'not_configured', detail: reason }
+  const supplied = (req.headers['x-admin-token'] as string | undefined) ?? req.headers['authorization']?.replace(/^[Bb]earer\s+/i, '')
+  if (!supplied) return { authorized: false, reason: 'unauthorized' }
+  const a = Buffer.from(supplied)
+  const b = Buffer.from(adminToken)
+  if (a.length === b.length && timingSafeEqual(a, b)) return { authorized: true }
+  return { authorized: false, reason: 'unauthorized' }
+}
+
+export function requireAdminAuth(req: FastifyRequest, reply: FastifyReply): boolean {
+  const result = checkAdminAuth(req)
+  if (result.authorized) return true
+  
+  admin_auth_failures_total.inc()
+  
+  if (result.reason === 'not_configured') {
+    reply.status(503).send({
+      error: 'Service Unavailable',
+      code: 'admin_not_configured',
+      message: 'Admin surface is not configured. Set a non-placeholder ADMIN_TOKEN on the server.',
+    })
+    return false
+  }
+  reply.status(401).send({
+    error: 'Unauthorized',
+    code: 'admin_unauthorized',
+    message: 'Provide a valid X-Admin-Token header.',
+  })
+  return false
+}

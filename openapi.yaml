@@ -168,6 +168,9 @@ paths:
                 properties:
                   ok:
                     type: boolean
+                  adminConfigured:
+                    type: boolean
+                    description: Whether ADMIN_TOKEN is configured with a non-placeholder secret and the admin surface (/admin/keys, /admin/usage) is enabled.
                   network:
                     type: string
                     enum: [testnet, mainnet]
