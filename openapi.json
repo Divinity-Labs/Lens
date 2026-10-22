@@ -1320,6 +1320,75 @@
         }
       }
     },
+    "/price/{asset}/fiat": {
+      "get": {
+        "operationId": "getFiatPrice",
+        "summary": "Get an asset's price denominated in a fiat currency",
+        "description": "Returns the asset's price in a requested fiat currency (e.g. NGN, USD, EUR, GBP), naming the rate source and its age. Cross rates state both legs explicitly.",
+        "security": [
+          {
+            "x402": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "required": true,
+            "description": "Asset code (e.g. XLM, USDC) or CODE:ISSUER identifier.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM"
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "required": true,
+            "description": "Target fiat currency code (e.g. NGN).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "NGN"
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fiat-denominated price with rate source, age, and legs if cross-computed.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiatPriceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported fiat currency or invalid request parameters"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "404": {
+            "description": "No conversion rate or market price available"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/volumes/{asset}": {
       "get": {
         "operationId": "getVolumes",
@@ -3227,6 +3296,95 @@
                 }
               }
             }
+          }
+        }
+      },
+      "FiatRateLeg": {
+        "type": "object",
+        "required": [
+          "base",
+          "quote",
+          "rate",
+          "source",
+          "ageSeconds",
+          "stale"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FiatPriceResponse": {
+        "type": "object",
+        "required": [
+          "asset",
+          "currency",
+          "price",
+          "network",
+          "source",
+          "rateAgeSeconds",
+          "stale",
+          "isCrossRate",
+          "asOf"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "rateAgeSeconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "isCrossRate": {
+            "type": "boolean"
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FiatRateLeg"
+            }
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

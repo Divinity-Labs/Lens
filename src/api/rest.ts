@@ -39,7 +39,7 @@ export const HISTORY_MAX_LIMIT = 1000
  * identifies an asset. A bare code still matches on code alone, since callers
  * quoting XLM or a single-issuer asset rely on that.
  */
-function findPair(assetA: string, assetB: string, network: NetworkName) {
+export function findPair(assetA: string, assetB: string, network: NetworkName) {
   const parse = (a: string) => {
     if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
     const [code, issuer] = a.split(':')
