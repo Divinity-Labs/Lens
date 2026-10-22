@@ -13,6 +13,7 @@ import { registerX402 } from './middleware/x402'
 import { registerNetworkSelector } from './middleware/network'
 import { registerHttpMetrics } from './middleware/httpMetrics'
 import { registerWebSocket } from './api/websocket'
+import { destroyRevocationSubscriber } from './ws/connectionRegistry'
 import { registerApiKeyAuth } from './api/auth'
 import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
@@ -184,6 +185,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerHealthRoutes(app)
   await registerGraphQL(app)
   await registerWebSocket(app)
+
+  app.addHook('onClose', async () => {
+    await destroyRevocationSubscriber()
+  })
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)
   app.get('/metrics', { config: { public: true } }, async (req, reply) => {
