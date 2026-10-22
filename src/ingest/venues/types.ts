@@ -76,4 +76,19 @@ export interface VenueAdapter<TTarget = any, TRaw = any> {
    * Gets the last seen price for threshold/webhook tracking.
    */
   _getLastPrice?(network: NetworkName, pairKey: string): number | undefined
+
+  /**
+   * Start periodic rediscovery of targets for watched pairs.
+   */
+  startRediscovery?(intervalMs: number, network?: NetworkName): Promise<void>
+
+  /**
+   * Get current watched set (for testing)
+   */
+  getWatchedSet?(): Set<any>
+
+  /**
+   * Run a discovery cycle manually (for testing)
+   */
+  runDiscoveryCycle?(network?: NetworkName): Promise<{ added: number; removed: number }>
 }

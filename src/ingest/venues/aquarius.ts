@@ -17,8 +17,13 @@ import {
   resetLastPrice,
   writeVenuePricePoints,
   startVenueAdapter,
+  createRediscoveryState,
+  runDiscoveryCycle,
+  startRediscoveryLoop,
+  getTargetKey,
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
+import { getActivePairs } from '../../pairsRegistry'
 
 const log = createLogger('ingester:aquarius')
 
@@ -39,6 +44,8 @@ export interface AquariusPool {
 export interface AquariusListResponse {
   results?: AquariusPool[]
 }
+
+const aquariusRediscoveryState = createRediscoveryState<AquariusPool>()
 
 export async function fetchAquariusPools(
   pair: WatchedPair,
@@ -144,6 +151,27 @@ export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
 
   _resetLastPrice,
   _getLastPrice,
+
+  async startRediscovery(intervalMs: number, network: NetworkName = activeNetwork): Promise<void> {
+    const discoverFn = async (pair: WatchedPair, net: NetworkName) => {
+      const pools = await fetchAquariusPools(pair, getNetworkConfig(net).aquarius.apiUrl)
+      return pools
+    }
+    await startRediscoveryLoop('Aquarius', aquariusAdapter, network, intervalMs, aquariusRediscoveryState, discoverFn)
+  },
+
+  getWatchedSet(): Set<any> {
+    return aquariusRediscoveryState.watched
+  },
+
+  async runDiscoveryCycle(network: NetworkName = activeNetwork): Promise<{ added: number; removed: number }> {
+    const pairs = getActivePairs()
+    const discoverFn = async (pair: WatchedPair, net: NetworkName) => {
+      const pools = await fetchAquariusPools(pair, getNetworkConfig(net).aquarius.apiUrl)
+      return pools
+    }
+    return runDiscoveryCycle('Aquarius', network, pairs, discoverFn, aquariusRediscoveryState)
+  },
 }
 
 export async function startAquariusIngester(network: NetworkName = activeNetwork): Promise<void> {

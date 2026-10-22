@@ -95,6 +95,27 @@ export const last_trade_timestamp = new Gauge({
   registers: [register]
 })
 
+export const pools_discovered_total = new Counter({
+  name: 'pools_discovered_total',
+  help: 'Total number of pools discovered across all venues',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
+export const pools_added_total = new Counter({
+  name: 'pools_added_total',
+  help: 'Total number of pools added during discovery cycles',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
+export const pools_removed_total = new Counter({
+  name: 'pools_removed_total',
+  help: 'Total number of pools removed during discovery cycles',
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
 // Ingestion health is labelled only by the finite adapter registry and the
 // two supported networks. Do not add pair or pool identifiers here: they make
 // the series count grow with user configuration and on-chain pool creation.
