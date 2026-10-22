@@ -271,3 +271,42 @@ model ApiKey {
 
   @@map("api_keys")
 }
+
+model RecommendationQuote {
+  id                String    @default(uuid())
+  network           String    @default("testnet")
+  pairKey           String    @map("pair_key")
+  assetA            String    @map("asset_a")
+  assetB            String    @map("asset_b")
+  recommendedVenue  String    @map("recommended_venue")
+  predictedPrice    Decimal   @map("predicted_price") @db.Decimal(36, 18)
+  predictedSlippage Decimal   @map("predicted_slippage") @db.Decimal(10, 6)
+  estimatedOutput   Decimal?  @map("estimated_output") @db.Decimal(36, 18)
+  timestamp         DateTime  @default(now())
+
+  executions        RealisedTradeExecution[]
+
+  @@id([network, id])
+  @@index([network, pairKey, timestamp(sort: Desc)])
+  @@index([network, recommendedVenue, pairKey, timestamp(sort: Desc)])
+  @@map("recommendation_quotes")
+}
+
+model RealisedTradeExecution {
+  id                    String               @default(uuid())
+  network               String               @default("testnet")
+  quoteId               String?              @map("quote_id")
+  pairKey               String               @map("pair_key")
+  venue                 String
+  realisedPrice         Decimal              @map("realised_price") @db.Decimal(36, 18)
+  realisedSlippage      Decimal?             @map("realised_slippage") @db.Decimal(10, 6)
+  txHash                String?              @map("tx_hash")
+  timestamp             DateTime             @default(now())
+
+  quote                 RecommendationQuote? @relation(fields: [network, quoteId], references: [network, id], onDelete: Cascade)
+
+  @@id([network, id])
+  @@index([network, pairKey, venue, timestamp(sort: Desc)])
+  @@index([network, quoteId])
+  @@map("realised_trade_executions")
+}
