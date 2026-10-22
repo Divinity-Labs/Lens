@@ -29,6 +29,7 @@ import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
 import { registerSettleRoute } from './routes/facilitator'
 import { registerHealthRoutes } from './routes/health'
+import { registerAccuracyRoutes } from './routes/accuracy'
 import { registerCachePolicy } from './middleware/cachePolicy'
 import { registerGlobalRateLimit, parseGlobalRateLimit } from './middleware/globalRateLimit'
 import { getMetrics, rate_limit_rejections_total } from './metrics'
@@ -182,6 +183,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerVenueRoutes(app)
   await registerSettleRoute(app)
   await registerHealthRoutes(app)
+  await registerAccuracyRoutes(app)
   await registerGraphQL(app)
   await registerWebSocket(app)
 

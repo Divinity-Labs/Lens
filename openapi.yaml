@@ -1432,6 +1432,63 @@ paths:
         '402':
           $ref: '#/components/responses/PaymentRequired'
 
+  /accuracy:
+    get:
+      operationId: getAccuracy
+      summary: Get recommendation accuracy reports comparing quotes to realised executions
+      description: Returns accuracy reports with deviation metrics and provenance for quotes versus actual trades.
+      security: []
+      parameters:
+        - name: pair
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by trading pair key (e.g. USDC:XLM)
+        - name: venue
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by execution venue (e.g. SDEX, AMM)
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1440
+          description: Evaluation window in minutes
+        - name: network
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [testnet, mainnet]
+          description: Target network (defaults to active network)
+      responses:
+        '200':
+          description: Accuracy report response
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [network, query, reports]
+                properties:
+                  network:
+                    type: string
+                  query:
+                    type: object
+                  reports:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     x402:
