@@ -268,6 +268,14 @@ model ApiKey {
   monthlyQuotaCents Int?     @default(10000) @map("monthly_quota_cents")
   dailyQuotaCents  Int?      @default(500) @map("daily_quota_cents")
   overagePolicy    String    @default("block") @map("overage_policy")
+  rotatedToId      String?   @unique @map("rotated_to_id")
+  rotatedFromId    String?   @map("rotated_from_id")
+  overlapEndsAt    DateTime? @map("overlap_ends_at")
+  rotatedAt        DateTime? @map("rotated_at")
 
+  rotatedTo   ApiKey?   @relation("KeyRotation", fields: [rotatedToId], references: [id])
+  rotatedFrom ApiKey?   @relation("KeyRotation")
+
+  @@index([overlapEndsAt])
   @@map("api_keys")
 }
