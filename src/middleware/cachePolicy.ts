@@ -158,6 +158,8 @@ export function cachePolicyFor(
 
     // Slower-moving derived views.
     case '/volumes/:asset':
+    case '/coverage':
+    case '/coverage/:asset':
     case '/screener':
     case '/basket':
       policy = 'public, max-age=120'

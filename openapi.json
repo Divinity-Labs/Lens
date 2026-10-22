@@ -1382,6 +1382,115 @@
         }
       }
     },
+    "/coverage": {
+      "get": {
+        "operationId": "getOverallCoverage",
+        "summary": "Get overall market coverage ratio and cross-venue activity",
+        "description": "Compares indexed trade activity in Lens across all tracked assets against total network activity from Horizon over a time window.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Overall coverage metrics across all tracked assets",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverallCoverageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/coverage/{asset}": {
+      "get": {
+        "operationId": "getAssetCoverage",
+        "summary": "Get market coverage ratio and venue breakdown for a specific asset",
+        "description": "Compares indexed trade volume and count for a specific asset against total network activity from Horizon over a time window.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Market coverage metrics for the requested asset",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetCoverageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/spreads/{asset}": {
       "get": {
         "operationId": "getSpreads",
@@ -3408,6 +3517,365 @@
           },
           "tradeCount": {
             "type": "integer"
+          }
+        }
+      },
+      "OverallCoverageResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "window",
+          "startTime",
+          "endTime",
+          "overall",
+          "assets",
+          "provenance",
+          "methodology"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "24h",
+              "7d",
+              "30d"
+            ]
+          },
+          "startTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "overall": {
+            "type": "object",
+            "required": [
+              "tradeCoverageRatio",
+              "totalIndexedTrades",
+              "totalNetworkTrades",
+              "assetsTracked",
+              "assetsWithActivity",
+              "status",
+              "venues"
+            ],
+            "properties": {
+              "tradeCoverageRatio": {
+                "type": "number",
+                "nullable": true
+              },
+              "volumeCoverageRatio": {
+                "type": "number",
+                "nullable": true
+              },
+              "totalIndexedTrades": {
+                "type": "integer"
+              },
+              "totalNetworkTrades": {
+                "type": "integer"
+              },
+              "assetsTracked": {
+                "type": "integer"
+              },
+              "assetsWithActivity": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "computed",
+                  "unanswerable"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "asset",
+                "coverageRatio",
+                "indexedVolume",
+                "networkVolume",
+                "indexedTradeCount",
+                "networkTradeCount",
+                "status",
+                "byVenue",
+                "venues"
+              ],
+              "properties": {
+                "asset": {
+                  "type": "string"
+                },
+                "coverageRatio": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "indexedVolume": {
+                  "type": "number"
+                },
+                "networkVolume": {
+                  "type": "number"
+                },
+                "indexedTradeCount": {
+                  "type": "integer"
+                },
+                "networkTradeCount": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "computed",
+                    "unanswerable"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "byVenue": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                },
+                "venues": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "lastIndexedTrade": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "venues",
+              "indexedSampleCount",
+              "networkSampleCount",
+              "asOf",
+              "horizonUrl",
+              "window",
+              "startTime",
+              "endTime"
+            ],
+            "properties": {
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "indexedSampleCount": {
+                "type": "integer"
+              },
+              "networkSampleCount": {
+                "type": "integer"
+              },
+              "asOf": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "horizonUrl": {
+                "type": "string"
+              },
+              "window": {
+                "type": "string"
+              },
+              "startTime": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "endTime": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "methodology": {
+            "type": "string"
+          }
+        }
+      },
+      "AssetCoverageResponse": {
+        "type": "object",
+        "required": [
+          "asset",
+          "network",
+          "window",
+          "startTime",
+          "endTime",
+          "coverageRatio",
+          "status",
+          "indexed",
+          "provenance",
+          "methodology"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "24h",
+              "7d",
+              "30d"
+            ]
+          },
+          "startTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "coverageRatio": {
+            "type": "number",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "computed",
+              "unanswerable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "indexed": {
+            "type": "object",
+            "required": [
+              "totalVolume",
+              "tradeCount",
+              "byVenue",
+              "venues"
+            ],
+            "properties": {
+              "totalVolume": {
+                "type": "number"
+              },
+              "tradeCount": {
+                "type": "integer"
+              },
+              "byVenue": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "networkActivity": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "totalVolume": {
+                "type": "number"
+              },
+              "tradeCount": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string"
+              },
+              "horizonUrl": {
+                "type": "string"
+              }
+            }
+          },
+          "tradeCoverageRatio": {
+            "type": "number",
+            "nullable": true
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "venues",
+              "indexedSampleCount",
+              "networkSampleCount",
+              "hasGap",
+              "asOf",
+              "horizonUrl"
+            ],
+            "properties": {
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "indexedSampleCount": {
+                "type": "integer"
+              },
+              "networkSampleCount": {
+                "type": "integer"
+              },
+              "lastIndexedTrade": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "dataAgeSeconds": {
+                "type": "number",
+                "nullable": true
+              },
+              "hasGap": {
+                "type": "boolean"
+              },
+              "asOf": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "horizonUrl": {
+                "type": "string"
+              }
+            }
+          },
+          "methodology": {
+            "type": "string"
           }
         }
       },
