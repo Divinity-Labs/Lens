@@ -15,6 +15,9 @@ export interface ApiKeyContext {
   label: string
   ratePerMin: number
   ratePerDay: number
+  isOverlap?: boolean
+  overlapEndsAt?: Date | null
+  rotatedToId?: string | null
 }
 
 declare module 'fastify' {
@@ -53,16 +56,41 @@ async function lookupApiKeyResult(
   const hash = hashApiKey(plaintext)
   const record = await prisma.apiKey.findUnique({ where: { hash } })
   if (!record) return { context: null, failureReason: 'unknown' }
-  if (record.revokedAt) return { context: null, failureReason: 'revoked' }
-  if (record.expiresAt && record.expiresAt <= new Date()) {
+
+  const now = new Date()
+
+  // A key with overlapEndsAt in the past is rejected even without revokedAt
+  if (record.overlapEndsAt && record.overlapEndsAt <= now) {
     return { context: null, failureReason: 'expired' }
   }
+
+  // A key with revokedAt set is still valid if overlapEndsAt is in the future
+  if (record.revokedAt) {
+    const inOverlap = Boolean(record.overlapEndsAt && record.overlapEndsAt > now)
+    if (!inOverlap) {
+      return { context: null, failureReason: 'revoked' }
+    }
+  }
+
+  if (record.expiresAt && record.expiresAt <= now) {
+    return { context: null, failureReason: 'expired' }
+  }
+
+  const inOverlap = Boolean(record.overlapEndsAt && record.overlapEndsAt > now)
+
   return {
     context: {
       id: record.id,
       label: record.label,
       ratePerMin: record.ratePerMin,
       ratePerDay: record.ratePerDay,
+      ...(inOverlap
+        ? {
+            isOverlap: true,
+            overlapEndsAt: record.overlapEndsAt,
+            rotatedToId: record.rotatedToId,
+          }
+        : {}),
     },
   }
 }
@@ -157,6 +185,12 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     }
 
     req.apiKey = keyContext
+    if (keyContext.isOverlap && keyContext.overlapEndsAt) {
+      const iso = keyContext.overlapEndsAt.toISOString()
+      reply.header('x-key-overlap', 'true')
+      reply.header('x-key-overlap-ends-at', iso)
+      reply.header('x-overlap-ends-at', iso)
+    }
   })
 }
 

@@ -137,3 +137,57 @@ export function parseCents(price: string): number {
   if (!match) return 0
   return Math.round(parseFloat(match[1]) * 100)
 }
+
+/**
+ * Approach for preserving usage history across key rotation:
+ * Metering counters (daily and monthly calls and cents spent) are stored in Redis
+ * keyed by the API key ID (`lens:x402:quota:...:${keyId}`). Quota limits and
+ * overage policies are stored on the ApiKey model in PostgreSQL.
+ *
+ * When an API key is rotated via POST /admin/keys/:id/rotate:
+ * 1. The replacement key inherits the predecessor's quota configuration
+ *    (dailyQuotaCents, monthlyQuotaCents, overagePolicy) and rate limits in PostgreSQL.
+ * 2. Active Redis usage counters (daily/monthly calls and cents) are copied from the
+ *    old key to the new key with remaining TTLs preserved via copyUsageState.
+ * 3. The old and new keys are bidirectionally linked via rotatedToId and rotatedFromId.
+ *
+ * This approach guarantees that the replacement key immediately inherits existing usage
+ * consumption against its quota without requiring extra database queries or round-trips
+ * on the high-throughput x402 metering hot-path.
+ */
+export async function copyUsageState(oldKeyId: string, newKeyId: string): Promise<void> {
+  const db = redis as unknown as Redis
+  const [
+    dailyCallsRaw,
+    dailyCentsRaw,
+    monthlyCallsRaw,
+    monthlyCentsRaw,
+  ] = await Promise.all([
+    db.get(getDailyBase(oldKeyId) + ':calls'),
+    db.get(getDailyBase(oldKeyId) + ':cents'),
+    db.get(getMonthlyBase(oldKeyId) + ':calls'),
+    db.get(getMonthlyBase(oldKeyId) + ':cents'),
+  ])
+
+  const multi = db.multi()
+  const dayTtl = secondsUntilEndOfDay()
+  const monthTtl = secondsUntilEndOfMonth()
+
+  if (dailyCallsRaw !== null && dailyCallsRaw !== undefined) {
+    multi.set(getDailyBase(newKeyId) + ':calls', dailyCallsRaw)
+    multi.expire(getDailyBase(newKeyId) + ':calls', dayTtl)
+  }
+  if (dailyCentsRaw !== null && dailyCentsRaw !== undefined) {
+    multi.set(getDailyBase(newKeyId) + ':cents', dailyCentsRaw)
+    multi.expire(getDailyBase(newKeyId) + ':cents', dayTtl)
+  }
+  if (monthlyCallsRaw !== null && monthlyCallsRaw !== undefined) {
+    multi.set(getMonthlyBase(newKeyId) + ':calls', monthlyCallsRaw)
+    multi.expire(getMonthlyBase(newKeyId) + ':calls', monthTtl)
+  }
+  if (monthlyCentsRaw !== null && monthlyCentsRaw !== undefined) {
+    multi.set(getMonthlyBase(newKeyId) + ':cents', monthlyCentsRaw)
+    multi.expire(getMonthlyBase(newKeyId) + ':cents', monthTtl)
+  }
+  await multi.exec()
+}

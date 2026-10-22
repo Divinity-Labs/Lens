@@ -38,6 +38,7 @@ export const INTERNAL_ROUTES: readonly string[] = [
   // ADMIN_TOKEN rather than a client API key (see src/api/admin.ts).
   '/admin/keys',
   '/admin/keys/{id}',
+  '/admin/keys/{id}/rotate',
 
   // Operator-only usage/quota reporting for minted keys.
   '/admin/usage',
