@@ -132,7 +132,9 @@ describe('GET /candles/:assetA/:assetB', () => {
     await app.inject({ method: 'GET', url: `/candles/XLM/USDC?interval=1h&from=${from}&to=${to}` })
 
     const params = mockQuery.mock.calls[0][1]
-    expect(new Date(params[2]).toISOString()).toBe(from)
-    expect(new Date(params[3]).toISOString()).toBe(to)
+    // $1 intervalSecs, $2 pairKey, $3 network, $4 from, $5 to
+    expect(params[2]).toMatch(/^(testnet|mainnet)$/)
+    expect(new Date(params[3]).toISOString()).toBe(from)
+    expect(new Date(params[4]).toISOString()).toBe(to)
   })
 })

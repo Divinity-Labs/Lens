@@ -118,14 +118,14 @@ spec entry declares a `network` parameter answer for the selected network; the
 ones listed below still read a single instance-wide network.
 
 Per-request today: `/price/:assetA/:assetB` (its VWAP, OHLCV, AMM and
-best-route reads), `/price/:assetA/:assetB/route`, `/price/:assetA/:assetB/depth`, `/book/:assetA/:assetB`,
-`/prices/history`, `/screener`, `/pools`, `/pairs`, `/spreads/:asset`,
-`/volumes/:asset`, `/status`, and the x402 payment `network`/`payTo`. That list
+best-route reads), `/price/:assetA/:assetB/route`, `/price/:assetA/:assetB/depth`,
+`/price/:assetA/:assetB/history`, `/prices/history`, `/screener`, `/pools`, `/pairs`, `/spreads/:asset`,
+`/volumes/:asset`, `/candles/:assetA/:assetB`, `/status`, and the x402 payment `network`/`payTo`. That list
 is the same one `openapi.yaml` declares a `network` parameter on — if they ever
 disagree, the spec is the thing to fix.
 
 Still reading across both networks, and ignoring the parameter:
-`/candles/:assetA/:assetB`, `/price/twap/*`, and `/price/vwap/*`.
+`/price/twap/*`, and `/price/vwap/*`.
 
 ### API key authentication errors
 
