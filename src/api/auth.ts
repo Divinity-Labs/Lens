@@ -112,7 +112,7 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
 
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     // Allow routes to mark themselves public (no auth required).
-    const routeConfig = (req.routeOptions?.config ?? {}) as { public?: boolean }
+    const routeConfig = (req.routeOptions?.config ?? {}) as { public?: boolean; scope?: string }
     if (routeConfig.public) return
 
     const authorization = req.headers['authorization']
