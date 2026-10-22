@@ -705,3 +705,4 @@ export function installResponseValidation(app: FastifyInstance): void {
     }
   })
 }
+
