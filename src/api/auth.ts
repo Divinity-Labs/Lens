@@ -188,7 +188,7 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
         return reply.status(403).send({
           error: 'Forbidden',
           code: 'insufficient_scope',
-          message: `Missing required scope: ${scope}`,
+          message: `Insufficient scope. Required: ${scope}`,
           requiredScope: scope,
           scope,
         })
