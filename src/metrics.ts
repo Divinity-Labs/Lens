@@ -69,6 +69,12 @@ export const admin_auth_failures_total = new Counter({
   registers: [register]
 })
 
+export const websocket_connections_active = new Gauge({
+  name: 'websocket_connections_active',
+  help: 'Number of currently authenticated price WebSocket connections',
+  registers: [register]
+})
+
 export const rate_limit_rejections_total = new Counter({
   name: 'rate_limit_rejections_total',
   help: 'Total number of requests rejected by the per-key or fallback IP rate limiter',

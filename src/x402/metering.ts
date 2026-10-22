@@ -59,10 +59,16 @@ export async function getQuotaConfig(keyId: string): Promise<QuotaConfig> {
   }
 }
 
-export async function checkQuota(keyId: string): Promise<{ allowed: boolean; reason?: string }> {
+export async function checkQuota(keyId: string, additionalCents = 0): Promise<{ allowed: boolean; reason?: string }> {
   const config = await getQuotaConfig(keyId)
   const summary = await getUsageSummaryInternal(keyId, config)
-  if (summary.dailyCents >= summary.dailyQuotaCents || summary.monthlyCents >= summary.monthlyQuotaCents) {
+  const exceedsDaily = additionalCents === 0
+    ? summary.dailyCents >= summary.dailyQuotaCents
+    : summary.dailyCents + additionalCents > summary.dailyQuotaCents
+  const exceedsMonthly = additionalCents === 0
+    ? summary.monthlyCents >= summary.monthlyQuotaCents
+    : summary.monthlyCents + additionalCents > summary.monthlyQuotaCents
+  if (exceedsDaily || exceedsMonthly) {
     return { allowed: false, reason: `${config.overagePolicy} quota exceeded` }
   }
   return { allowed: true }

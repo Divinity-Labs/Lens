@@ -103,6 +103,15 @@ describe('structured logger output', () => {
     expect(output).toContain('[redacted]')
   })
 
+  it('redacts API keys carried in the WebSocket subprotocol header', () => {
+    const apiKey = 'lens_0123456789abcdef0123456789abcdef0123456789abcdef'
+    const { lines, destination } = capture()
+    const log = buildLogger({ level: 'info', pretty: false, destination })
+    log.info({ req: { headers: { 'sec-websocket-protocol': `lens,lens-key.${apiKey}` } } }, 'request')
+    expect(lines.join('\n')).not.toContain(apiKey)
+    expect(lines.join('\n')).toContain('[redacted]')
+  })
+
   it('renders human-readable lines in development mode', () => {
     const { lines, destination } = capture()
     const log = buildLogger({ level: 'info', pretty: true, destination }).child({
