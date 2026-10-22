@@ -5,6 +5,7 @@ import ts from 'typescript'
 
 const rootDir = resolve(__dirname, '../..')
 const srcDir = resolve(rootDir, 'src')
+const examplesDir = resolve(rootDir, 'examples')
 const envExamplePath = resolve(rootDir, '.env.example')
 
 /**
@@ -75,9 +76,11 @@ export function getSourceFiles(dir: string): string[] {
       }
     } else if (
       entry.isFile() &&
-      entry.name.endsWith('.ts') &&
+      (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) &&
       !entry.name.endsWith('.test.ts') &&
+      !entry.name.endsWith('.test.tsx') &&
       !entry.name.endsWith('.spec.ts') &&
+      !entry.name.endsWith('.spec.tsx') &&
       !entry.name.endsWith('.d.ts')
     ) {
       files.push(fullPath)
@@ -151,12 +154,12 @@ export function extractEnvReadsFromSource(sourceCode: string, fileName: string):
 }
 
 describe('.env.example drift guard', () => {
-  // Parsing every file under src/ with the TypeScript compiler takes several
+  // Parsing every file under src/ and examples/ with the TypeScript compiler takes several
   // seconds on a cold filesystem cache (i.e. a fresh CI checkout), which trips
   // vitest's 5s default and makes this guard flaky. Give it real headroom.
   it('asserts each process.env read in source appears in .env.example or the allow-list', { timeout: 60_000 }, () => {
     const documentedVars = parseEnvExample(envExamplePath)
-    const sourceFiles = getSourceFiles(srcDir)
+    const sourceFiles = [...getSourceFiles(srcDir), ...getSourceFiles(examplesDir)]
     const allReads: EnvRead[] = []
 
     for (const file of sourceFiles) {
@@ -202,6 +205,24 @@ describe('.env.example drift guard', () => {
 
     expect(missing).toHaveLength(1)
     expect(missing[0].name).toBe('SOME_BRAND_NEW_SECRET_VAR')
+  })
+
+  it('fails when a new un-documented process.env read is encountered in examples/', () => {
+    const sampleCode = `
+      export function init() {
+        const secret = process.env.EXAMPLES_NEW_SECRET_VAR
+        return secret
+      }
+    `
+    const reads = extractEnvReadsFromSource(sampleCode, 'examples/sample.ts')
+    const documentedVars = parseEnvExample(envExamplePath)
+
+    const missing = reads.filter(
+      (read) => !documentedVars.has(read.name) && !(read.name in UNDOCUMENTED_ENV_ALLOW_LIST)
+    )
+
+    expect(missing).toHaveLength(1)
+    expect(missing[0].name).toBe('EXAMPLES_NEW_SECRET_VAR')
   })
 
   it('requires every allow-list entry to have an explicit rationale', () => {
