@@ -353,3 +353,4 @@ describe('admin endpoints', () => {
     expect(output).toContain('admin_auth_failures_total')
   })
 })
+

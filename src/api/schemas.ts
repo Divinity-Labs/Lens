@@ -68,10 +68,11 @@ export const readyResponseSchema = {
 /** GET /status */
 export const statusResponseSchema = {
   type: 'object',
-  required: ['ok', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds'],
+  required: ['ok', 'adminConfigured', 'network', 'watchedPairs', 'lastIndexedLedger', 'lastProcessedAt', 'ingestLagSeconds'],
   additionalProperties: false,
   properties: {
     ok: { type: 'boolean' },
+    adminConfigured: { type: 'boolean' },
     network: { type: 'string', enum: ['testnet', 'mainnet'] },
     watchedPairs: { type: 'array', items: { type: 'string' } },
     lastIndexedLedger: { type: ['integer', 'null'] },

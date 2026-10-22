@@ -139,3 +139,4 @@ describe('GET /status', () => {
     expect(mockQuery).not.toHaveBeenCalled()
   })
 })
+

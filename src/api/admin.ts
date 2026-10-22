@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
 import { admin_auth_failures_total } from '../metrics'
-import { hashApiKey, isAdminAuthorized } from './auth'
+import { hashApiKey, requireAdminAuth } from './auth'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -33,14 +33,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys',
     { config: { public: true } },
     async (req: FastifyRequest<{ Body: CreateKeyBody }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      if (!requireAdminAuth(req, reply)) return
 
       const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
@@ -88,14 +81,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id',
     { config: { public: true } },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      if (!requireAdminAuth(req, reply)) return
 
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })

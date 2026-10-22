@@ -13,7 +13,7 @@ import { registerX402 } from './middleware/x402'
 import { registerNetworkSelector } from './middleware/network'
 import { registerHttpMetrics } from './middleware/httpMetrics'
 import { registerWebSocket } from './api/websocket'
-import { registerApiKeyAuth } from './api/auth'
+import { registerApiKeyAuth, resolveAdminTokenConfig } from './api/auth'
 import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
 import { registerFacilitatorRoutes } from './api/facilitator'
@@ -153,6 +153,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // Admin endpoints (key issuance/revocation) — gated by ADMIN_TOKEN. Marked
   // `config.public` so the API-key auth hook skips them.
+  const adminTokenState = resolveAdminTokenConfig()
+  if (!adminTokenState.token) {
+    app.log.warn(
+      { reason: adminTokenState.reason },
+      '[auth] ADMIN_TOKEN is not configured or is a weak placeholder — admin surface (/admin/keys, /admin/usage) is disabled',
+    )
+  }
   await registerAdminRoutes(app)
   await registerUsageRoutes(app)
   await app.register(registerFacilitatorRoutes)
