@@ -20,6 +20,7 @@ import {
 } from './schemas'
 import { getDepth, getImpact } from '../pricing/depth'
 import { listCrashes } from '../ingester/restart'
+import { listSourceFailures } from '../ingest/sourceFailures'
 import { isBootComplete } from '../health'
 import { resolveDecimalFormat, formatDecimal } from '../utils/decimals'
 
@@ -183,6 +184,16 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           network: c.network,
           message: c.message,
           at: c.at.toISOString(),
+        })),
+        // #329: sources whose latest fetch failed on this network, so a venue
+        // that is down is visible rather than reading as a venue with nothing
+        // to report. The error message stays in the log: an upstream client
+        // error can carry the upstream URL, and this route is public.
+        failedSources: listSourceFailures(network).map(f => ({
+          source: f.source,
+          network: f.network,
+          subject: f.subject,
+          at: f.at.toISOString(),
         })),
       }
     }

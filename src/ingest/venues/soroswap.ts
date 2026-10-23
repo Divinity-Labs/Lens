@@ -6,7 +6,7 @@
  * with source = 'soroswap_amm'. Runs independently of the SDEX and Horizon
  * AMM ingesters — a crash here cannot affect them.
  *
- * Issue: #48, #218
+ * Issue: #48, #218, #329
  */
 
 import {
@@ -28,6 +28,8 @@ import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
 import { fetchWithTimeout } from '../../fetch'
+import { fetchOk, fetchFailed, type FetchResult } from '../fetchResult'
+import { recordSourceFailure, clearSourceFailure } from '../sourceFailures'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -73,22 +75,31 @@ export interface PoolEntry {
 
 // ── Token-list helpers ────────────────────────────────────────────────────────
 
+/** `price_points.source` for Soroswap, and its key in the source-failure record. */
+export const SOROSWAP_SOURCE = 'soroswap_amm'
+
 /**
- * Fetch Soroswap token list. Returns an empty array on failure so the ingester
- * degrades gracefully without affecting other ingesters.
+ * Fetch the Soroswap token list (#329).
+ *
+ * `{ ok: true, data: [] }` means the list was fetched and is empty.
+ * `{ ok: false }` means it could not be fetched (network error, timeout,
+ * non-2xx, or a body without a `tokens` array) — the caller must not read that
+ * as "Soroswap lists no tokens". It is still a value rather than a throw, so a
+ * Soroswap outage stays isolated from the other ingesters.
  */
 export async function fetchSoroswapTokenList(
   tokenListUrl: string = getNetworkConfig(activeNetwork).soroswap.tokenListUrl,
   signal?: AbortSignal
-): Promise<SoroswapToken[]> {
+): Promise<FetchResult<SoroswapToken[]>> {
   try {
     const res = await fetchWithTimeout(tokenListUrl, { signal })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) throw new Error(`Soroswap token list returned HTTP ${res.status}`)
     const data = (await res.json()) as SoroswapTokenList
-    return Array.isArray(data.tokens) ? data.tokens : []
+    if (!Array.isArray(data?.tokens)) throw new Error('Soroswap token list response has no tokens array')
+    return fetchOk(data.tokens)
   } catch (err) {
     log.error({ err }, 'failed to fetch token list')
-    return []
+    return fetchFailed(err)
   }
 }
 
@@ -492,7 +503,9 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
 
   async discover(pair: WatchedPair, network: NetworkName): Promise<PoolEntry[]> {
     const netConfig = getNetworkConfig(network)
-    const tokens = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl)
+    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl)
+    if (!fetched.ok) throw fetched.error
+    const tokens = fetched.data
     const tokenA = tokens.find((t) => t.symbol.toUpperCase() === pair.assetA.code.toUpperCase())
     const tokenB = tokens.find((t) => t.symbol.toUpperCase() === pair.assetB.code.toUpperCase())
     if (!tokenA || !tokenB) return []
@@ -558,8 +571,19 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   },
 
   async ingestPair(pair: WatchedPair, network: NetworkName, signal?: AbortSignal): Promise<void> {
+    // An abandoned cycle (#351) never asked Soroswap anything, so it is
+    // neither a failure nor a success and leaves the recorded state alone.
+    if (signal?.aborted) return
     const netConfig = getNetworkConfig(network)
-    const tokens = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, signal)
+    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, signal)
+    if (!fetched.ok) {
+      // #329: without the token list no Soroswap pool can be priced, so the
+      // venue has failed for this pair — not answered with nothing.
+      recordSourceFailure(SOROSWAP_SOURCE, network, pair.pairKey, fetched.error)
+      return
+    }
+    clearSourceFailure(SOROSWAP_SOURCE, network, pair.pairKey)
+    const tokens = fetched.data
     if (tokens.length === 0) return
     await ingestPair(pair, tokens, netConfig.soroswap.factoryAddress, fetchPoolsFromFactory, network, signal)
   },

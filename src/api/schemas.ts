@@ -131,6 +131,22 @@ export const statusResponseSchema = {
         },
       },
     },
+    /** #329: sources whose latest fetch failed, per (source, subject). */
+    failedSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'network', 'subject', 'at'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          network: { type: 'string', enum: ['testnet', 'mainnet'] },
+          /** The pair key for a venue, the asset code for an oracle. */
+          subject: { type: 'string' },
+          at: { type: 'string' },
+        },
+      },
+    },
   },
 } as const
 
