@@ -16,6 +16,8 @@ import { prisma } from '../db'
 import { webhook_delivery_failures_total } from '../metrics'
 import { deliverJsonWithRetries } from '../alerts/delivery'
 
+const noJitter = () => 0
+
 describe('permanent webhook delivery failures', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -34,6 +36,7 @@ describe('permanent webhook delivery failures', () => {
       'webhook-secret',
       3,
       firstAttemptAt,
+      noJitter,
     )
 
     expect(prisma.webhookDeliveryFailure.create).toHaveBeenCalledOnce()
@@ -56,11 +59,44 @@ describe('permanent webhook delivery failures', () => {
   it('records a non-retryable client response as a permanent failure', async () => {
     vi.mocked(global.fetch).mockResolvedValue({ ok: false, status: 410 } as Response)
 
-    await deliverJsonWithRetries('https://hooks.example.test/alerts', { event: 'threshold' }, 'secret')
+    await deliverJsonWithRetries('https://hooks.example.test/alerts', { event: 'threshold' }, 'secret', 3, undefined, noJitter)
 
     expect(prisma.webhookDeliveryFailure.create).toHaveBeenCalledOnce()
     expect(vi.mocked(prisma.webhookDeliveryFailure.create).mock.calls[0][0].data)
       .toMatchObject({ attemptCount: 1, lastStatus: 410, errorCategory: 'http_4xx' })
     expect(webhook_delivery_failures_total.inc).toHaveBeenCalledWith({ category: 'http_4xx' })
+  })
+
+  it('jitters retry delays so simultaneous failures retry at different times', async () => {
+    vi.mocked(global.fetch).mockResolvedValue({ ok: false, status: 503 } as Response)
+
+    const delaysA: number[] = []
+    const delaysB: number[] = []
+    const randomA = () => 0.1
+    const randomB = () => 0.9
+
+    await deliverJsonWithRetries(
+      'https://hooks.example.test/alerts',
+      { event: 'threshold' },
+      'secret',
+      3,
+      undefined,
+      randomA,
+      (ms: number) => delaysA.push(ms),
+    )
+    await deliverJsonWithRetries(
+      'https://hooks.example.test/alerts',
+      { event: 'threshold' },
+      'secret',
+      3,
+      undefined,
+      randomB,
+      (ms: number) => delaysB.push(ms),
+    )
+
+    expect(delaysA).toHaveLength(2)
+    expect(delaysB).toHaveLength(2)
+    expect(delaysA[0]).not.toBe(delaysB[0])
+    expect(delaysA[1]).not.toBe(delaysB[1])
   })
 })
