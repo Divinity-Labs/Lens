@@ -1,15 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { activeNetwork } from '../config'
-import { formatValidationError, VALIDATION_ERROR_CODE } from '../validation'
 import {
-  ALLOWED_SORT_FIELDS,
-  MARKET_CAP_CODE,
-  MARKET_CAP_UNSUPPORTED,
-  runScreener,
-  ScreenerCursorError,
   SCREENER_DEFAULT_LIMIT,
-} from '../services/screener'
+  SCREENER_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // The query execution (filters, sorting, cursor pagination, the liquidity
@@ -90,25 +89,107 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
     try {
       const q = req.query
 
-      const parsed = ScreenerQuerySchema.safeParse(q)
-      if (!parsed.success) {
-        // market_cap is not a validation error but an unsupported parameter;
-        // it keeps its own machine-readable code while using the shared shape.
-        const marketCapRejected = parsed.error.issues.some(
-          (issue) => issue.path[0] === 'market_cap'
-        )
-        return reply
-          .status(400)
-          .send(
-            formatValidationError(
-              parsed.error,
-              marketCapRejected ? MARKET_CAP_CODE : VALIDATION_ERROR_CODE
-            )
-          )
+      // 1. Parse and validate pagination & sorting
+      const parsedLimit = parseLimit(q.limit, SCREENER_DEFAULT_LIMIT, SCREENER_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send({ error: parsedLimit.error })
+      }
+      const limit = parsedLimit.limit
+
+      if (q.market_cap !== undefined || q.sortBy === 'market_cap') {
+        return reply.status(400).send({ error: MARKET_CAP_UNSUPPORTED })
+      }
+
+      const allowedSortFields = ['volume', 'change_24h', 'price', 'liquidity']
+      const sortBy = q.sortBy ?? 'volume'
+      if (!allowedSortFields.includes(sortBy)) {
+        return reply.status(400).send({ error: `sortBy must be one of: ${allowedSortFields.join(', ')}` })
+      }
+
+      const order = (q.order ?? 'desc').toLowerCase()
+      if (order !== 'asc' && order !== 'desc') {
+        return reply.status(400).send({ error: 'order must be asc or desc' })
       }
       const { limit, sortBy, order, cursor } = parsed.data
 
-      return await runScreener({
+      // 4. Cursor decoding and pagination condition
+      if (q.cursor) {
+        const decoded = decodeCursor(q.cursor)
+        if (decoded === null) {
+          return reply.status(400).send({ error: 'Invalid cursor format' })
+        }
+        if (decoded !== 'skip') {
+          const op = order === 'desc' ? '<' : '>'
+          conditions.push(`(${sortBy}, pair_key) ${op} ($${paramIdx++}, $${paramIdx++})`)
+          params.push(decoded.value, decoded.id)
+        }
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+
+      // 5. Construct the full SQL query using CTEs
+      const sql = `
+        WITH pair_pools AS (
+          SELECT DISTINCT pair_key, pool_id 
+          FROM price_points 
+          WHERE network = $1 AND source = 'AMM' AND pool_id IS NOT NULL
+        ),
+        latest_snapshots AS (
+          SELECT DISTINCT ON (ps.pool_id) 
+            ps.pool_id, 
+            (ps.reserve_a * ps.spot_price + ps.reserve_b) AS pool_liq
+          FROM pool_snapshots ps
+          WHERE ps.network = $1
+          ORDER BY ps.pool_id, ps.timestamp DESC
+        ),
+        pair_liquidity AS (
+          SELECT pp.pair_key, SUM(ls.pool_liq) AS liquidity
+          FROM pair_pools pp
+          JOIN latest_snapshots ls ON ls.pool_id = pp.pool_id
+          GROUP BY pp.pair_key
+        ),
+        latest_aggregates AS (
+          SELECT DISTINCT ON (pair_key)
+            pair_key,
+            COALESCE(volume::float, 0) AS volume,
+            COALESCE(close_price::float, 0) AS price,
+            CASE 
+              WHEN open_price > 0 THEN ((close_price::float - open_price::float) / open_price::float) * 100 
+              ELSE 0 
+            END AS change_24h
+          FROM price_aggregates
+          WHERE network = $1 AND window = '24h'
+          ORDER BY pair_key, bucket DESC
+        ),
+        screener_data AS (
+          SELECT 
+            la.pair_key,
+            la.volume,
+            la.price,
+            la.change_24h,
+            COALESCE(pl.liquidity::float, 0) AS liquidity
+          FROM latest_aggregates la
+          LEFT JOIN pair_liquidity pl ON pl.pair_key = la.pair_key
+        )
+        SELECT * FROM screener_data
+        ${whereClause}
+        ORDER BY ${sortBy} ${order.toUpperCase()}, pair_key ${order.toUpperCase()}
+        LIMIT $${paramIdx}
+      `
+
+      // 6. Execute query
+      params.push(limit + 1) // Fetch one extra to determine hasMore
+      const result = await pgPool.query(sql, params)
+      const { data, hasMore } = slicePage(result.rows, limit)
+
+      // 7. Generate nextCursor
+      let nextCursor = null
+      if (hasMore && data.length > 0) {
+        const lastRecord = data[data.length - 1]
+        nextCursor = encodeCursor(lastRecord[sortBy], lastRecord.pair_key)
+      }
+
+      return {
         network: req.network ?? activeNetwork,
         filters: {
           volume: parsed.data.volume,
