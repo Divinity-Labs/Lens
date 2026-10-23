@@ -191,39 +191,7 @@ app.get<{ Querystring: { limit?: string } }>(
     },
   )
 
-  app.get(
-    '/admin/keys',
-    { config: { public: true } },
-    async (req: FastifyRequest, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
 
-      const keys = await prisma.apiKey.findMany({
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          label: true,
-          scopes: true,
-          ratePerMin: true,
-          ratePerDay: true,
-          revokedAt: true,
-          expiresAt: true,
-          createdAt: true,
-          monthlyQuotaCents: true,
-          dailyQuotaCents: true,
-          overagePolicy: true,
-        },
-      })
-
-      return reply.status(200).send({ keys })
-    },
-  )
 
   app.delete<{ Params: { id: string } }>(
     '/admin/keys/:id',
