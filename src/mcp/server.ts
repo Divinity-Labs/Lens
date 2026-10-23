@@ -370,7 +370,12 @@ export class BazaarMcpServer {
           const hasResources = (d: unknown): d is { resources: unknown[] } => 
             typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
 
-          return this.createBoundedResult(data, {
+          const rawList = Array.isArray(data) ? data : (hasResources(data) ? data.resources : []);
+          const normalizedData = typeof data === 'object' && data !== null && !Array.isArray(data)
+            ? { ...data, resources: rawList, count: (data as any).count ?? rawList.length }
+            : { resources: rawList, count: rawList.length };
+
+          return this.createBoundedResult(normalizedData, {
             maxBytes: this.limits.maxResultBytes,
             maxItems: page.limit,
             offset: page.offset,
