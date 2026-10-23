@@ -1921,7 +1921,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/LendingRatesResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Invalid parameters
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
