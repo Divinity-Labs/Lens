@@ -186,6 +186,7 @@ interface CoinbaseBookResponse {
 export class CoinbaseAdapter implements CexAdapter {
   readonly name = 'Coinbase'
   readonly source = 'coinbase_cex'
+  readonly sourceTimeCapability = { status: 'provided', semantic: 'exchange_timestamp' } as const
 
   private readonly baseUrl: string
   private readonly maxRetries: number
@@ -387,6 +388,8 @@ export class CoinbaseAdapter implements CexAdapter {
       baseVolume: ticker.baseVolume,
       counterVolume: ticker.quoteVolume,
       ledger: 0,
+      observedAt: new Date(),
+      sourceTime: ticker.timestamp,
       timestamp: ticker.timestamp,
     }
   }

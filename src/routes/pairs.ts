@@ -22,24 +22,25 @@ export async function registerPairsRoutes(app: FastifyInstance) {
     const network = req.network ?? activeNetwork
 
     const result = await pgPool.query(
-      `SELECT p.pair_key, l.price, l.timestamp
+      `SELECT p.pair_key, l.price, l.observed_at, l.source_time, l.timestamp
          FROM unnest($2::text[]) AS p(pair_key)
         CROSS JOIN LATERAL (
-              SELECT price, timestamp
+              SELECT price, COALESCE(observed_at, timestamp) AS observed_at, source_time, timestamp
                 FROM price_points
                WHERE network = $1
                  AND pair_key = p.pair_key
-               ORDER BY timestamp DESC
+               ORDER BY COALESCE(observed_at, timestamp) DESC
                LIMIT 1
              ) l`,
       [network, activePairs.map(p => p.pairKey)]
     )
 
-    const latestPrices = new Map<string, { price: number; timestamp: Date }>()
+    const latestPrices = new Map<string, { price: number; observedAt: Date; sourceTime: Date | null }>()
     result.rows.forEach(row => {
       latestPrices.set(row.pair_key, {
         price: parseFloat(row.price),
-        timestamp: row.timestamp,
+        observedAt: row.observed_at ?? row.timestamp,
+        sourceTime: row.source_time ? new Date(row.source_time) : null,
       })
     })
 
@@ -51,7 +52,8 @@ export async function registerPairsRoutes(app: FastifyInstance) {
           assetA: p.assetA,
           assetB: p.assetB,
           latestPrice: latest?.price ?? null,
-          lastUpdated: latest?.timestamp ?? null,
+          lastUpdated: latest?.observedAt ?? null,
+          sourceTime: latest?.sourceTime ?? null,
         }
       })
     }

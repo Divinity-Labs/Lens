@@ -144,7 +144,7 @@ describe('GET /candles/:assetA/:assetB', () => {
 
     // The SQL query should use < (exclusive) for the upper bound, not <=
     const sql = mockQuery.mock.calls[0][0]
-    expect(sql).toMatch(/AND timestamp < \$4/)
-    expect(sql).not.toMatch(/AND timestamp <= \$4/)
+    expect(sql).toMatch(/AND observed_at < \$4/)
+    expect(sql).not.toMatch(/AND observed_at <= \$4/)
   })
 })

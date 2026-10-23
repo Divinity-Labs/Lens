@@ -70,7 +70,7 @@ export async function writeVenuePricePoints(
   publishPriceUpdate({
     pair: pair.pairKey,
     price: currentPrice,
-    ts: latest.timestamp ? latest.timestamp.toISOString() : new Date().toISOString(),
+    ts: latest.observedAt ? latest.observedAt.toISOString() : (latest.timestamp ? latest.timestamp.toISOString() : new Date().toISOString()),
     network,
   })
 
@@ -121,6 +121,10 @@ export async function startVenueAdapter(
   network: NetworkName = activeNetwork,
   options: VenueAdapterLoopOptions = {}
 ): Promise<void> {
+  if (!adapter.sourceTimeCapability || !adapter.sourceTimeCapability.status) {
+    throw new Error(`Venue adapter "${adapter.name}" must declare sourceTimeCapability`)
+  }
+
   if (!adapter.isEnabled(network)) {
     log.info({ venue: adapter.name, network }, 'venue adapter is disabled — ingester not started')
     return

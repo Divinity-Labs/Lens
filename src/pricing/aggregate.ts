@@ -36,7 +36,7 @@ export async function aggregatePrice(
      FROM price_points
      WHERE pair_key = $1
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '1 hour'
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '1 hour'
      GROUP BY source`,
     [pairKey, network]
   )

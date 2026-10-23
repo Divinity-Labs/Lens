@@ -81,6 +81,7 @@ export function deriveAquariusPricePoints(
     const r1 = parseFloat(r1Str)
     if (r0 <= 0 || r1 <= 0) return []
 
+    const now = new Date()
     return [
       {
         assetA: pair.assetA.code,
@@ -92,7 +93,9 @@ export function deriveAquariusPricePoints(
         baseVolume: 0,
         counterVolume: 0,
         ledger: 0,
-        timestamp: new Date(),
+        observedAt: now,
+        sourceTime: null,
+        timestamp: now,
       },
     ]
   })
@@ -126,6 +129,7 @@ export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
   name: 'Aquarius',
   kind: 'amm',
   source: 'aquarius_amm',
+  sourceTimeCapability: { status: 'unavailable' },
   classification: 'aggregator',
   type: 'Liquidity Pool',
   description: 'Aquarius AMM liquidity pools',

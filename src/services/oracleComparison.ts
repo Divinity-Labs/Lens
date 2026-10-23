@@ -43,7 +43,7 @@ async function fetchLensPrice(assetCode: string, network: NetworkName): Promise<
      FROM price_points
      WHERE (asset_a = $1 OR asset_b = $1)
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '5 minutes'
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '5 minutes'
      GROUP BY pair_key
      LIMIT 1`,
     [assetCode, network]

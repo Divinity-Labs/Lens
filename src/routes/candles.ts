@@ -57,20 +57,26 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
     }
 
+    // Bucketing Decision (Issue #240):
+    // Candles are bucketed on `observed_at` (Lens wall-clock observation time),
+    // because observation time is the only temporal dimension that is universally
+    // present across all market sources (SDEX, AMM, Soroswap, Aquarius, CEX) and
+    // shares a single monotonic clock. Source timestamps (ledger close times or
+    // exchange timestamps) are source-specific, nullable, and subject to variable latency.
     const result = await pgPool.query(
       `SELECT
-         to_timestamp(floor(EXTRACT(EPOCH FROM timestamp) / $1) * $1) AS time,
-         (array_agg(price::float ORDER BY timestamp ASC))[1]  AS open,
-         MAX(price::float)                                     AS high,
-         MIN(price::float)                                     AS low,
-         (array_agg(price::float ORDER BY timestamp DESC))[1] AS close,
-         SUM(base_volume::float)                              AS volume
+         to_timestamp(floor(EXTRACT(EPOCH FROM observed_at) / $1) * $1) AS time,
+         (array_agg(price::float ORDER BY observed_at ASC))[1]  AS open,
+         MAX(price::float)                                      AS high,
+         MIN(price::float)                                      AS low,
+         (array_agg(price::float ORDER BY observed_at DESC))[1] AS close,
+         SUM(base_volume::float)                               AS volume
        FROM price_points
        WHERE pair_key = $2
          AND network = $5
-         AND timestamp >= $3
-         AND timestamp < $4
-       GROUP BY floor(EXTRACT(EPOCH FROM timestamp) / $1)
+         AND observed_at >= $3
+         AND observed_at < $4
+       GROUP BY floor(EXTRACT(EPOCH FROM observed_at) / $1)
        ORDER BY time ASC`,
       [intervalSecs, pairKey, from, to, network]
     )

@@ -144,6 +144,8 @@ export function deriveDeFindexPricePoints(
           baseVolume: 0,
           counterVolume: 0,
           ledger: 0,
+          observedAt: timestamp,
+          sourceTime: null,
           timestamp,
           eventId: `defindex-${snapshot.vaultAddress}-${timestamp.getTime()}`,
         },
@@ -420,6 +422,7 @@ export const defindexAdapter: VenueAdapter<string, DeFindexVaultSnapshot> = {
   type: 'Vault',
   description: 'DeFindex yield vaults on Soroban, priced per share',
   source: DEFINDEX_SOURCE,
+  sourceTimeCapability: { status: 'unavailable' },
   classification: 'aggregator',
 
   isEnabled(network: NetworkName): boolean {
