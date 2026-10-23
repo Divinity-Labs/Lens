@@ -287,3 +287,17 @@ export async function setIndexerCursor(id: string, cursor: string, network: Netw
     update: { lastCursor: cursor, lastLedger: ledger, lastProcessedAt: new Date() },
   })
 }
+
+/**
+ * Closes the Prisma client and the raw pg pool. Called last in the shutdown
+ * sequence, after ingesters and the HTTP listener have stopped, so nothing is
+ * still issuing queries when these close.
+ */
+export async function closeDatabases(): Promise<void> {
+  const results = await Promise.allSettled([prisma.$disconnect(), pgPool.end()])
+  for (const r of results) {
+    if (r.status === 'rejected') {
+      log.error({ err: r.reason }, 'failed to close database connection during shutdown')
+    }
+  }
+}

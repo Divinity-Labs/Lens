@@ -33,6 +33,53 @@ import { startSep40Publisher } from './publish/publisher'
 
 const log = createLogger('startup')
 
+// ── Graceful shutdown ─────────────────────────────────────────────────────
+// Deploys send SIGTERM. Without a handler Node exits immediately and leaves
+// in-flight writes, open transactions and websocket clients in limbo. The
+// order here matters: stop taking new HTTP traffic first, then drain, then
+// close the database and cache connections the drain may still be using.
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS ?? 15_000)
+
+let shuttingDown = false
+let shutdownApp: { close: () => Promise<unknown> } | undefined
+
+export async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    log.warn({ signal }, 'shutdown already in progress; ignoring repeated signal')
+    return
+  }
+  shuttingDown = true
+  log.info({ signal, graceMs: SHUTDOWN_GRACE_MS }, 'graceful shutdown started')
+
+  const deadline = setTimeout(() => {
+    log.error({ graceMs: SHUTDOWN_GRACE_MS }, 'shutdown grace period exceeded; forcing exit')
+    process.exit(1)
+  }, SHUTDOWN_GRACE_MS)
+  deadline.unref()
+
+  try {
+    if (shutdownApp) {
+      await shutdownApp.close()
+      log.info('http server closed')
+    }
+    await fanOutManager.close?.()
+    await pgPool.end()
+    log.info('postgresql closed')
+    await redis.quit().catch(() => redis.disconnect())
+    log.info('redis closed')
+    clearTimeout(deadline)
+    log.info('graceful shutdown complete')
+    process.exit(0)
+  } catch (err) {
+    clearTimeout(deadline)
+    log.error({ err }, 'error during graceful shutdown')
+    process.exit(1)
+  }
+}
+
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM') })
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT') })
+
 // The house logger, not a throwaway Fastify instance built only to borrow one:
 // buildLogger pipes every line through redactSecrets, and a fatal handler that
 // prints an unredacted error is the one place that matters most — a crash log
@@ -85,6 +132,7 @@ async function main() {
   // boot the exact same route surface without the connections and background
   // workers started below.
   const app = await buildApp()
+  shutdownApp = app
 
   await app.listen({ port: config.api.port, host: config.api.host })
   log.info({ url: `http://${config.api.host}:${config.api.port}` }, 'API listening')

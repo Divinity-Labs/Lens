@@ -17,6 +17,14 @@ export async function registerWebSocket(app: FastifyInstance) {
   app.get('/ws', { websocket: true, config: { public: true } }, (socket: any, req: FastifyRequest) => {
     app.log.info('[ws] New connection attempt')
 
+    // During shutdown, refuse new streams rather than starting work that
+    // the drain would have to wait on.
+    if (shuttingDown) {
+      socket.send(JSON.stringify({ type: 'error', status: 503, message: 'Server is shutting down' }))
+      socket.close()
+      return
+    }
+
     const rawNetwork = (req.query as any)?.network ?? (req.headers['x-network'] as string | undefined)
     const resolved = resolveNetworkName(rawNetwork)
     if (!resolved.ok) {
