@@ -398,11 +398,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: amount
           in: query
           required: false
@@ -467,11 +469,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
@@ -580,11 +584,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: interval
           in: query
           required: false
@@ -828,7 +834,7 @@ paths:
                   example: XLM
                 assetB:
                   type: string
-                  example: USDC:GBBD47...
+                  example: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
       responses:
         '201':
           description: Pair added
@@ -1021,11 +1027,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
@@ -1084,11 +1092,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
