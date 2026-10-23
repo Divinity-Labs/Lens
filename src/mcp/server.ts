@@ -575,13 +575,20 @@ export class BazaarMcpServer {
     );
   }
 
-  private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown>) {    // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
+  private createErrorResponse(
+    code: McpErrorCode,
+    reason: string,
+    details?: Record<string, unknown> | readonly string[]
+  ) {
+    // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
+    const validTools = Array.isArray(details) ? details : (details as any)?.validTools;
+    const extraDetails = details && !Array.isArray(details) ? details : undefined;
     const payload = {
       isError: true,
       code,
       reason,
-      ...(details ? { details } : {}),
-      ...((details as any)?.validTools ? { validTools: (details as any).validTools } : {}),
+      ...(extraDetails ? { details: extraDetails } : {}),
+      ...(validTools ? { validTools } : {}),
     };
     return {
       content: [{ type: 'text', text: JSON.stringify(payload) }],

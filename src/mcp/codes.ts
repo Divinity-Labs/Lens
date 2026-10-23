@@ -31,6 +31,7 @@ export interface McpErrorResponse {
 
   /** Structured context for the caller, e.g. the spend budget behind ERR_BUDGET_EXCEEDED. */
   details?: Record<string, unknown>;
+  validTools?: readonly string[];
 }
 
 /**
@@ -180,6 +181,4 @@ function classifyByText(
     return { code: MCP_ERROR_CODES.ERR_SERVICE_UNREACHABLE, signal: 'unreachable' };
   }
   return null;
-  validTools?: readonly string[];
-}
 }
