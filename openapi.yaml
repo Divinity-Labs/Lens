@@ -4,30 +4,11 @@ info:
   description: >-
     Unified Stellar price API aggregating SDEX + AMM prices.
 
-    Cache policy: every route sends a deliberate `Cache-Control` response
-    header. Live prices (`/price/*`) are `public, max-age=30`; aggregates
-    (`/price/*/history`, `/price/twap/*`, `/price/vwap/*`, `/prices/history`,
-    `/compare/*`, `/spreads/*`) are `public, max-age=60`; slower-moving views
-    (`/volumes/*`, `/screener`, `/basket`) are `public, max-age=120`;
-    reference data that changes rarely (`/pairs`, `/pools`, `/benchmark/*`)
-    is `public, max-age=300`; the discovery document is
-    `public, max-age=3600`. `/candles` for a closed historical window (its
-    `to` at least one full interval in the past) is *probably* immutable —
-    backfill can rewrite history — so it is
-    `public, max-age=3600, stale-while-revalidate=86400`; the still-forming
-    window is `public, max-age=60`. Every `public` response also sends
-    `Vary: x-network`, because the Stellar network can come from the
-    `x-network` header (not part of the URL cache key). Routes behind the
-    x402 payment gate use `private` instead of `public` when x402 is
-    configured, so a shared cache never serves paid content for free.
-    Per-caller responses (`/usage/me`), operator routes
-    (`/admin/*`), mutations and error responses are `no-store` and must never
-    sit in a shared cache.
-
-    Data Quality Guarantees: see `docs/data-quality.md` for explicit SLAs
-    and guarantees on freshness (e.g. 300s staleness bound), completeness,
-    precision (PostgreSQL Decimal(36,18) and negotiated string serialization),
-    and multi-venue coverage across SDEX, Stellar AMM, Soroswap, and Aquarius.
+    Every route is served under the `/v1` version segment; the versioned path is
+    the canonical one documented here. The same routes also answer at their
+    unversioned paths as deprecated aliases so pre-`/v1` integrations keep
+    working — those responses carry `Deprecation` and `Link` headers pointing at
+    the successor. See `docs/api-versioning.md` for the retirement policy.
   version: 0.1.0
   license:
     name: MIT
@@ -38,170 +19,7 @@ servers:
     description: Local development server
 
 paths:
-  /venues/registry:
-    get:
-      operationId: getVenueRegistry
-      summary: List registered venues and their network liveness
-      description: Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Registered venues and their current liveness
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [network, venues]
-                properties:
-                  network:
-                    type: string
-                    enum: [testnet, mainnet]
-                  venues:
-                    type: array
-                    items:
-                      type: object
-                      required: [id, kind, network, enabled, liveness, lastSeenAt]
-                      properties:
-                        id:
-                          type: string
-                        kind:
-                          type: string
-                          enum: [orderbook, amm, oracle]
-                        network:
-                          type: string
-                          enum: [testnet, mainnet]
-                        enabled:
-                          type: boolean
-                        liveness:
-                          type: string
-                          enum: [live, stale, disabled, unknown]
-                        lastSeenAt:
-                          type: string
-                          format: date-time
-                          nullable: true
-
-  /live:
-    get:
-      operationId: getLive
-      summary: Liveness probe
-      description: >-
-        Reports whether this process is wedged and needs to be restarted. It
-        checks no dependencies by design: a process that cannot reach Postgres
-        is still healthy and should keep running, so failing liveness during a
-        database outage would restart every instance at once. Use `/ready` to
-        decide whether to send traffic.
-      security: []
-      responses:
-        '200':
-          description: Process is alive.
-  /tvl:
-    get:
-      operationId: getTvl
-      summary: Total Value Locked across Stellar DeFi venues
-      description: >-
-        Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM,
-        Soroswap, and Aquarius. Reports totals, breakdown by venue, breakdown
-        by asset with valuation sources named, and marks pools with unpriceable
-        assets as unpriced rather than zero. Querying `?history=true` returns
-        historical hourly TVL samples.
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/NetworkQuery'
-        - name: history
-          in: query
-          required: false
-          description: Return historical time series of TVL when true
-          schema:
-            type: boolean
-            default: false
-        - name: window
-          in: query
-          required: false
-          description: Historical lookback window in hours (default 24)
-          schema:
-            type: string
-            default: 24
-      responses:
-        '200':
-          description: Total Value Locked breakdown or historical series
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/CacheControl'
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok, uptimeSeconds]
-                properties:
-                  ok:
-                    type: boolean
-                    example: true
-                  uptimeSeconds:
-                    type: integer
-                    description: Seconds since the process started.
-                    example: 3600
-
-  /ready:
-    get:
-      operationId: getReady
-      summary: Readiness probe
-      description: >-
-        Reports whether this process should receive traffic yet. Unhealthy
-        until the boot sequence finishes — the server starts listening before
-        the ingesters and background workers are running — and while Postgres
-        is unreachable or unmigrated, or Redis is unreachable when Redis is
-        part of readiness (`READINESS_REDIS_CHECK`, default true).
-
-        A probe timeout is reported as `down`, and answers are cached briefly,
-        so this is cheap to poll every few seconds. `/live` stays healthy
-        throughout: a starting instance should be held out of rotation, not
-        killed.
-      security: []
-      responses:
-        '200':
-          description: Ready to receive traffic.
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/CacheControl'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReadinessReport'
-        '503':
-          description: >-
-            Not ready. `ok` is false and `checks` says which dependency (or the
-            boot sequence) is responsible. `/live` remains healthy.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReadinessReport'
-                properties:
-                  network:
-                    type: string
-                    enum: [testnet, mainnet]
-                  totalTvlUsd:
-                    type: number
-                  unpricedPoolsCount:
-                    type: integer
-                  pricedPoolsCount:
-                    type: integer
-                  venues:
-                    type: object
-                  byAsset:
-                    type: object
-                  pools:
-                    type: array
-                    items:
-                      type: object
-                  computedAt:
-                    type: string
-                    format: date-time
-        '400':
-          description: Invalid parameters
-
-  /status:
+  /v1/status:
     get:
       operationId: getStatus
       summary: Get API status and indexer state
@@ -306,49 +124,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /snapshot:
-    get:
-      operationId: getSnapshot
-      summary: Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)
-      description: >-
-        A single timestamped summary of one network: every venue's liveness,
-        AMM pool reserves (TVL), 24h traded volume, the busiest pairs, stablecoin
-        peg readings and how fresh the underlying data is. All figures are read
-        in one consistent database statement, so `asOf` is a real instant and
-        every age is measured from it. Missing data is reported as `null` with a
-        reason (or an empty list), never invented — a cross-pair volume total is
-        only returned when the pairs share one unit. Responses are cached briefly
-        per network; `cache.ageSeconds` states the age of a served copy.
-      security: []
-      parameters:
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Network snapshot
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-              description: Freshness/brief-caching policy for the snapshot.
-            X-Cache:
-              schema:
-                type: string
-                enum: [HIT, MISS]
-              description: Whether this response came from the short-lived cache.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SnapshotResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          description: Snapshot aggregation failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InternalErrorResponse'
-
-  /price/{assetA}/{assetB}:
+  /v1/price/{assetA}/{assetB}:
     get:
       operationId: getPrice
       summary: Get aggregated price for a pair
@@ -386,7 +162,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/route:
+  /v1/price/{assetA}/{assetB}/route:
     get:
       operationId: getBestRoute
       summary: Get best swap route for a pair and amount
@@ -426,37 +202,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{asset}/fiat:
-    get:
-      operationId: getFiatPrice
-      summary: Convert asset price to fiat currency with NGN support (#290)
-      security: []
-      parameters:
-        - name: asset
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: currency
-          in: query
-          required: false
-          schema:
-            type: string
-            default: USD
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Price converted into target fiat currency
-          content:
-            application/json:
-              schema:
-                type: object
-        '400':
-          description: Invalid parameters
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /price/{assetA}/{assetB}/history:
+  /v1/price/{assetA}/{assetB}/history:
     get:
       operationId: getPriceHistory
       summary: Get price history buckets
@@ -515,7 +261,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pools:
+  /v1/pools:
     get:
       operationId: getPools
       summary: Get AMM liquidity pool reserves and spot prices
@@ -568,7 +314,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /candles/{assetA}/{assetB}:
+  /v1/candles/{assetA}/{assetB}:
     get:
       operationId: getCandles
       summary: Get OHLCV candle data
@@ -662,7 +408,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /prices/history:
+  /v1/prices/history:
     get:
       operationId: getPriceSnapshots
       summary: Get historical 1-minute price snapshots
@@ -773,7 +519,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pairs:
+  /v1/pairs:
     get:
       operationId: listPairs
       summary: List all active trading pairs
@@ -841,7 +587,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/depth:
+  /v1/price/{assetA}/{assetB}/depth:
     get:
       operationId: getDepth
       summary: Get order-book depth and execution slippage for a pair
@@ -890,126 +636,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /book/{assetA}/{assetB}:
-    get:
-      operationId: getBook
-      summary: Get the aggregated SDEX and AMM price ladder for a pair
-      description: >-
-        Returns asks and bids as cumulative assetA size at each price. Live
-        SDEX levels are reported as observed; AMM levels are synthetic,
-        fee-adjusted reserve steps. `depth` is a fractional price distance
-        around spot (default 0.1), and `step` is the fraction of each AMM
-        reserve used per synthetic level (default 0.01). Per-venue sample
-        counts, observation times, ages and availability are included.
-      parameters:
-        - name: assetA
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Base asset; use XLM for native Stellar or CODE:ISSUER for a token.
-          example: XLM
-        - name: assetB
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Quote asset; token issuers must be supplied in full.
-          example: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-        - name: depth
-          in: query
-          required: false
-          description: Maximum fractional distance from spot; valid range 0 to 0.5.
-          schema:
-            type: number
-            minimum: 0
-            maximum: 0.5
-            default: 0.1
-        - name: step
-          in: query
-          required: false
-          description: AMM input-reserve fraction per synthetic rung; valid range 0.001 to 0.1.
-          schema:
-            type: number
-            minimum: 0.001
-            maximum: 0.1
-            default: 0.01
-        - $ref: '#/components/parameters/NetworkQuery'
-        - $ref: '#/components/parameters/DecimalFormatHeader'
-      responses:
-        '200':
-          description: Book levels with per-venue provenance; unavailable venues are identified in the response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BookResponse'
-        '400':
-          description: Invalid asset, depth, or step parameter
-        '503':
-          description: No source could be read; response provenance identifies failed venues.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BookResponse'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /impact/{assetA}/{assetB}:
-    get:
-      operationId: getImpact
-      summary: Get an adaptive slippage impact curve for a pair
-      description: >-
-        Returns slippage at standard trade sizes, an additional liquidity-sized
-        point, and the size at which configured slippage thresholds are crossed.
-        A thin pair returns `insufficient_liquidity` instead of a fabricated
-        100% slippage result.
-      security:
-        - x402: []
-      parameters:
-        - name: assetA
-          in: path
-          required: true
-          schema:
-            type: string
-          example: XLM
-        - name: assetB
-          in: path
-          required: true
-          schema:
-            type: string
-          example: USDC
-        - name: thresholds
-          in: query
-          required: false
-          description: Comma-separated positive slippage percentages. Defaults to 1,5,10.
-          schema:
-            type: string
-            default: 1,5,10
-        - name: liquidityFraction
-          in: query
-          required: false
-          description: Usable fraction of the A-side reserve, between 0 and 1.
-          schema:
-            type: number
-            default: 0.5
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Adaptive impact curve
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ImpactResponse'
-        '400':
-          description: Invalid threshold or liquidity settings
-        '402':
-          $ref: '#/components/responses/PaymentRequired'
-        '404':
-          description: Pair or AMM liquidity not found
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /price/twap/{assetA}/{assetB}:
+  /v1/price/twap/{assetA}/{assetB}:
     get:
       operationId: getTwap
       summary: Get a manipulation-resistant time-weighted average price
@@ -1072,7 +699,7 @@ paths:
         '500':
           description: TWAP computation failed
 
-  /price/vwap/{assetA}/{assetB}:
+  /v1/price/vwap/{assetA}/{assetB}:
     get:
       operationId: getVwap
       summary: Get a volume-weighted average price
@@ -1133,7 +760,7 @@ paths:
         '500':
           description: VWAP computation failed
 
-  /volumes/{asset}:
+  /v1/volumes/{asset}:
     get:
       operationId: getVolumes
       summary: Get cross-venue traded volume for an asset
@@ -1190,7 +817,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /spreads/{asset}:
+  /v1/spreads/{asset}:
     get:
       operationId: getSpreads
       summary: Get the tightest per-venue bid/ask spread for an asset
@@ -1236,43 +863,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /rates/{asset}:
-    get:
-      operationId: getLendingRates
-      summary: Get supply and borrow rates for an asset across lending venues
-      description: >-
-        Answers what `asset` earns when supplied and costs to borrow at every
-        lending venue Lens ingests, one entry per venue sorted best-first
-        (highest supply rate first). Each entry names the venue, the source it
-        was read from and the specific pool/market it came from, so a rate is
-        always attributable and venues are never silently averaged.
-
-        An asset with no lending market returns an empty `venues` list with a
-        200, not a 404.
-      security: []
-      parameters:
-        - name: asset
-          in: path
-          required: true
-          schema:
-            type: string
-          example: USDC
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Per-venue lending rates, best-first (empty when no market)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RatesResponse'
-        '400':
-          description: Invalid network
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          description: Rate lookup failed
-
-  /compare/{asset}:
+  /v1/compare/{asset}:
     get:
       operationId: compareAsset
       summary: Compare Lens prices with every configured external oracle
@@ -1304,7 +895,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /screener:
+  /v1/screener:
     get:
       operationId: screenPairs
       summary: Screen pairs by volume, change, liquidity and price
@@ -1391,38 +982,7 @@ paths:
         '500':
           description: Internal server error
 
-  /movers:
-    get:
-      operationId: getMovers
-      summary: Get biggest gainers, biggest losers, and volume movers
-      description: >-
-        Returns the top gainers, losers, and volume movers for the specified lookback window,
-        annotated with venue provenance, sample counts, and single-venue move labelling.
-      security: []
-      parameters:
-        - name: window
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [1h, 24h, 7d]
-            default: 24h
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Market movers
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MoversResponse'
-        '400':
-          description: Invalid window or network
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          description: Internal server error
-
-  /benchmark/{asset}:
+  /v1/benchmark/{asset}:
     get:
       operationId: getBenchmark
       summary: Get peg-deviation statistics for an asset against a target
@@ -1461,7 +1021,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /basket:
+  /v1/basket:
     get:
       operationId: getBasket
       summary: Compute the weighted price of a basket of assets
@@ -1509,47 +1069,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /correlation:
-    get:
-      operationId: getCorrelation
-      summary: Compute price correlation matrix across a basket of assets over a window
-      security: []
-      parameters:
-        - name: assets
-          in: query
-          required: true
-          description: Comma-separated or repeated asset codes (at least two)
-          schema:
-            oneOf:
-              - type: string
-              - type: array
-                items:
-                  type: string
-          example: XLM,USDC
-        - name: window
-          in: query
-          required: false
-          description: Lookback window (5m, 15m, 1h, 24h, 7d, 30d). Defaults to 24h.
-          schema:
-            type: string
-            enum: [5m, 15m, 1h, 24h, 7d, 30d]
-            default: 24h
-        - $ref: '#/components/parameters/NetworkQuery'
-      responses:
-        '200':
-          description: Correlation matrix and pair provenance
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CorrelationResponse'
-        '400':
-          description: Missing or invalid parameters
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          description: Correlation computation failed
-
-  /discovery/resources:
+  /v1/discovery/resources:
     get:
       operationId: listDiscoveryResources
       summary: Browse the x402 Bazaar catalog of discoverable resources
@@ -1609,38 +1129,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /discovery/search:
-    get:
-      operationId: searchDiscoveryResources
-      summary: Natural language search with ranking and quality evaluation for discoverable resources
-      parameters:
-        - name: q
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 20
-        - name: cursor
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Search results with relevance ranking and metadata quality
-          content:
-            application/json:
-              schema:
-                type: object
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /webhooks:
+  /v1/webhooks:
     post:
       operationId: createWebhook
       summary: Subscribe to a price-threshold webhook
@@ -1684,7 +1173,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /webhooks/{id}:
+  /v1/webhooks/{id}:
     delete:
       operationId: deleteWebhook
       summary: Delete a webhook subscription
@@ -1701,7 +1190,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /usage/me:
+  /v1/usage/me:
     get:
       operationId: getMyUsage
       summary: Get usage and quota for the calling API key
@@ -1722,28 +1211,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /usage:
-    get:
-      operationId: getCallerUsage
-      summary: Get usage and quota for the calling API key (alias for /usage/me)
-      security:
-        - apiKeyAuth: []
-      responses:
-        '200':
-          description: Usage summary for the authenticated key
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/CacheControl'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UsageResponse'
-        '401':
-          description: Missing or invalid API key
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-
-  /supported:
+  /v1/supported:
     get:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
@@ -1759,7 +1227,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SupportedResponse'
 
-  /verify:
+  /v1/verify:
     post:
       operationId: verifyPayment
       summary: Verify an x402 payment payload
@@ -1790,7 +1258,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/VerifyResponse'
 
-  /settle:
+  /v1/settle:
     post:
       operationId: settlePayment
       summary: Settle an x402 payment (idempotent)
@@ -1819,7 +1287,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SettleResponse'
 
-  /graphql:
+  /v1/graphql:
     get:
       operationId: graphqlGet
       summary: Execute a GraphQL query over HTTP GET
