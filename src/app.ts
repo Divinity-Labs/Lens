@@ -34,6 +34,7 @@ import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerDispersionRoutes } from './routes/dispersion'
 import { registerHealthRoutes } from './routes/health'
 import { registerTvlRoutes } from './routes/tvl'
 import { registerCachePolicy } from './middleware/cachePolicy'
@@ -53,6 +54,7 @@ import { createCorsDelegator, type CorsConfig } from './cors'
  * "unhealthy" by the very probe that got throttled.
  */
 const PROBE_PATHS = new Set(['/status', '/live', '/ready'])
+
 
 export interface BuildAppOptions {
   /**
@@ -242,9 +244,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerVenueRoutes(app)
   await registerFiatRoutes(app)
   await registerSettleRoute(app)
+  await registerDispersionRoutes(app)
   await registerHealthRoutes(app)
   await registerTvlRoutes(app)
   await registerGraphQL(app)
+
   await registerWebSocket(app)
 
   // Global error handler: catches unhandled errors, ensuring database pool exhaustion
