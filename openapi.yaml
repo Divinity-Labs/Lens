@@ -204,12 +204,81 @@ paths:
   /status:
     get:
       operationId: getStatus
-      summary: Get API status and indexer state
+      summary: Get process health and indexer (data) health
+      description: >-
+        Public, unauthenticated health endpoint for uptime monitors and
+        integrators. See [docs/status.md](https://github.com/Divinity-Labs/Lens/blob/main/docs/status.md)
+        for the monitor configuration examples.
+
+
+        Process health and data health are reported separately. A process can
+        be up while every venue's data is stale, and the two must not look
+        alike:
+
+        * `process.status` is `up` whenever this process answers the request.
+
+        * `data.status` classifies the newest ingester write for the selected
+        network as `fresh` (within `staleAfterSeconds`), `stale` (older than
+        it), or `empty` (that network has not ingested yet).
+
+
+        Only `503` is a paging condition: it means the process is up but the
+        selected network's data is stale. `200` covers `fresh` and `empty`.
+        `400` (invalid `network`) is a monitor misconfiguration and `500`
+        (unexpected error) means no report could be produced; neither is a
+        staleness signal. `/status` is exempt from the API rate limiter, so it
+        never answers 429.
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
+          description: >-
+            The process is up and the selected network's data is `fresh` or
+            `empty` (never ingested, so there is no lag to judge).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              examples:
+                fresh:
+                  summary: Ingester is current
+                  value:
+                    ok: true
+                    network: mainnet
+                    watchedPairs:
+                      - USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM
+                    lastIndexedLedger: 53842917
+                    lastProcessedAt: '2026-10-20T16:45:11.220Z'
+                    ingestLagSeconds: 4
+                    process:
+                      status: up
+                      uptimeSeconds: 86400
+                    data:
+                      status: fresh
+                      ingestLagSeconds: 4
+                      staleAfterSeconds: 300
+                empty:
+                  summary: Network has never ingested
+                  value:
+                    ok: true
+                    network: testnet
+                    watchedPairs: []
+                    lastIndexedLedger: null
+                    lastProcessedAt: null
+                    ingestLagSeconds: null
+                    process:
+                      status: up
+                      uptimeSeconds: 12
+                    data:
+                      status: empty
+                      ingestLagSeconds: null
+                      staleAfterSeconds: 300
+        '400':
+          description: >-
+            Unrecognised `network` value. Not a health signal — the monitor is
+            misconfigured.
+          description: API status
           description: API status and health diagnostics
           headers:
             Cache-Control:
@@ -218,7 +287,47 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [error]
                 properties:
+                  error:
+                    type: string
+              example:
+                error: 'Invalid network "pubnet" — expected one of: testnet, mainnet'
+        '500':
+          description: >-
+            Unexpected error while reading indexer state. The process could not
+            produce its health report, so the monitor should page.
+        '503':
+          description: >-
+            Paging condition: the process is up but the selected network's
+            data is `stale` — its newest write is older than
+            `data.staleAfterSeconds`. The body is the full status shape, so a
+            monitor can report how far behind the ingester is.
+          headers:
+            Retry-After:
+              description: Seconds to wait before polling again.
+              schema:
+                type: integer
+                example: 60
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                ok: true
+                network: mainnet
+                watchedPairs:
+                  - USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM
+                lastIndexedLedger: 53800000
+                lastProcessedAt: '2026-10-20T16:05:11.220Z'
+                ingestLagSeconds: 2404
+                process:
+                  status: up
+                  uptimeSeconds: 86400
+                data:
+                  status: stale
+                  ingestLagSeconds: 2404
+                  staleAfterSeconds: 300
                   ok:
                     type: boolean
                   status:
@@ -3581,6 +3690,94 @@ components:
           type: array
           items:
             type: string
+
+    StatusResponse:
+      type: object
+      description: >-
+        Process health and data health for one network. `ok` and `process`
+        describe this HTTP process; `data` describes the ingester behind the
+        selected network. The flat `lastIndexedLedger`, `lastProcessedAt` and
+        `ingestLagSeconds` fields mirror the `data` values for older clients.
+      required:
+        [ok, network, watchedPairs, lastIndexedLedger, lastProcessedAt, ingestLagSeconds, process, data]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+          description: >-
+            Process health only — true whenever this process can serve the
+            request. It says nothing about whether the data is current; read
+            `data.status` (or the HTTP status code) for that.
+        network:
+          type: string
+          enum: [testnet, mainnet]
+          description: The network this report covers.
+        watchedPairs:
+          type: array
+          items:
+            type: string
+          description: Canonical pair keys this network's ingester watches.
+        lastIndexedLedger:
+          type: integer
+          nullable: true
+          description: >-
+            Newest ledger recorded for this network, or null before its SDEX
+            ingester records a trade. Mirror of the data behind `data.status`.
+        lastProcessedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Timestamp of the newest ingester write for this network, or null
+            before the first one.
+        ingestLagSeconds:
+          type: integer
+          nullable: true
+          description: >-
+            Seconds since `lastProcessedAt`, or null before the first write.
+            Kept as a top-level mirror of `data.ingestLagSeconds`.
+        process:
+          type: object
+          description: Health of the HTTP process itself.
+          required: [status, uptimeSeconds]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              enum: [up]
+              description: >-
+                `up` whenever the process answers. A non-200 response is only
+                produced for the paging condition, never because the process
+                has stopped answering (that is a connection failure).
+            uptimeSeconds:
+              type: integer
+              description: Seconds since this process started.
+        data:
+          type: object
+          description: >-
+            Freshness of the ingester data behind the selected network. This is
+            independent of `process.status`: data can be stale while the
+            process is up.
+          required: [status, ingestLagSeconds, staleAfterSeconds]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              enum: [fresh, stale, empty]
+              description: >-
+                `fresh` when `ingestLagSeconds` is at most `staleAfterSeconds`;
+                `stale` when it is greater (the only paging condition, answered
+                with 503); `empty` when the network has never ingested, so no
+                lag exists yet (answered with 200).
+            ingestLagSeconds:
+              type: integer
+              nullable: true
+              description: Seconds since the newest ingester write, or null when `status` is `empty`.
+            staleAfterSeconds:
+              type: integer
+              description: >-
+                The configured staleness budget (`STATUS_STALE_AFTER_SECONDS`,
+                default 300). A lag greater than this makes `status` `stale`.
 
     GraphQlResponse:
       type: object

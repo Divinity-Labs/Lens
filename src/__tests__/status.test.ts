@@ -43,6 +43,7 @@ vi.mock('../config', () => ({
   config: {
     pairs: pairsByNetwork.testnet,
     cache: { priceTtl: 10 },
+    status: { staleAfterSeconds: 300 },
   },
   activeNetwork: 'testnet',
   getNetworkConfig: (network: string) => ({
@@ -119,6 +120,61 @@ describe('GET /status', () => {
     expect(body.ingestLagSeconds).toBeLessThan(60)
   })
 
+  it('reports process health and data health as separate fields', async () => {
+    const app = await buildApp()
+
+    const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
+    const body = res.json()
+
+    expect(res.statusCode).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.process).toEqual({
+      status: 'up',
+      uptimeSeconds: expect.any(Number),
+    })
+    expect(Number.isInteger(body.process.uptimeSeconds)).toBe(true)
+    expect(body.data).toEqual({
+      status: 'fresh',
+      ingestLagSeconds: body.ingestLagSeconds,
+      staleAfterSeconds: 300,
+    })
+  })
+
+  it('pages with 503 only when data is stale, while still reporting the process as up', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [{ last_ledger: 222222, last_processed_at: new Date(Date.now() - 3_600_000) }],
+    })
+    const app = await buildApp()
+
+    const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
+    const body = res.json()
+
+    expect(res.statusCode).toBe(503)
+    expect(res.headers['retry-after']).toBe('60')
+    // The process is healthy; only its data is not.
+    expect(body.ok).toBe(true)
+    expect(body.process.status).toBe('up')
+    expect(body.data.status).toBe('stale')
+    expect(body.data.ingestLagSeconds).toBeGreaterThan(300)
+    expect(body.data.staleAfterSeconds).toBe(300)
+    expect(body.lastIndexedLedger).toBe(222222)
+    expect(body.lastProcessedAt).not.toBeNull()
+  })
+
+  it('treats a lag of exactly staleAfterSeconds as fresh', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [{ last_ledger: 222222, last_processed_at: new Date(Date.now() - 300_000) }],
+    })
+    const app = await buildApp()
+
+    const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
+
+    // Rounded lag can land on 299/300; either way it must not be stale.
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.status).toBe('fresh')
+  })
+
+  it('returns nulls — never another network\'s data — when a network has not ingested', async () => {
   it('returns nulls — never another network \'s data — when a network has not ingested', async () => {
     mockQuery.mockResolvedValue({ rows: [] })
     const app = await buildApp()
@@ -126,10 +182,14 @@ describe('GET /status', () => {
     const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
     const body = res.json()
 
+    expect(res.statusCode).toBe(200)
     expect(body.network).toBe('mainnet')
     expect(body.lastIndexedLedger).toBeNull()
     expect(body.lastProcessedAt).toBeNull()
     expect(body.ingestLagSeconds).toBeNull()
+    // A network that has never ingested is not stale — there is no lag to
+    // measure — so it stays a 200 and is distinguishable via data.status.
+    expect(body.data.status).toBe('empty')
   })
 
   it('rejects an unrecognised network before answering', async () => {

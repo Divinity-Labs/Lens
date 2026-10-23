@@ -528,6 +528,10 @@ const globalConfig = {
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
+  status: {
+    // How old the newest indexer write may be before `/status` calls the data
+    // stale and answers 503. See docs/status.md.
+    staleAfterSeconds: parseInt(process.env.STATUS_STALE_AFTER_SECONDS ?? '300', 10),
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
     maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
@@ -640,6 +644,7 @@ export const config = {
   cache:   globalConfig.cache,
   plausibility: globalConfig.plausibility,
   http:    globalConfig.http,
+  status:  globalConfig.status,
   ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,

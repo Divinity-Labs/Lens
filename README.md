@@ -119,6 +119,11 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/movers` | Get biggest gainers, biggest losers, and volume movers |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
+| GET | `/status` | Process and indexer health ([contract](docs/status.md)) |
+| GET | `/status` | Indexer health |
+| GET | `/snapshot?network=testnet\|mainnet` | Whole-network snapshot: venues, TVL, 24h volume, top pairs, peg readings and data freshness in one cached, timestamped object |
+| GET | `/live` | Liveness probe — no dependency checks (see [`docs/health.md`](docs/health.md)) |
+| GET | `/ready` | Readiness probe — boot complete + dependencies reachable |
 | GET | `/correlation` | Compute price correlation matrix across a basket of assets over a window |
 | GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |
 | GET | `/discovery/search` | Natural language search with ranking and quality evaluation for discoverable resources |
@@ -536,6 +541,16 @@ Lens gates `/price`, `/pools`, and `/candles` behind x402 micropayments on Stell
 
 ```bash
 curl http://localhost:3002/status
+# {
+#   "ok": true,
+#   "network": "testnet",
+#   "watchedPairs": ["XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"],
+#   "lastIndexedLedger": 53842917,
+#   "lastProcessedAt": "2026-10-20T16:45:11.220Z",
+#   "ingestLagSeconds": 4,
+#   "process": { "status": "up", "uptimeSeconds": 86400 },
+#   "data": { "status": "fresh", "ingestLagSeconds": 4, "staleAfterSeconds": 300 }
+# }
 ```
 
 ```json
@@ -586,6 +601,12 @@ probe:
     - severity: warning  # Slack notification only
       condition: "body.health.data == 'stale' || body.data.ingestLagSeconds > 300"
 ```
+
+Process health and data health are separate: `process.status` is `up` whenever
+the process answers, while `data.status` is `fresh`, `stale` or `empty`. A
+stale ingester answers **`503`** (the only paging condition); `empty` stays
+`200`. See [`docs/status.md`](docs/status.md) for the full shape, status-code
+contract and monitor configuration examples.
 
 ### 2. Paid request without `X-PAYMENT` → `402` with payment requirements
 

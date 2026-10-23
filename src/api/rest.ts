@@ -77,6 +77,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // up the validating serializer.
   installResponseValidation(app)
 
+  // GET /status — public health/monitoring endpoint (no API key required).
+  //
+  // Process health and data health are reported separately: this process can
+  // be up while every venue's data is stale, and a monitor must be able to tell
+  // those apart. The only non-2xx outcome that means "page someone" is 503,
+  // returned when the selected network's data is stale (see docs/status.md).
   /**
    * How long the last ingester write may be stale before `/status` says so.
    *
@@ -92,6 +98,72 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     '/status',
     {
       config: { public: true },
+      schema: { response: { 200: statusResponseSchema, 503: statusResponseSchema } },
+    },
+    async (req, reply) => {
+      const network = req.network ?? activeNetwork
+      const result = await pgPool.query(
+        `SELECT last_ledger, last_processed_at
+           FROM indexer_state
+          WHERE network = $1
+          ORDER BY updated_at DESC
+          LIMIT 1`,
+        [network]
+      )
+      const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
+      // Seconds since the last write for this network — a stalled ingester is
+      // visible to `/status` polling without needing Prometheus. Null until the
+      // network has ingested at least once.
+      const ingestLagSeconds = lastProcessedAt
+        ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
+        : null
+
+      const staleAfterSeconds = config.status.staleAfterSeconds
+      const dataStatus =
+        ingestLagSeconds === null
+          ? 'empty'
+          : ingestLagSeconds > staleAfterSeconds
+            ? 'stale'
+            : 'fresh'
+
+      const body = {
+        ok: true,
+        network,
+        watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
+        lastIndexedLedger: result.rows[0]?.last_ledger ?? null,
+        lastProcessedAt,
+        ingestLagSeconds,
+        process: {
+          status: 'up' as const,
+          uptimeSeconds: Math.floor(process.uptime()),
+        },
+        data: {
+          status: dataStatus,
+          ingestLagSeconds,
+          staleAfterSeconds,
+        },
+      }
+
+      if (dataStatus === 'stale') {
+        // Stale data is the paging condition: the API still answers (process is
+        // up), but the prices behind it are older than the staleness budget.
+        reply.header('Retry-After', '60')
+        return reply.status(503).send(body)
+      }
+
+      return body
+        : null,
+      // Ingesters that have crashed at least once on this network, newest
+      // first. An ingester that crash-loops but restarts successfully is
+      // otherwise invisible here: the process is up and the port answers.
+      // Empty when nothing has crashed. Messages only — never a stack, since
+      // this is served over HTTP.
+      crashes: listCrashes(network).map(c => ({
+        name: c.name,
+        network: c.network,
+        message: c.message,
+        at: c.at.toISOString(),
+      })),
       schema: {
         response: {
           200: statusResponseSchema,

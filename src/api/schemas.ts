@@ -17,6 +17,18 @@ import Ajv from 'ajv'
 import type { FastifyInstance, FastifySchema } from 'fastify'
 
 /**
+ * GET /status
+ *
+ * Two independent health verdicts, so an up process and stale data never look
+ * alike:
+ *   - `process` describes this HTTP process (it is answering, so `up`).
+ *   - `data` describes the ingester behind the selected network, derived from
+ *     the age of its newest write.
+ *
+ * The flat `lastIndexedLedger` / `lastProcessedAt` / `ingestLagSeconds` fields
+ * predate the split and are kept as mirrors of the `data` values so existing
+ * consumers do not break. See docs/status.md for the contract.
+ */
  * One dependency probe result, shared by `/ready`.
  *
  * `reason` is a fixed phrase rather than the raw error: connection errors carry
@@ -70,6 +82,7 @@ export const statusResponseSchema = {
   type: 'object',
   required: [
     'ok',
+    'network',
     'status',
     'network',
     'health',
@@ -79,9 +92,13 @@ export const statusResponseSchema = {
     'lastIndexedLedger',
     'lastProcessedAt',
     'ingestLagSeconds',
+    'process',
+    'data',
   ],
   additionalProperties: false,
   properties: {
+    // Process health only: true whenever this process can serve the request.
+    // It says nothing about whether the prices behind it are current.
     ok: { type: 'boolean' },
     status: { type: 'string', enum: ['healthy', 'degraded', 'unhealthy'] },
     network: { type: 'string', enum: ['testnet', 'mainnet'] },
@@ -116,6 +133,27 @@ export const statusResponseSchema = {
     lastIndexedLedger: { type: ['integer', 'null'] },
     lastProcessedAt: {},
     ingestLagSeconds: { type: ['integer', 'null'] },
+    process: {
+      type: 'object',
+      required: ['status', 'uptimeSeconds'],
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['up'] },
+        uptimeSeconds: { type: 'integer' },
+      },
+    },
+    data: {
+      type: 'object',
+      required: ['status', 'ingestLagSeconds', 'staleAfterSeconds'],
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['fresh', 'stale', 'empty'] },
+        ingestLagSeconds: { type: ['integer', 'null'] },
+        staleAfterSeconds: { type: 'integer' },
+    // Ingesters that have crashed at least once on this network, newest first,
+    // and empty when none have. Present so a crash-looping ingester that keeps
+    // restarting is visible here rather than only in the logs. `message` only
+    // — never a stack, since this is served over HTTP.
     adminConfigured: { type: 'boolean' },
     crashes: {
       type: 'array',
