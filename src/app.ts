@@ -27,6 +27,7 @@ import { registerBookRoutes } from './routes/book'
 import { registerSpreadsRoutes } from './routes/spreads'
 import { registerRateRoutes } from './routes/rates'
 import { registerBenchmarkRoutes } from './routes/benchmark'
+import { registerPegsRoutes } from './routes/pegs'
 import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerCorrelationRoutes } from './routes/correlation'
@@ -227,6 +228,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSpreadsRoutes(app)
   await registerRateRoutes(app)
   await registerBenchmarkRoutes(app)
+  await registerPegsRoutes(app)
   await registerOracleRoutes(app)
   await registerBasketRoutes(app)
   await registerCorrelationRoutes(app)
