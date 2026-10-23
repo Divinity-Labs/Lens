@@ -4,6 +4,7 @@ import { dirname, join } from 'path';
 import { Counter } from 'prom-client';
 import { register } from '../metrics.js';
 import type { McpErrorCode } from './codes.js';
+import { parsePaidCallAllowlist } from './paidCallAllowlist.js';
 import { parseUsdToNanodollars } from './budget.js';
 
 export type PaymentOutcome = 'success' | 'failure';
@@ -64,6 +65,16 @@ export interface PaymentLedgerConfig {
    * Hosts allowed to appear as the `host` label of a Prometheus series.
    *
    * Prometheus series are permanent, so a `host` label taken from whatever URL
+   * an agent asks for lets one caller mint unbounded time series. Pass the
+   * origins from {@link metricHostsFromPaidCallAllowlist} to use the operator's
+   * paid_call allow-list as the label domain; anything else records as `unknown`.
+   * The durable record always keeps the real host regardless of this list.
+   */
+  metricHosts?: readonly string[];
+  /**
+   * Networks allowed to appear as the `network` label. Anything else is
+   * `unknown`. Defaults to {@link DEFAULT_PAYMENT_METRIC_NETWORKS}.
+   */
    * an agent asks for lets one caller mint unbounded time series. The default
    * of an empty list therefore labels every series `unknown`; pass the server's
    * allow-listed host set to get per-host series. The durable record always keeps
@@ -74,6 +85,13 @@ export interface PaymentLedgerConfig {
   metricNetworks?: readonly string[];
   now?: () => Date;
 }
+
+/**
+ * The network ids this server's signer can pay on, so they are the whole
+ * `network` label domain. A label taken from whatever a seller echoes in a
+ * header would mint a permanent time series per distinct string.
+ */
+export const DEFAULT_PAYMENT_METRIC_NETWORKS: readonly string[] = ['stellar:testnet', 'stellar:pubnet'];
 
 const UNKNOWN_LABEL = 'unknown';
 const NANODOLLARS_PER_USD = 1_000_000_000n;
@@ -109,6 +127,49 @@ const paymentUnquantifiedTotal = new Counter({
 
 export function defaultPaymentLedgerFile(): string {
   return join(homedir(), '.lens-mcp', 'payments.jsonl');
+}
+
+/**
+ * The `host` label domain, taken from the same operator configuration that
+ * decides which hosts `paid_call` may pay for. A call to anything else is
+ * refused before a request is sent, so this set already bounds every host that
+ * can appear in a record — no second allow-list to keep in sync.
+ *
+ * Entries that do not parse are dropped here as they are by the gate itself,
+ * which matches nothing rather than matching everything.
+ */
+export function metricHostsFromPaidCallAllowlist(entries: readonly string[]): string[] {
+  return [...new Set(parsePaidCallAllowlist(entries).rules.map((rule) => rule.origin))];
+}
+
+/**
+ * Parses a USD money string such as '$1.00', '1.00' or '$0.05' into integer
+ * nanodollars. Throws on anything that is not a non-negative USD amount, which
+ * is how a payment priced in asset units is told apart from one priced in dollars.
+ */
+function usdOfferToNanodollars(money: string): bigint {
+  const cleaned = String(money).trim().replace(/^\$/, '');
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(cleaned);
+  if (!match) {
+    throw new Error(`Not a USD amount: ${JSON.stringify(money)}`);
+  }
+  const fraction = match[2] ?? '';
+  if (fraction.length > 9) {
+    throw new Error(`USD amount ${JSON.stringify(money)} has more than 9 decimal places`);
+  }
+  return BigInt(match[1]) * NANODOLLARS_PER_USD + BigInt(fraction.padEnd(9, '0') || '0');
+}
+
+function isUsdAmount(amount: string | null): boolean {
+  if (amount === null) {
+    return false;
+  }
+  try {
+    usdOfferToNanodollars(amount);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function boundedText(value: unknown, maxChars: number): string | null {
@@ -233,6 +294,7 @@ export class PaymentLedger {
   constructor(config: PaymentLedgerConfig = {}) {
     this.filePath = config.filePath;
     this.metricHosts = config.metricHosts ?? [];
+    this.metricNetworks = config.metricNetworks ?? DEFAULT_PAYMENT_METRIC_NETWORKS;
     this.metricNetworks = config.metricNetworks ?? [];
     this.now = config.now ?? (() => new Date());
     this.durable = true;
@@ -333,6 +395,10 @@ export class PaymentLedger {
   }
 
   /**
+   * The running total of recorded spend: what the ledger saw settle, what it
+   * cannot rule out, and how much of the trail it could not price in USD. This
+   * is the measurement a cumulative ceiling should read, as distinct from the
+   * worst case it reserves before a price is known.
    * The running total of recorded spend. This is what a cumulative ceiling reads
    * instead of guessing from a per-call maximum: `settledNanodollars` is what the
    * ledger saw settle, and `possibleNanodollars` is what it cannot rule out.
@@ -353,6 +419,7 @@ export class PaymentLedger {
     let nanodollars: bigint | null = null;
     if (record.amount !== null) {
       try {
+        nanodollars = usdOfferToNanodollars(record.amount);
         nanodollars = parseUsdToNanodollars(record.amount);
       } catch {
         // Not a USD money string: an atomic-unit offer, or something a seller
@@ -396,12 +463,15 @@ export class PaymentLedger {
 
   private exportMetrics(record: PaymentRecord): void {
     const host = this.metricHosts.includes(record.host) ? record.host : UNKNOWN_LABEL;
+    const network =
+      record.network !== null && this.metricNetworks.includes(record.network) ? record.network : UNKNOWN_LABEL;
     const network = record.network !== null && this.metricNetworks.includes(record.network) ? record.network : UNKNOWN_LABEL;
 
     paymentAttemptsTotal.inc({ host, network, outcome: record.outcome });
     if (record.spend === 'settled' && record.amount !== null) {
       let nanodollars: bigint | null = null;
       try {
+        nanodollars = usdOfferToNanodollars(record.amount);
         nanodollars = parseUsdToNanodollars(record.amount);
       } catch {
         nanodollars = null;

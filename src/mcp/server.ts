@@ -28,6 +28,7 @@ import { SpendBudget } from './budget.js';
 import { PaymentLedger } from './ledger.js';
 import { getMetrics, register } from '../metrics.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
+import { PaymentLedger } from './ledger.js';
 import { LENS_PRICE_TOOL_NAME, lensPriceToolDefinition, readLensPrice, type LensPriceQueries } from './priceTool.js';
 import {
   BAZAAR_SEARCH_ARGUMENTS_SCHEMA,
@@ -125,6 +126,10 @@ export interface McpServerConfig {
    */
   bazaarFetch?: Partial<SsrfFetchOptions>;
   /**
+   * Audit trail of what every paid call cost. Defaults to a ledger kept in
+   * memory; pass one with a file path to keep the record past the process.
+   */
+  paymentLedger?: PaymentLedger;
    * Bounds on what a tool result may cost the agent in context (#416), from the
    * `MCP_*` env by default. Overridable so a test can drive the limits without
    * touching process state.
@@ -274,6 +279,8 @@ export class BazaarMcpServer {
   private bazaarFetchOptions: SsrfFetchOptions;
   private priceQueries?: LensPriceQueries;
   private budget?: SpendBudget;
+  /** The audit trail this server writes to. Public so embedders can read spend without parsing the file. */
+  readonly paymentLedger: PaymentLedger;
   private limits: McpLimits;
   private resources: LensResourceDescriptor[];
   /** The audit trail this server writes to. Public so embedders can read spend without parsing the file. */
@@ -295,6 +302,12 @@ export class BazaarMcpServer {
       // Unparseable entries match nothing rather than matching everything.
       console.error(`[mcp-server] Ignoring unreadable paid_call allow-list entries: ${allowlist.rejected.join(', ')}`);
     }
+
+    // The paid_call allow-list is both the set of hosts that can ever be recorded
+    // and the domain the `host` metric label may take, so a caller looping over
+    // URLs cannot mint time series with it.
+    this.paymentLedger =
+      config_.paymentLedger ?? new PaymentLedger({ metricHosts: [...new Set(this.paidCallRules.map((rule) => rule.origin))] });
 
     this.bazaarFetchOptions = {
       allowedHosts: config.outbound.allowedHosts,
@@ -614,6 +627,16 @@ export class BazaarMcpServer {
           return this.createErrorResponse(target.code, target.reason);
         }
 
+        // Fail closed: this tool moves money, and a spend that leaves no audit
+        // trail is worse than a refused call. Only reachable when a durable
+        // ledger was configured and its file became unwritable.
+        if (!this.paymentLedger.durable) {
+          return this.createErrorResponse(
+            'ERR_INTERNAL_FAILURE',
+            'The payment audit trail could not be written, so this server refuses to spend. Fix or point MCP_PAYMENT_LEDGER_FILE at a writable path.'
+          );
+        }
+
         try {
           const res = await this.fetchWithPayment(url, { method, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
 
@@ -638,6 +661,7 @@ export class BazaarMcpServer {
               outcome: 'failure',
               errorCode: 'ERR_BAD_REQUEST',
               response: res,
+              paymentMayHaveSettled: true,
             });
             return this.createErrorResponse('ERR_BAD_REQUEST', `Request failed with status ${res.status}`);
           }
@@ -670,9 +694,19 @@ export class BazaarMcpServer {
             // answer.
             parsed = body.text;
           }
+          this.paymentLedger.record({ url, method, outcome: 'success', response: res });
+          
+          return {
+            content: [{ type: 'text', text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) }],
+          };
 
           return this.createBoundedResult(parsed, budget);
         } catch (e: any) {
+          const mayHaveSettled = !this.paymentCouldNotHaveSettled(e);
+          this.settleReservation(reservationId, mayHaveSettled);
+          // Mirror handlePaidCallError so the ledger records the code the agent is shown;
+          // an AbortError has no signal for the shared classifier, only the caller does.
+          const code = isTimeoutError(e) ? 'ERR_SERVICE_UNREACHABLE' : classifyPaidCallError(e).code;
           const code = this.classifyPaidCallFailure(e);
           const mayHaveSettled = !this.paymentCouldNotHaveSettled(e);
           this.settleReservation(reservationId, mayHaveSettled);
