@@ -332,6 +332,21 @@ export const historyResponseSchema = {
     pairKey: { type: 'string' },
     network: { type: 'string', enum: ['testnet', 'mainnet'] },
     window: { type: 'string', enum: ['1m', '5m', '1h', '24h'] },
+    incomplete: { type: 'boolean' },
+    gaps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'start', 'end', 'status'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          start: { type: 'string' },
+          end: { type: 'string' },
+          status: { type: 'string', enum: ['open', 'permanent'] },
+        },
+      },
+    },
     buckets: {
       type: 'array',
       items: {

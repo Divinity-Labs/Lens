@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { formatValidationError } from '../validation'
 import '../middleware/network'
 import { activeNetwork, type NetworkName } from '../config'
+import { findOverlappingGaps } from '../backfill/gaps'
 import { resolveDecimalFormat } from '../utils/decimals'
 
 export const TWAP_WINDOW_MIN_MINUTES = 1
@@ -80,6 +81,15 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           decimalFormat,
         })
 
+        const overlappingGaps = await findOverlappingGaps({
+          network,
+          pair: pairKey,
+          start: result.startTime,
+          end: result.endTime,
+        })
+
+        const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
         return {
           assetA,
           assetB,
@@ -93,6 +103,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           sampleCount: result.sampleCount,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          ...gapDeclaration,
         }
       } catch (err) {
         // A driver error message can carry the connection string, and so the
@@ -141,6 +152,16 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           network,
         })
 
+        const overlappingGaps = await findOverlappingGaps({
+          network,
+          pair: pairKey,
+          start: result.startTime,
+          end: result.endTime,
+          source,
+        })
+
+        const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
         return {
           assetA,
           assetB,
@@ -155,6 +176,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           volumeTotal: result.volumeTotal,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          ...gapDeclaration,
         }
       } catch (err) {
         // Same as TWAP above: the driver message can contain credentials.

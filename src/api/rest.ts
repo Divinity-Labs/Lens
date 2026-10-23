@@ -18,6 +18,7 @@ import {
   impactResponseSchema,
   installResponseValidation,
 } from './schemas'
+import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
 import { listCrashes } from '../ingester/restart'
 import { isBootComplete } from '../health'
@@ -280,10 +281,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
       const window = req.query.window ?? '1h'
       const limit = Math.min(parseInt(req.query.limit ?? String(HISTORY_DEFAULT_LIMIT), 10), HISTORY_MAX_LIMIT)
       const pairKey = makePairKey(assetA, assetB)
-      const network = req.network ?? activeNetwork
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
@@ -304,6 +305,25 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         [pairKey, window, network, limit]
       )
 
+      const windowMs: Record<string, number> = {
+        '1m': 60_000,
+        '5m': 300_000,
+        '1h': 3600_000,
+        '24h': 86400_000,
+      }
+      const span = (windowMs[window] ?? 3600_000) * limit
+      const now = new Date()
+      const queryStart = new Date(now.getTime() - span)
+
+      const overlappingGaps = await findOverlappingGaps({
+        network,
+        pair: pairKey,
+        start: queryStart,
+        end: now,
+      })
+
+      const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
       return {
         pairKey,
         network,
@@ -320,6 +340,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           high: formatDecimal(r.high_price, decimalFormat),
           low: formatDecimal(r.low_price, decimalFormat),
         })),
+        ...gapDeclaration,
       }
     }
   )

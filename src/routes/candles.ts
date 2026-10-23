@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import { findOverlappingGaps } from '../backfill/gaps'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 const INTERVAL_SECONDS: Record<string, number> = {
@@ -75,6 +76,15 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       [intervalSecs, pairKey, from, to, network]
     )
 
+    const overlappingGaps = await findOverlappingGaps({
+      network,
+      pair: pairKey,
+      start: from,
+      end: to,
+    })
+
+    const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
     return {
       pairKey,
       interval,
@@ -89,6 +99,7 @@ export async function registerCandleRoutes(app: FastifyInstance) {
         close: Number(r.close),
         volume: Number(r.volume),
       })),
+      ...gapDeclaration,
     }
   })
 }

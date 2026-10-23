@@ -888,6 +888,52 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 
 *(Note: timestamp values above reflect the dynamic hourly anchor at seed execution time and request time).*
 
+## Backfill & Ingestion Gap Detection
+
+Lens provides persistent gap detection and an idempotent historical backfill CLI to recover missing trade history and declare incomplete time windows in API responses.
+
+### 1. Gap Detection & IngestionGap Model
+Gaps are tracked per `(network, source, pair)` in the `IngestionGap` table:
+- `status`: `'open'` (detected hole in history), `'filled'` (successfully backfilled), or `'permanent'` (data cannot be backfilled).
+- Gaps are detected when the elapsed time between consecutive price points exceeds the expected ingestion cadence (default 5 minutes).
+- **Idempotency & Merging:** Re-running gap detection never duplicates records; overlapping or adjacent intervals are merged automatically into single continuous ranges.
+
+### 2. Backfill CLI
+Run the backfill script for historical sources:
+
+```bash
+# Backfill SDEX trades for XLM/USDC
+npm run backfill -- --source SDEX --pair XLM/USDC --start 2026-10-15T00:00:00Z --end 2026-10-15T06:00:00Z --network testnet
+
+# Detect gaps and backfill them automatically
+npm run backfill -- --source SDEX --pair XLM/USDC --start 2026-10-15T00:00:00Z --end 2026-10-15T06:00:00Z --detect
+```
+
+- **History Support:**
+  - `SDEX` and `AMM`: Supported via Horizon historical trade paging. Refetched points are written through the same idempotent `upsertPricePoints` path as live ingestion. Gaps are marked `filled`.
+  - `soroswap_amm` and `aquarius_amm`: State-only venues that do not retain historical trade logs. Attempting to backfill them cleanly marks the gap as `permanent` and exits without error.
+- **Idempotent Re-runs:** Running the same backfill range a second time produces 0 duplicate records and leaves the gap marked `filled`.
+
+### 3. Incomplete Window Declarations in API Responses
+When querying time-window endpoints (such as `/prices/history`, `/candles/:assetA/:assetB`, `/price/:assetA/:assetB/history`, `/price/twap/*`, and `/price/vwap/*`):
+- If the requested window overlaps any `open` or `permanent` gaps for that pair and network, the response includes `incomplete: true` along with the list of overlapping `gaps`:
+  ```json
+  {
+    "pair": "XLM/USDC",
+    "interval": "1m",
+    "incomplete": true,
+    "gaps": [
+      {
+        "source": "SDEX",
+        "start": "2026-10-15T01:00:00.000Z",
+        "end": "2026-10-15T03:00:00.000Z",
+        "status": "open"
+      }
+    ],
+    "points": [...]
+  }
+  ```
+- Windows that are clean or cover only `filled` gaps omit the `incomplete` and `gaps` fields.
 
 ## Rate Limiting & 429 Handling
 
