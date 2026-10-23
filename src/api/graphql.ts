@@ -357,17 +357,16 @@ const resolvers = {
       const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
-         FROM price_aggregates
+        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float, volume::float, trade_count, open_price::float, close_price::float, high_price::float, low_price::float
+         FROM price_buckets
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
          LIMIT ${limitParam}`,
         params
       )
-      return result.rows.map(r => ({
-        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
+
+      return result.rows.map((r: any) => ({
+        bucket: new Date(r.bucket).toISOString(),
         window: r.window,
         vwap: r.vwap,
         sdexVwap: r.sdex_vwap,
@@ -380,134 +379,15 @@ const resolvers = {
         low: r.low_price,
       }))
     },
-
-    listPairs() {
-      return getActivePairs().map(p => p.pairKey)
-    },
-
-    async pairs() {
-      const activePairs = getActivePairs()
-      if (activePairs.length === 0) {
-        return []
-      }
-
-      const result = await pgPool.query(
-        `SELECT p.pair_key, l.price, l.timestamp
-           FROM unnest($2::text[]) AS p(pair_key)
-          CROSS JOIN LATERAL (
-                SELECT price, timestamp
-                  FROM price_points
-                 WHERE network = $1
-                   AND pair_key = p.pair_key
-                 ORDER BY timestamp DESC
-                 LIMIT 1
-               ) l`,
-        [activeNetwork, activePairs.map(p => p.pairKey)]
-      )
-
-      const latestPrices = new Map<string, { price: number; timestamp: Date }>()
-      result.rows.forEach(row => {
-        latestPrices.set(row.pair_key, {
-          price: parseFloat(row.price),
-          timestamp: row.timestamp,
-        })
-      })
-
-      return activePairs.map(p => {
-        const latest = latestPrices.get(p.pairKey)
-        return {
-          pairKey: p.pairKey,
-          network: activeNetwork,
-          assetA: p.assetA,
-          assetB: p.assetB,
-          latestPrice: latest?.price ?? null,
-          lastUpdated: latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp.toISOString() : new Date(latest.timestamp).toISOString()) : null,
-        }
-      })
-    },
-
-    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
-      if (network != null && network !== 'testnet' && network !== 'mainnet') {
-        throw new ErrorWithProps('network must be one of: testnet, mainnet', {
-          code: 'INVALID_INPUT',
-          field: 'network',
-        })
-      }
-      const comparison = await compareOracles(
-        asset.toUpperCase(),
-        (network ?? activeNetwork) as NetworkName,
-        oracleAdapters
-      )
-      if (!comparison) return null
-      return {
-        ...comparison,
-        oracles: comparison.oracles.map(o => ({ ...o, status: o.status.toUpperCase() })),
-      }
-    },
-  },
-
-  Subscription: {
-    priceUpdated: {
-      subscribe: withFilter<
-        { priceUpdated: PricePublishedEvent },
-        unknown,
-        MercuriusContext,
-        { pair: string; network?: string | null }
-      >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
-        (payload, { pair, network }) =>
-          payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
-          (network == null || payload.priceUpdated.network === network)
-      ),
-    },
   },
 }
 
 export async function registerGraphQL(app: FastifyInstance) {
-  const maxQueryDepth = getMaxGraphQLQueryDepth()
-
-  await app.register(mercurius, {
+  app.register(mercurius, {
     schema,
-    resolvers,
-    graphiql: true,
-    // Mercurius 16.9.0 supplies the selected operation name to this callback.
-    // Its built-in queryDepth option neither expands fragments nor distinguishes
-    // an unselected operation in a multi-operation document. A callback cannot
-    // be used with Mercurius's document cache, so disable that cache rather
-    // than weakening the operation-aware validation policy.
-    cache: false,
-    validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
+    resolvers: resolvers as any,
+    subscription: true,
     errorFormatter: formatGraphQLErrors,
-    path: '/graphql',
-    subscription: {
-      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
-      // library) rather than the legacy `subscriptions-transport-ws`.
-      fullWsTransport: true,
-      wsDefaultSubprotocol: 'graphql-transport-ws',
-    },
-  })
-
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
-  const onPricePublished = (event: PricePublishedEvent) => {
-    app.graphql.pubsub.publish({
-      topic: PRICE_TOPIC,
-      payload: { priceUpdated: event },
-    })
-  }
-  priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
-
-  // Detach the listener when the server shuts down so repeated
-  // register/close cycles (e.g. in tests) don't leak listeners.
-  app.addHook('onClose', async () => {
-    priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
+    validationRules: queryDepthValidationRules(getMaxGraphQLQueryDepth()),
   })
 }
