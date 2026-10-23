@@ -4,12 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
-import { config } from '../config'
-import { api_key_auth_failures_total, admin_auth_failures_total, api_key_cache_lookups_total } from '../metrics'
-
-const log = createLogger('auth')
-
-type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired' | 'insufficient_scope'
+import { apiError } from '../errors'
 
 /**
  * Metadata for an authenticated API key, attached to each request as
@@ -443,50 +438,21 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
     const isPublic = routeConfig.public === true || routeConfig.auth === 'none'
     if (isPublic || isAdminRoute(req)) return
 
-    const authorization = req.headers['authorization']
-    const token = extractBearer(authorization)
-    if (authorization !== undefined && !token) {
-      api_key_auth_failures_total.inc({ reason: 'malformed' })
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        code: 'malformed',
-        message: 'Malformed Authorization header.',
-      })
-    }
+    const token = extractBearer(req.headers['authorization'])
+      if (!token) {
+        return reply.status(401).send({
+          ...apiError('unauthorized', 'Unauthorized'),
+          message: 'Missing API key. Provide an Authorization: Bearer <key> header.',
+        })
+      }
 
-    if (authorization === undefined) {
-      api_key_auth_failures_total.inc({ reason: 'missing' })
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        code: 'missing',
-        message: 'Missing API key. Provide an Authorization header.',
-      })
-    }
-
-    if (!token) {
-      api_key_auth_failures_total.inc({ reason: 'malformed' })
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        code: 'malformed',
-        message: 'Missing API key. Provide an Authorization: Bearer <key> header.',
-      })
-    }
-
-    const result = await lookupApiKeyResult(token)
-    const keyContext = result.context
-    if (!keyContext) {
-      const reason = result.failureReason ?? 'unknown'
-      api_key_auth_failures_total.inc({ reason })
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        code: reason,
-        message: reason === 'revoked'
-          ? 'Revoked API key. Request a replacement key.'
-          : reason === 'expired'
-            ? 'Expired API key. Request a replacement key.'
-            : 'Unknown API key.',
-      })
-    }
+      const keyContext = await lookupApiKey(token)
+      if (!keyContext) {
+        return reply.status(401).send({
+          ...apiError('unauthorized', 'Unauthorized'),
+          message: 'Invalid or revoked API key.',
+        })
+      }
 
     req.apiKey = keyContext
     // #500: after the key is known to be valid and before any scope or quota

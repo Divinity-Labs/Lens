@@ -523,7 +523,20 @@ paths:
         - x402: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
-        - $ref: '#/components/parameters/DecimalFormatHeader'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned as `nextCursor` by the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
       responses:
         '200':
           description: List of pools
@@ -563,6 +576,12 @@ paths:
                         timestamp:
                           type: string
                           format: date-time
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor to pass as `?cursor=` for the next page, or null on the last page.
+                  hasMore:
+                    type: boolean
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
@@ -618,6 +637,20 @@ paths:
           schema:
             type: string
             format: date-time
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned as `nextCursor` by the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 500
       responses:
         '200':
           description: Candle data
@@ -655,6 +688,12 @@ paths:
                           type: number
                         volume:
                           type: number
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor to pass as `?cursor=` for the next page, or null on the last page.
+                  hasMore:
+                    type: boolean
         '400':
           description: Invalid parameters
         '402':
@@ -724,6 +763,20 @@ paths:
             enum: [json, csv]
             default: json
         - $ref: '#/components/parameters/NetworkQuery'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned as `nextCursor` by the previous page. When `format=csv`, the cursor is returned in the `X-Next-Cursor` response header instead.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1000
       responses:
         '200':
           description: Historical price snapshots
@@ -766,6 +819,12 @@ paths:
                           type: number
                         volume:
                           type: number
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor to pass as `?cursor=` for the next page, or null on the last page.
+                  hasMore:
+                    type: boolean
         '400':
           description: Invalid parameters
         '402':
@@ -780,6 +839,20 @@ paths:
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned as `nextCursor` by the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
       responses:
         '200':
           description: List of pairs
@@ -809,6 +882,12 @@ paths:
                           type: string
                           format: date-time
                           nullable: true
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor to pass as `?cursor=` for the next page, or null on the last page.
+                  hasMore:
+                    type: boolean
         '429':
           $ref: '#/components/responses/TooManyRequests'
     post:
@@ -1974,6 +2053,12 @@ components:
         default: testnet
 
   responses:
+    Error:
+      description: Standard error envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     PaymentRequired:
       description: Payment Required
       content:
@@ -1998,6 +2083,8 @@ components:
                       type: string
               error:
                 type: string
+              code:
+                $ref: '#/components/schemas/ErrorCode'
               description:
                 type: string
     TooManyRequests:
@@ -2020,6 +2107,8 @@ components:
                 type: integer
               error:
                 type: string
+              code:
+                $ref: '#/components/schemas/ErrorCode'
               message:
                 type: string
               retryAfter:
@@ -2045,132 +2134,37 @@ components:
         example: 'public, max-age=300'
 
   schemas:
-    LendingRateEntry:
+    ErrorCode:
+      type: string
+      description: Stable machine-readable error code. Branch on this, never on `error`, which is human-readable.
+      enum:
+        - missing_parameter
+        - invalid_parameter
+        - bad_network
+        - bad_interval
+        - bad_window
+        - unsupported
+        - unknown_pair
+        - unwatched_pair
+        - pair_already_watched
+        - unauthorized
+        - not_found
+        - upstream_unavailable
+        - internal_error
+        - rate_limited
+        - payment_required
+        - payment_invalid
+        - payment_verification_failed
+        - quota_exceeded
+    Error:
       type: object
-      required: [id, venue, source, network, poolId, asset, supplyApy, borrowApy, timestamp]
+      required: [error, code]
       properties:
-        id:
+        error:
           type: string
-        venue:
-          type: string
-          example: blend
-        source:
-          type: string
-          example: blend
-        network:
-          type: string
-          example: mainnet
-        poolId:
-          type: string
-        poolName:
-          type: string
-          nullable: true
-        asset:
-          type: string
-          example: USDC
-        assetAddress:
-          type: string
-          nullable: true
-        supplyApy:
-          type: number
-        borrowApy:
-          type: number
-        supplyApr:
-          type: number
-          nullable: true
-        borrowApr:
-          type: number
-          nullable: true
-        utilization:
-          type: number
-          nullable: true
-          description: Borrowed / supplied as a fraction. Null for venues that publish rates only.
-        totalSupply:
-          type: number
-          nullable: true
-        totalBorrowed:
-          type: number
-          nullable: true
-        reserves:
-          type: number
-          nullable: true
-        ledger:
-          type: integer
-        timestamp:
-          type: string
-          format: date-time
-
-    LendingRatesResponse:
-      type: object
-      required: [network, rates]
-      properties:
-        network:
-          type: string
-        rates:
-          type: array
-          items:
-            $ref: '#/components/schemas/LendingRateEntry'
-
-    InternalErrorResponse:
-      type: object
-      required: [code, message, correlationId]
-      properties:
+          description: Human-readable error message. Do not branch on it.
         code:
-          type: string
-          enum: [internal_error]
-          example: internal_error
-        message:
-          type: string
-          example: An internal server error occurred.
-        correlationId:
-          type: string
-          example: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
-
-    DependencyCheck:
-      type: object
-      description: >-
-        Result of one dependency probe. `reason` is a fixed phrase, never the
-        raw error: connection errors carry the host and port and this is a
-        public endpoint.
-      required: [status, latencyMs, reason]
-      properties:
-        status:
-          type: string
-          enum: [up, down, skipped]
-        latencyMs:
-          type: integer
-          description: Round-trip time of the probe.
-        reason:
-          type: string
-          nullable: true
-          example: unreachable or not migrated
-
-    ReadinessReport:
-      type: object
-      description: >-
-        Readiness of one instance. Identical on 200 and 503; `ok` and the HTTP
-        status together say whether traffic should be routed here.
-      required: [ok, booted, checks, checkedAt]
-      properties:
-        ok:
-          type: boolean
-          description: True only when boot finished and every checked dependency is up.
-        booted:
-          type: boolean
-          description: False while the boot sequence is still running.
-        checks:
-          type: object
-          required: [postgres, redis]
-          properties:
-            postgres:
-              $ref: '#/components/schemas/DependencyCheck'
-            redis:
-              $ref: '#/components/schemas/DependencyCheck'
-        checkedAt:
-          type: string
-          format: date-time
-          description: When the underlying probes ran (answers may be briefly cached).
-
+          $ref: '#/components/schemas/ErrorCode'
     Asset:
       type: object
       properties:

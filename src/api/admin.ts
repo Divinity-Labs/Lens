@@ -1,9 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
-import { admin_auth_failures_total } from '../metrics'
-import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
-import { copyUsageHistory } from '../x402/metering'
+import { hashApiKey } from './auth'
+import { apiError } from '../errors'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -59,26 +58,16 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Body: CreateKeyBody }>, reply: FastifyReply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+       if (!isAdminAuthorized(req)) {
+         return reply.status(401).send({
+           ...apiError('unauthorized', 'Unauthorized'),
+           message: 'Provide a valid X-Admin-Token header.',
+         })
+       }
 
       const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, scopes } = req.body ?? {}
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
-        return reply.status(400).send({ error: 'label is required' })
+        return reply.status(400).send(apiError('missing_parameter', 'label is required'))
       }
       if (expiresAt !== undefined && typeof expiresAt !== 'string') {
         return reply.status(400).send({ error: 'expiresAt must be a valid future date' })
@@ -169,28 +158,18 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+       if (!isAdminAuthorized(req)) {
+         return reply.status(401).send({
+           ...apiError('unauthorized', 'Unauthorized'),
+           message: 'Provide a valid X-Admin-Token header.',
+         })
+       }
 
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })
-      if (!existing) {
-        return reply.status(404).send({ error: 'API key not found' })
-      }
+       if (!existing) {
+         return reply.status(404).send(apiError('not_found', 'API key not found'))
+       }
       if (existing.revokedAt) {
         return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
       }

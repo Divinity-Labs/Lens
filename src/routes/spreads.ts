@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
-import { sendInternalError } from '../errors'
+import { apiError } from '../errors'
 
 // Supported windows → lookback in minutes. A spread is a statement about *now*,
 // so these are deliberately short: widen the window far enough and you stop
@@ -75,13 +75,13 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
     const window = req.query.window ?? '5m'
 
     if (!asset) {
-      return reply.status(400).send({ error: 'Asset parameter is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'Asset parameter is required'))
     }
 
     if (!(window in WINDOW_MINUTES)) {
       return reply
         .status(400)
-        .send({ error: `window must be one of: ${WINDOWS.join(', ')}` })
+        .send(apiError('bad_window', `window must be one of: ${WINDOWS.join(', ')}`))
     }
 
     // Prices from two chains are not comparable, and a spread computed across
@@ -89,7 +89,7 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
     // process's own network rather than silently pooling them.
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = (requested as NetworkName) ?? activeNetwork
 
@@ -158,7 +158,9 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
         tightest: venues[0] ?? null,
       }
     } catch (err) {
-      return sendInternalError(reply, req, err, 'Spread aggregation failed')
+      return reply
+        .status(500)
+        .send(apiError('upstream_unavailable', `Spread aggregation failed: ${(err as Error).message}`))
     }
   })
 }

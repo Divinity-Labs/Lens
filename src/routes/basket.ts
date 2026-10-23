@@ -3,8 +3,7 @@ import { formatValidationError } from "../validation"
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { pgPool } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
-import '../middleware/network' // declares req.network on the FastifyRequest type
+import { apiError } from '../errors'
 
 async function fetchAssetVWAP(asset: string, network: NetworkName): Promise<number | null> {
   const result = await pgPool.query(
@@ -35,43 +34,19 @@ const BasketQuerySchema = z
     const assets = data.asset ?? []
     const weightStrings = data.weight ?? []
     if (assets.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['asset'],
-        message: 'at least one asset is required',
-      })
+      return reply.status(400).send(apiError('missing_parameter', 'At least one asset is required'))
     }
-    if (assets.length === 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['asset'],
-        message: 'basket requires at least 2 assets',
-      })
+    if (assets.length < 2) {
+      return reply.status(400).send(apiError('invalid_parameter', 'Basket requires at least 2 assets'))
     }
     if (assets.length !== weightStrings.length) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['weight'],
-        message: 'number of assets and weights must match',
-      })
-    }
-    const weights = weightStrings.map((w) => parseFloat(w))
-    if (weights.some((w) => isNaN(w) || w <= 0)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['weight'],
-        message: 'all weights must be positive numbers',
-      })
+      return reply.status(400).send(apiError('invalid_parameter', 'Number of assets and weights must match'))
     }
   })
 
-export async function registerBasketRoutes(app: FastifyInstance) {
-  app.get<{
-    Querystring: { asset?: string | string[]; weight?: string | string[] }
-  }>('/basket', { config: { scope: 'read:prices' } }, async (req, reply) => {
-    const parsed = BasketQuerySchema.safeParse(req.query)
-    if (!parsed.success) {
-      return reply.status(400).send(formatValidationError(parsed.error))
+    const rawWeightValues = weightStrings.map(w => parseFloat(w))
+    if (rawWeightValues.some(w => isNaN(w) || w <= 0)) {
+      return reply.status(400).send(apiError('invalid_parameter', 'All weights must be positive numbers'))
     }
     const assets = parsed.data.asset ?? []
     const weightStrings = parsed.data.weight ?? []
@@ -96,14 +71,7 @@ export async function registerBasketRoutes(app: FastifyInstance) {
 
     const missingAssets = components.filter((c) => c.price === null).map((c) => c.asset)
     if (missingAssets.length > 0) {
-      // 200 with reason: query was valid but no price data exists (yet).
-      // A 404 would imply the assets themselves are invalid/unwatched.
-      return {
-        error: `No price data found for: ${missingAssets.join(', ')}`,
-        reason: 'missing_price_data',
-        missingAssets,
-        requestedAt: new Date().toISOString(),
-      }
+      return reply.status(404).send(apiError('unknown_pair', `No price data found for: ${missingAssets.join(', ')}`))
     }
 
     const basketPrice = components.reduce(

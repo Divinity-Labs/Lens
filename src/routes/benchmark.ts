@@ -4,7 +4,7 @@ import { getActivePairs } from '../pairsRegistry'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import { benchmarkResponseSchema } from '../api/schemas'
-import { sendInternalError } from '../errors'
+import { apiError } from '../errors'
 
 function findPair(assetCode: string, targetCode: string) {
   const normalize = (c: string) => c.toLowerCase() === 'native' ? 'XLM' : c.split(':')[0].toUpperCase()
@@ -34,7 +34,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
 
       const pair = findPair(asset, target)
       if (!pair) {
-        return reply.status(404).send({ error: `Pair ${asset}/${target} not watched` })
+        return reply.status(404).send(apiError('unwatched_pair', `Pair ${asset}/${target} not watched`))
       }
 
       const isAssetA = pair.assetA.code.toUpperCase() === normAsset
@@ -91,7 +91,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
           rolling24h,
         }
       } catch (err) {
-        return sendInternalError(reply, req, err, 'Benchmark computation failed')
+        return reply.status(500).send(apiError('upstream_unavailable', `Benchmark computation failed: ${(err as Error).message}`))
       }
     }
   )

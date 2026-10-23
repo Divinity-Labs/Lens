@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
-import { sendInternalError } from '../errors'
-import { isAggregatorVenue } from '../ingest/venues'
+import { apiError } from '../errors'
 
 // Supported windows → lookback in hours.
 const WINDOW_HOURS = {
@@ -46,13 +45,12 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
     if (!(window in WINDOW_HOURS)) {
       return reply
         .status(400)
-        .send({ error: `window must be one of: ${WINDOWS.join(', ')}` })
+        .send(apiError('bad_window', `window must be one of: ${WINDOWS.join(', ')}`))
     }
 
-    const rawRequested: unknown = req.query.network
-    const requested = typeof rawRequested === 'string' ? rawRequested.trim().toLowerCase() : rawRequested
-    if (requested !== undefined && requested !== '' && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+    const requested = req.query.network
+    if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = req.network
       ?? (requested ? requested as NetworkName : activeNetwork)
@@ -177,7 +175,9 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         },
       }
     } catch (err) {
-      return sendInternalError(reply, req, err, 'Volume aggregation failed')
+      return reply
+        .status(500)
+        .send(apiError('upstream_unavailable', `Volume aggregation failed: ${(err as Error).message}`))
     }
   })
 }
