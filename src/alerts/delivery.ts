@@ -48,12 +48,16 @@ async function recordPermanentFailure(args: {
   }
 }
 
-function retryDelayMs(attempt: number): number {
-  return Math.pow(2, attempt - 1) * 1000
+export type RandomSource = () => number
+
+// Full jitter: a random value between zero and the exponential backoff.
+export function retryDelayMs(attempt: number, random: RandomSource = Math.random): number {
+  const baseDelay = Math.pow(2, attempt - 1) * 1000
+  return Math.floor(random() * baseDelay)
 }
 
 function signPayload(payload: string, secret: string): string {
-  return createHmac('sha256', secret).update(payload).digest('hex')
+  return createHmac('hsha256', secret).update(payload).digest('hex')
 }
 
 export async function deliverJsonWithRetries(
@@ -62,6 +66,7 @@ export async function deliverJsonWithRetries(
   secret: string,
   attempt = 1,
   firstAttemptAt = new Date(),
+  random: RandomSource = Math.random,
 ): Promise<void> {
   const payload = JSON.stringify(body)
   const signature = signPayload(payload, secret)
@@ -79,8 +84,8 @@ export async function deliverJsonWithRetries(
     })
   } catch (err) {
     if (attempt < 3) {
-      await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt)))
-      return deliverJsonWithRetries(url, body, secret, attempt + 1, firstAttemptAt)
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt, random)))
+      return deliverJsonWithRetries(url, body, secret, attempt + 1, firstAttemptAt, random)
     }
 
     const failureCategory: FailureCategory = ['AbortError', 'TimeoutError'].includes((err as Error)?.name)
@@ -100,8 +105,8 @@ export async function deliverJsonWithRetries(
   }
 
   if (attempt < 3) {
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt)))
-    return deliverJsonWithRetries(url, body, secret, attempt + 1, firstAttemptAt)
+    await new Promise(resolve => setTimeout(resolve, retryDelayMs(attempt, random)))
+    return deliverJsonWithRetries(url, body, secret, attempt + 1, firstAttemptAt, random)
   }
 
   await recordPermanentFailure({ url, payload, attempt, status: res.status, category: 'http_5xx', firstAttemptAt })
