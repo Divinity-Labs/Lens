@@ -9,6 +9,12 @@ import {
 import { PAID_CALL_HTTP_METHODS } from '../src/mcp/toolSchemas';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import {
+  mcp_tool_calls_total,
+  mcp_tool_duration_seconds,
+  mcp_errors_total,
+  getMetrics,
+} from '../src/metrics';
 
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
 
@@ -1640,5 +1646,76 @@ describe('payment audit ledger', () => {
 
     expect(ledger.records()).toEqual([]);
     expect(ledger.totalSpend().attempts).toBe(0);
+  });
+
+  it('should record mcp_tool_calls_total, duration, and error metrics on tool execution', async () => {
+    const mockSuccess = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ success: true })
+    });
+
+    const mock402 = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 402,
+      text: async () => 'Payment Required'
+    });
+
+    const serverSuccess = new BazaarMcpServer({ fetchWithPayment: mockSuccess });
+    let handlerSuccess: any = null;
+    (serverSuccess as any).server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) {
+        handlerSuccess = fn;
+      }
+    };
+    (serverSuccess as any).setupHandlers();
+
+    // 1. Success tool call
+    await handlerSuccess({
+      params: {
+        name: 'paid_call',
+        arguments: { url: 'http://example.com/paid' }
+      }
+    });
+
+    // 2. Error tool call
+    const serverError = new BazaarMcpServer({ fetchWithPayment: mock402 });
+    let handlerError: any = null;
+    (serverError as any).server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) {
+        handlerError = fn;
+      }
+    };
+    (serverError as any).setupHandlers();
+
+    await handlerError({
+      params: {
+        name: 'paid_call',
+        arguments: { url: 'http://example.com/paid' }
+      }
+    });
+
+    // 3. Unknown tool call
+    const unknownRes = await handlerError({
+      params: {
+        name: 'unknown_tool_xyz',
+        arguments: {}
+      }
+    });
+    expect(unknownRes.isError).toBe(true);
+    const parsedUnknown = JSON.parse(unknownRes.content[0].text);
+    expect(parsedUnknown.code).toBe('ERR_UNKNOWN_TOOL');
+
+    // 4. Verify metrics in registry output
+    const metricsOutput = await getMetrics();
+    expect(metricsOutput).toContain('mcp_tool_calls_total');
+    expect(metricsOutput).toContain('tool="paid_call"');
+    expect(metricsOutput).toContain('outcome="success"');
+    expect(metricsOutput).toContain('outcome="error"');
+    expect(metricsOutput).toContain('tool="unknown"');
+    expect(metricsOutput).toContain('mcp_tool_duration_seconds');
+    expect(metricsOutput).toContain('mcp_errors_total');
+    expect(metricsOutput).toContain('code="ERR_PAYMENT_REJECTED"');
+    expect(metricsOutput).toContain('code="ERR_UNKNOWN_TOOL"');
   });
 });
