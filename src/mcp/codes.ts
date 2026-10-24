@@ -165,6 +165,14 @@ function classifyByText(
   message: string
 ): { code: McpErrorCode; signal: string } | null {
   const msg = message.toLowerCase();
+  if (
+    msg.includes('no network/scheme registered') ||
+    msg.includes('no scheme registered') ||
+    msg.includes('missing key') ||
+    msg.includes('not configured for network')
+  ) {
+    return { code: MCP_ERROR_CODES.ERR_PAYMENT_REJECTED, signal: 'unregistered scheme' };
+  }
   if (msg.includes('insufficient') || msg.includes('underfunded')) {
     return { code: MCP_ERROR_CODES.ERR_INSUFFICIENT_BALANCE, signal: 'insufficient' };
   }
