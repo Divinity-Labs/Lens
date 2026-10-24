@@ -8,7 +8,8 @@ const { mockQuery } = vi.hoisted(() => ({
 vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: 'testnet',
 }))
 

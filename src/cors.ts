@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify'
 import type { FastifyCorsOptions } from '@fastify/cors'
+import { getEnvironment } from './config'
 
 /**
  * Route classification categories for CORS and security boundary enforcement.
@@ -57,7 +58,7 @@ export function getCredentialedAllowedOrigins(config?: CorsConfig): string[] {
   if (config?.credentialedAllowedOrigins !== undefined) {
     return config.credentialedAllowedOrigins
   }
-  return parseOrigins(process.env.CORS_ALLOWED_ORIGINS)
+  return parseOrigins(getEnvironment().CORS_ALLOWED_ORIGINS)
 }
 
 /**
@@ -67,7 +68,7 @@ export function getAdminAllowedOrigins(config?: CorsConfig): string[] {
   if (config?.adminAllowedOrigins !== undefined) {
     return config.adminAllowedOrigins
   }
-  return parseOrigins(process.env.CORS_ADMIN_ALLOWED_ORIGINS)
+  return parseOrigins(getEnvironment().CORS_ADMIN_ALLOWED_ORIGINS)
 }
 
 /**
@@ -77,7 +78,7 @@ export function getPublicBlockedOrigins(config?: CorsConfig): string[] {
   if (config?.publicBlockedOrigins !== undefined) {
     return config.publicBlockedOrigins
   }
-  return parseOrigins(process.env.CORS_PUBLIC_BLOCKED_ORIGINS)
+  return parseOrigins(getEnvironment().CORS_PUBLIC_BLOCKED_ORIGINS)
 }
 
 /**

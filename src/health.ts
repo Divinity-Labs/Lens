@@ -20,6 +20,7 @@
 import { pgPool } from './db'
 import { redis } from './redis'
 import { createLogger } from './logger'
+import { getEnvironment, getEnvironmentValue } from './config'
 
 const log = createLogger('health')
 
@@ -47,7 +48,7 @@ export function isBootComplete(): boolean {
 // ─── Probe configuration ──────────────────────────────────────────────────────
 
 function envMs(name: string, fallback: number): number {
-  const raw = Number(process.env[name])
+  const raw = Number(getEnvironmentValue(name))
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback
 }
 
@@ -88,7 +89,7 @@ function cacheTtlMs(): number {
 
 /** Whether Redis is part of readiness. See {@link checkReadiness}. */
 function redisCheckEnabled(): boolean {
-  return process.env.READINESS_REDIS_CHECK !== 'false'
+  return getEnvironment().READINESS_REDIS_CHECK !== 'false'
 }
 
 // ─── Result shapes ────────────────────────────────────────────────────────────

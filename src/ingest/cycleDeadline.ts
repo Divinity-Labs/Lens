@@ -32,7 +32,7 @@
  *    no checkpoint sits between statements a unit commits together.
  */
 
-import type { NetworkName } from '../config'
+import { getEnvironmentValue, getPrefixedEnvironmentValue, isDeclaredEnvironmentKey, type NetworkName } from '../config'
 import { createLogger } from '../logger'
 import { ingester_abandoned_cycles_total } from '../metrics'
 
@@ -126,11 +126,13 @@ export function getCycleDeadlineMs(venue: string, network: NetworkName): number 
   const venueKeyEnv = `INGEST_CYCLE_DEADLINE_MS_${venueKey}`
   const networkKey = `INGEST_CYCLE_DEADLINE_MS_${suffix}`
 
+  // Venue keys are read through the config module's prefix reader; the
+  // network and global keys are declared there and read by name.
   const resolved =
-    readDeadlineMs(process.env[venueNetworkKey], venueNetworkKey) ??
-    readDeadlineMs(process.env[venueKeyEnv], venueKeyEnv) ??
-    readDeadlineMs(process.env[networkKey], networkKey) ??
-    readDeadlineMs(process.env.INGEST_CYCLE_DEADLINE_MS, 'INGEST_CYCLE_DEADLINE_MS') ??
+    readDeadlineMs(getPrefixedEnvironmentValue(venueNetworkKey), venueNetworkKey) ??
+    readDeadlineMs(getPrefixedEnvironmentValue(venueKeyEnv), venueKeyEnv) ??
+    readDeadlineMs(isDeclaredEnvironmentKey(networkKey) ? getEnvironmentValue(networkKey) : undefined, networkKey) ??
+    readDeadlineMs(getEnvironmentValue('INGEST_CYCLE_DEADLINE_MS'), 'INGEST_CYCLE_DEADLINE_MS') ??
     DEFAULT_CYCLE_DEADLINE_MS
 
   return resolved

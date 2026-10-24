@@ -14,7 +14,8 @@ vi.mock('../redis', () => ({ getCachedPrice: vi.fn() }))
 vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({ config: { pairs: [] }, activeNetwork: 'testnet' }))
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')), config: { pairs: [] }, activeNetwork: 'testnet' }))
 vi.mock('../ingest/oracles/reflector', () => ({ reflectorOracleAdapter: mockAdapter }))
 
 import { registerGraphQL } from '../api/graphql'

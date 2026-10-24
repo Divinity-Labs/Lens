@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { config, activeNetwork } from '../config.js';
+import { getEnvironment } from '../config'
 
 /**
  * A resource an agent can attach to its context once, rather than re-fetching by
@@ -81,7 +82,8 @@ function computeVersion(text: string): string {
  * `rootDir` is `src` and `outDir` is `dist`.
  */
 function openapiPath(): string {
-  if (process.env.MCP_OPENAPI_PATH) return process.env.MCP_OPENAPI_PATH;
+  const configured = getEnvironment().MCP_OPENAPI_PATH
+  if (configured) return configured;
   return join(__dirname, '..', '..', 'openapi.json');
 }
 

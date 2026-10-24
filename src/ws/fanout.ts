@@ -1,5 +1,5 @@
 import { redis } from '../redis'
-import { activeNetwork, config } from '../config'
+import { activeNetwork, config, getEnvironmentValue } from '../config'
 import { priceEmitter, PRICE_UPDATE, PriceUpdateEvent } from '../events'
 import { Gauge, Counter } from 'prom-client'
 import { register } from '../metrics'
@@ -52,7 +52,7 @@ export const ws_buffered_bytes = new Gauge({
 const REDIS_CHANNEL = `lens:${activeNetwork}:price:updates`
 
 function envInt(name: string, fallback: number): number {
-  const raw = Number(process.env[name])
+  const raw = Number(getEnvironmentValue(name))
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
 }
 

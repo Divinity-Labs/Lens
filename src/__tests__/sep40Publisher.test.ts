@@ -52,7 +52,7 @@ const { configMock } = vi.hoisted(() => {
   }
 })
 
-vi.mock('../config', () => configMock)
+vi.mock('../config', () => ({ ...configMock, getEnvironment: () => ({}), getEnvironmentValue: () => undefined }))
 vi.mock('../db', () => ({
   pgPool: { query: vi.fn().mockResolvedValue({ rows: [] }) },
   prisma: { oraclePublication: { create: vi.fn().mockResolvedValue({}) } },

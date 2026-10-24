@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
 // The ingester now takes `network` (defaulting to `activeNetwork`) and reads
 // via getNetworkConfig, so the mock has to supply both. getNetworkConfig
 // returns the same object the test mutates, keeping `enabled` toggleable.
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: mocks.config,
   activeNetwork: 'testnet',
   getNetworkConfig: () => mocks.config,

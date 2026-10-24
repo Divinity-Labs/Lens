@@ -15,6 +15,7 @@
  */
 import Ajv from 'ajv'
 import type { FastifyInstance, FastifySchema } from 'fastify'
+import { getEnvironment } from '../config'
 
 /**
  * One dependency probe result, shared by `/ready`.
@@ -880,7 +881,7 @@ export const snapshotResponseSchema = {
  * Skipped entirely in production so there is no added runtime cost there.
  */
 export function installResponseValidation(app: FastifyInstance): void {
-  if (process.env.NODE_ENV === 'production') return
+  if (getEnvironment().NODE_ENV === 'production') return
 
   const ajv = new Ajv({ allErrors: true, coerceTypes: false, allowUnionTypes: true })
 

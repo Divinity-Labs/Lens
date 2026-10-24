@@ -1,3 +1,5 @@
+import { getEnvironment } from '../config'
+
 export const DEFAULT_MCP_HTTP_HOST = '127.0.0.1';
 export const DEFAULT_MCP_HTTP_PORT = 3003;
 export const DEFAULT_MCP_HTTP_PATH = '/mcp';
@@ -68,7 +70,7 @@ export function parseMetricLabelAllowList(raw: string | undefined, fallback: rea
     .filter(Boolean);
 }
 
-export function resolveMcpTransportConfig(env: NodeJS.ProcessEnv = process.env): McpTransportConfig {
+export function resolveMcpTransportConfig(env: Record<string, string | undefined> = getEnvironment()): McpTransportConfig {
   const transport = (env.MCP_TRANSPORT ?? 'stdio').trim().toLowerCase();
 
   if (!transport || transport === 'stdio') {

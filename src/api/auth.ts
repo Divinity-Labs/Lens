@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
-import { config } from '../config'
+import { config, getEnvironment } from '../config'
 import { api_key_auth_failures_total, admin_auth_failures_total, api_key_cache_lookups_total } from '../metrics'
 
 const log = createLogger('auth')
@@ -169,8 +169,8 @@ const keyLastUsedTimestamps = new Map<string, number>()
  */
 export function getKeyLastUsedThrottleMs(): number {
   const envVal =
-    process.env.KEY_LAST_USED_THROTTLE_SECONDS ??
-    process.env.API_KEY_LAST_USED_THROTTLE_SECONDS
+    getEnvironment().KEY_LAST_USED_THROTTLE_SECONDS ??
+    getEnvironment().API_KEY_LAST_USED_THROTTLE_SECONDS
   if (envVal !== undefined) {
     const parsed = parseInt(envVal, 10)
     if (Number.isFinite(parsed) && parsed >= 0) {
@@ -275,7 +275,7 @@ export type AdminAuthResult = 'authorized' | 'unauthorized' | 'not_configured'
  * An unset token, whitespace-only string, or obvious placeholder disables the admin surface.
  */
 export function isAdminConfigured(): boolean {
-  const adminToken = process.env.ADMIN_TOKEN?.trim()
+  const adminToken = getEnvironment().ADMIN_TOKEN?.trim()
   if (!adminToken || adminToken.length === 0) return false
   const weakPlaceholders = new Set(['your-admin-token-here', 'change-me', 'placeholder'])
   return !weakPlaceholders.has(adminToken.toLowerCase())
@@ -291,7 +291,7 @@ export function checkAdminAuth(req: FastifyRequest): AdminAuthResult {
   if (!isAdminConfigured()) {
     return 'not_configured'
   }
-  const adminToken = process.env.ADMIN_TOKEN!.trim()
+  const adminToken = getEnvironment().ADMIN_TOKEN!.trim()
   const supplied =
     (req.headers['x-admin-token'] as string | undefined) ??
     req.headers['authorization']?.replace(/^Bearer\s+/i, '')

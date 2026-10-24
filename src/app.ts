@@ -43,6 +43,7 @@ import { getMetrics, rate_limit_rejections_total } from './metrics'
 import { loggerOptions, createDestination } from './logger'
 import { isPoolExhaustionError, recordPoolExhaustion } from './db'
 import { createCorsDelegator, type CorsConfig } from './cors'
+import { getEnvironment } from './config'
 
 /**
  * Routes the rate limiter skips.
@@ -132,7 +133,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // that req.apiKey is populated when the limiter evaluates its per-key quota
   // (both run in the onRequest phase, in registration order). Disabled when
   // REQUIRE_API_KEY=false. Routes marked `config.public` bypass auth.
-  if (process.env.REQUIRE_API_KEY !== 'false') {
+  if (getEnvironment().REQUIRE_API_KEY !== 'false') {
     await app.register(registerApiKeyAuth)
   } else {
     app.log.warn('[auth] REQUIRE_API_KEY=false — API key authentication disabled')
@@ -147,7 +148,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // requests fall back to a conservative shared limit keyed by IP. The IP
   // fallback is overridable via RATE_LIMIT_IP_MAX so load tests (which flood
   // from a single IP without a key) can measure the endpoint, not the limiter.
-  const ipRateLimitMax = parseInt(process.env.RATE_LIMIT_IP_MAX ?? String(RATE_LIMITS.ipDefault), 10)
+  const ipRateLimitMax = parseInt(getEnvironment().RATE_LIMIT_IP_MAX ?? String(RATE_LIMITS.ipDefault), 10)
   await app.register(rateLimit, {
     max: (req) => req.apiKey?.ratePerMin ?? ipRateLimitMax,
     timeWindow: '1 minute',
@@ -185,7 +186,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // The per-instance ceiling runs after the per-key/IP limiter. Health checks
   // bypass it, and expensive route templates are shed before other routes.
-  registerGlobalRateLimit(app, parseGlobalRateLimit(process.env.GLOBAL_RATE_LIMIT_MAX))
+  registerGlobalRateLimit(app, parseGlobalRateLimit(getEnvironment().GLOBAL_RATE_LIMIT_MAX))
 
   // Per-route ceiling for the probe routes. Inert while they stay allow-listed
   // above — @fastify/rate-limit consults `allowList` before it ever reads

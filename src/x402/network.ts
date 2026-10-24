@@ -1,4 +1,4 @@
-import type { NetworkName } from '../config'
+import { getEnvironmentValue, type NetworkName } from '../config'
 // @ts-ignore — @x402 packages ship ESM-only types incompatible with commonjs moduleResolution
 import { x402ResourceServer, HTTPFacilitatorClient } from '@x402/core/server'
 // @ts-ignore
@@ -20,7 +20,7 @@ export const X402_NETWORK_LABEL: Record<NetworkName, `${string}:${string}`> = {
  */
 export function paymentAddressFor(network: NetworkName): string | undefined {
   const suffix = network.toUpperCase()
-  return process.env[`ORACLE_PAYMENT_ADDRESS_${suffix}`] || process.env.ORACLE_PAYMENT_ADDRESS
+  return getEnvironmentValue(`ORACLE_PAYMENT_ADDRESS_${suffix}`) || getEnvironmentValue('ORACLE_PAYMENT_ADDRESS')
 }
 
 /** True if x402 gating should be active for at least one network. */

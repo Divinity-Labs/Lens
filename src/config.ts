@@ -1,9 +1,198 @@
 import 'dotenv/config'
 import { Networks, StrKey } from '@stellar/stellar-sdk'
+import { z } from 'zod'
 import { createLogger } from './logger'
 import type { WatchedPair, AssetId } from './types'
 
 const log = createLogger('config')
+
+/**
+ * Every environment variable the process reads. This module is the only place
+ * that reads `process.env`; everything else goes through `getEnvironment()` or
+ * `getEnvironmentValue()`, so a variable cannot be read without being declared
+ * here and documented in .env.example.
+ */
+const PER_NETWORK_BASES = [
+  'HORIZON_URL', 'RPC_URL', 'NETWORK_PASSPHRASE', 'SOROSWAP_FACTORY_ADDRESS', 'SOROSWAP_TOKEN_LIST_URL',
+  'SOROSWAP_ENABLED', 'SOROSWAP_POLL_INTERVAL_MS', 'AQUARIUS_API_URL', 'AQUARIUS_ENABLED',
+  'REFLECTOR_CONTRACT_ID', 'REFLECTOR_ENABLED', 'WATCHED_PAIRS', 'FACILITATOR_SECRET_KEY', 'FACILITATOR_FEE_STROOPS',
+  'DEFINDEX_FACTORY_ADDRESS', 'DEFINDEX_ENABLED', 'DEFINDEX_POLL_INTERVAL_MS',
+  'PHOENIX_FACTORY_ADDRESS', 'PHOENIX_ENABLED', 'BLEND_POOLS', 'BLEND_BACKSTOP', 'BLEND_ENABLED', 'BLEND_POLL_INTERVAL_MS',
+  'SEP40_CONTRACT_ID', 'SEP40_PUBLISHER_SECRET_KEY', 'SEP40_ENABLED',
+  'ROUTING_MAX_HOPS', 'ROUTING_INTERMEDIATES', 'ORACLE_PAYMENT_ADDRESS',
+] as const
+
+const GLOBAL_KEYS = [
+  'NODE_ENV', 'STELLAR_NETWORK', 'ENABLED_NETWORKS', 'LOG_LEVEL',
+  'DATABASE_URL', 'DIRECT_DATABASE_URL', 'DB_POOL_SIZE', 'DB_POOL_TIMEOUT_MS',
+  'REDIS_URL', 'READINESS_REDIS_CHECK', 'PORT', 'HOST',
+  'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE', 'PRICE_CACHE_TTL', 'SNAPSHOT_CACHE_TTL',
+  'API_KEY_CACHE_TTL', 'PRICE_MIN_PLAUSIBLE', 'PRICE_MAX_PLAUSIBLE', 'HTTP_TIMEOUT_MS',
+  'OUTBOUND_ALLOWED_HOSTS', 'X402_FACILITATOR_URL', 'COINBASE_EXCHANGE_BASE_URL',
+  'WS_PING_INTERVAL_MS', 'WS_MAX_MISSED_PINGS',
+  'MCP_MAX_RESULT_BYTES', 'MCP_MAX_UPSTREAM_BYTES', 'MCP_DEFAULT_PAGE_LIMIT', 'MCP_MAX_PAGE_LIMIT',
+  'MCP_OPENAPI_PATH', 'MCP_TRANSPORT', 'MCP_HTTP_AUTH_TOKEN', 'MCP_HTTP_HOST', 'MCP_HTTP_PORT', 'MCP_HTTP_PATH',
+  'SEP40_DEVIATION_PCT', 'SEP40_MAX_INTERVAL_MS', 'SEP40_MIN_WRITE_INTERVAL_MS', 'SEP40_MAX_AGE_SECONDS', 'SEP40_POLL_INTERVAL_MS',
+  'PHOENIX_POLL_INTERVAL_MS', 'PHOENIX_POOL_CACHE_TTL_MS',
+  'INGEST_CYCLE_DEADLINE_MS',
+  'GLOBAL_RATE_LIMIT_MAX', 'ADMIN_API_KEY', 'ADMIN_TOKEN', 'REQUIRE_API_KEY', 'RATE_LIMIT_IP_MAX',
+  'KEY_ROTATION_OVERLAP_HOURS', 'KEY_LAST_USED_THROTTLE_SECONDS', 'API_KEY_LAST_USED_THROTTLE_SECONDS',
+  'CORS_ALLOWED_ORIGINS', 'CORS_ADMIN_ALLOWED_ORIGINS', 'CORS_PUBLIC_BLOCKED_ORIGINS',
+  'SNAPSHOT_PRUNE_BATCH_SIZE', 'RATE_PRUNE_BATCH_SIZE',
+  'PRICE_POINTS_RETENTION_DAYS', 'PRICE_POINTS_PRECREATE_DAYS', 'PRICE_POINTS_DROP_EXPIRED', 'PRICE_POINTS_PRUNE_BATCH_SIZE',
+  'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
+  'LIVE_API_URL', 'LENS_URL', 'GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_STEP_SUMMARY',
+  'GRAPHQL_MAX_QUERY_DEPTH', 'READINESS_TIMEOUT_MS', 'READINESS_CACHE_MS',
+  'WS_BUFFER_SWEEP_INTERVAL_MS', 'WS_COALESCE_INTERVAL_MS', 'WS_MAX_CONGESTED_MS', 'WS_MAX_BUFFERED_BYTES', 'WS_SLOW_CLIENT_BUFFER_BYTES',
+] as const
+
+/**
+ * Per-venue cycle deadlines are keyed by venue name, which the adapter registry
+ * owns and which can grow, so they are read by prefix rather than listed here.
+ */
+const CYCLE_DEADLINE_VENUE_PREFIX = 'INGEST_CYCLE_DEADLINE_MS_'
+const CYCLE_DEADLINE_KEYS = ['INGEST_CYCLE_DEADLINE_MS_TESTNET', 'INGEST_CYCLE_DEADLINE_MS_MAINNET'] as const
+
+const ENVIRONMENT_KEYS = [
+  ...GLOBAL_KEYS,
+  ...PER_NETWORK_BASES,
+  ...PER_NETWORK_BASES.flatMap(base => [`${base}_TESTNET`, `${base}_MAINNET`]),
+  ...CYCLE_DEADLINE_KEYS,
+] as const
+
+export type EnvironmentKey = (typeof ENVIRONMENT_KEYS)[number]
+
+/** Whether a name is a declared variable, for lookups keyed by a computed name. */
+export function isDeclaredEnvironmentKey(name: string): name is EnvironmentKey {
+  return (ENVIRONMENT_KEYS as readonly string[]).includes(name)
+}
+
+const envSchema = z.object(
+  Object.fromEntries(ENVIRONMENT_KEYS.map(key => [key, z.string().optional()])) as Record<EnvironmentKey, z.ZodOptional<z.ZodString>>
+)
+
+export type Environment = z.infer<typeof envSchema>
+
+/** Variables that must be an integer (a number of ms, pages, bytes, days, ...). */
+const numericEnvironmentKeys: readonly EnvironmentKey[] = [
+  ...CYCLE_DEADLINE_KEYS,
+  'PORT', 'DB_POOL_SIZE', 'DB_POOL_TIMEOUT_MS', 'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE',
+  'PRICE_CACHE_TTL', 'SNAPSHOT_CACHE_TTL', 'API_KEY_CACHE_TTL', 'HTTP_TIMEOUT_MS',
+  'WS_PING_INTERVAL_MS', 'WS_MAX_MISSED_PINGS', 'GLOBAL_RATE_LIMIT_MAX', 'RATE_LIMIT_IP_MAX',
+  'KEY_ROTATION_OVERLAP_HOURS', 'KEY_LAST_USED_THROTTLE_SECONDS', 'API_KEY_LAST_USED_THROTTLE_SECONDS',
+  'SNAPSHOT_PRUNE_BATCH_SIZE', 'RATE_PRUNE_BATCH_SIZE', 'PRICE_POINTS_PRUNE_BATCH_SIZE',
+  'PRICE_POINTS_RETENTION_DAYS', 'PRICE_POINTS_PRECREATE_DAYS',
+  'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
+  'SEP40_MAX_INTERVAL_MS', 'SEP40_MIN_WRITE_INTERVAL_MS', 'SEP40_MAX_AGE_SECONDS', 'SEP40_POLL_INTERVAL_MS',
+  'PHOENIX_POLL_INTERVAL_MS', 'PHOENIX_POOL_CACHE_TTL_MS', 'INGEST_CYCLE_DEADLINE_MS',
+  'MCP_MAX_RESULT_BYTES', 'MCP_MAX_UPSTREAM_BYTES', 'MCP_DEFAULT_PAGE_LIMIT', 'MCP_MAX_PAGE_LIMIT', 'MCP_HTTP_PORT',
+  'ROUTING_MAX_HOPS',
+  'WS_BUFFER_SWEEP_INTERVAL_MS', 'WS_COALESCE_INTERVAL_MS', 'WS_MAX_CONGESTED_MS', 'WS_MAX_BUFFERED_BYTES', 'WS_SLOW_CLIENT_BUFFER_BYTES',
+  'GRAPHQL_MAX_QUERY_DEPTH', 'READINESS_TIMEOUT_MS', 'READINESS_CACHE_MS',
+  ...PER_NETWORK_BASES.filter(b => /_(POLL_INTERVAL_MS|FEE_STROOPS|MAX_HOPS)$/.test(b))
+    .flatMap(base => [base, `${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+/** Variables that must be true or false when set. */
+const booleanEnvironmentKeys: readonly EnvironmentKey[] = [
+  'REQUIRE_API_KEY', 'READINESS_REDIS_CHECK',
+  ...PER_NETWORK_BASES.filter(b => /_ENABLED$/.test(b)).flatMap(base => [base, `${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+/** Variables that must parse as an absolute URL when set. */
+const urlEnvironmentKeys: readonly EnvironmentKey[] = [
+  'REDIS_URL', 'X402_FACILITATOR_URL', 'COINBASE_EXCHANGE_BASE_URL',
+  'SOROSWAP_TOKEN_LIST_URL', 'AQUARIUS_API_URL', 'HORIZON_URL', 'RPC_URL',
+  ...(['SOROSWAP_TOKEN_LIST_URL', 'AQUARIUS_API_URL', 'HORIZON_URL', 'RPC_URL'] as const).flatMap(base => [`${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+function isBlank(value: string | undefined): boolean {
+  return value === undefined || value.trim() === ''
+}
+
+/** Describe a malformed value without echoing it (it may be a secret). */
+function malformedReason(key: EnvironmentKey, value: string): string | undefined {
+  if (numericEnvironmentKeys.includes(key)) {
+    const trimmed = value.trim()
+    if (!/^-?\d+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed))) return 'must be a safe integer'
+  }
+  if (booleanEnvironmentKeys.includes(key) && value !== 'true' && value !== 'false') return 'must be true or false'
+  if (urlEnvironmentKeys.includes(key)) {
+    try {
+      new URL(value)
+    } catch {
+      return 'must be a valid URL'
+    }
+  }
+  if (key === 'NODE_ENV' && !['development', 'test', 'production'].includes(value)) return 'must be development, test, or production'
+  if (key === 'STELLAR_NETWORK' && !['testnet', 'mainnet'].includes(value.toLowerCase())) return 'must be testnet or mainnet'
+  return undefined
+}
+
+/**
+ * Only the database URL is checked at boot, because without it the process does
+ * nothing useful. Every other malformed value is logged and ignored, so its
+ * default applies at the point of use: a bad cache address or a bad optional
+ * tuning knob must not take the whole API down at import time.
+ */
+export function parseEnvironment(source: Record<string, string | undefined>): Environment {
+  const accepted: Record<string, string> = {}
+  for (const key of ENVIRONMENT_KEYS) {
+    const value = source[key]
+    if (isBlank(value)) continue
+    const reason = malformedReason(key, value as string)
+    if (reason) {
+      log.warn({ envVar: key }, `${key} ${reason}; ignoring it and using the default`)
+      continue
+    }
+    accepted[key] = value as string
+  }
+
+  if (source.NODE_ENV === 'production' && isBlank(accepted.DATABASE_URL)) {
+    throw new Error('[config] Invalid environment: DATABASE_URL is required in production')
+  }
+  return envSchema.parse(accepted)
+}
+
+let parsedEnvironment: Environment | undefined
+let environmentFingerprint = ''
+
+/** Parse the complete declared environment once, and again only if a caller changes it. */
+export function getEnvironment(): Environment {
+  const source = Object.fromEntries(ENVIRONMENT_KEYS.map(key => [key, process.env[key]]))
+  const fingerprint = JSON.stringify(source)
+  if (!parsedEnvironment || fingerprint !== environmentFingerprint) {
+    parsedEnvironment = parseEnvironment(source)
+    environmentFingerprint = fingerprint
+  }
+  return parsedEnvironment
+}
+
+/** Read a declared variable selected dynamically by a network suffix or venue name. */
+export function getEnvironmentValue(name: string): string | undefined {
+  if (!(ENVIRONMENT_KEYS as readonly string[]).includes(name)) {
+    throw new Error(`[config] ${name} is not a declared environment variable`)
+  }
+  return (getEnvironment() as Record<string, string | undefined>)[name]
+}
+
+/**
+ * Read a per-venue override whose name is built from a venue name, under the
+ * one prefix that allows it. Any other name is a programming error.
+ */
+export function getPrefixedEnvironmentValue(name: string): string | undefined {
+  if (!name.startsWith(CYCLE_DEADLINE_VENUE_PREFIX)) {
+    throw new Error(`[config] ${name} is not a prefixed environment variable`)
+  }
+  const raw = process.env[name]
+  return raw === undefined || raw.trim() === '' ? undefined : raw
+}
+
+/** Prisma's CLI uses DIRECT_DATABASE_URL; fall back to the application URL. */
+export function ensureDirectDatabaseUrl(): void {
+  const env = getEnvironment()
+  if (!env.DIRECT_DATABASE_URL && env.DATABASE_URL) process.env.DIRECT_DATABASE_URL = env.DATABASE_URL
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -228,30 +417,30 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
   // ── Horizon ──────────────────────────────────────────────────────────────
   const horizonUrl =
-    process.env[`HORIZON_URL_${suffix}`] ||
-    (network === 'testnet' ? process.env.HORIZON_URL : undefined) ||
+    getEnvironmentValue(`HORIZON_URL_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().HORIZON_URL : undefined) ||
     (network === 'mainnet'
       ? 'https://horizon.stellar.org'
       : 'https://horizon-testnet.stellar.org')
 
   // ── Soroban RPC ───────────────────────────────────────────────────────────
   const rpcUrl =
-    process.env[`RPC_URL_${suffix}`] ||
-    (network === 'testnet' ? process.env.RPC_URL : undefined) ||
+    getEnvironmentValue(`RPC_URL_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().RPC_URL : undefined) ||
     (network === 'mainnet'
       ? 'https://mainnet.sorobanrpc.com'
       : 'https://soroban-testnet.stellar.org')
 
   // ── Network passphrase ────────────────────────────────────────────────────
   const passphrase =
-    process.env[`NETWORK_PASSPHRASE_${suffix}`] ||
-    (network === 'testnet' ? process.env.NETWORK_PASSPHRASE : undefined) ||
+    getEnvironmentValue(`NETWORK_PASSPHRASE_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().NETWORK_PASSPHRASE : undefined) ||
     (network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET)
 
   // ── Soroswap factory ──────────────────────────────────────────────────────
   const soroswapFactory =
-    process.env[`SOROSWAP_FACTORY_ADDRESS_${suffix}`] ||
-    process.env.SOROSWAP_FACTORY_ADDRESS ||
+    getEnvironmentValue(`SOROSWAP_FACTORY_ADDRESS_${suffix}`) ||
+    getEnvironment().SOROSWAP_FACTORY_ADDRESS ||
     (network === 'mainnet'
       ? 'CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2'
       : 'CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY')
@@ -259,17 +448,17 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Soroswap token-list is a single canonical list covering both networks by
   // default, but can be overridden per network (e.g. a testnet-specific list).
   const soroswapTokenListUrl =
-    process.env[`SOROSWAP_TOKEN_LIST_URL_${suffix}`] ||
-    process.env.SOROSWAP_TOKEN_LIST_URL ||
+    getEnvironmentValue(`SOROSWAP_TOKEN_LIST_URL_${suffix}`) ||
+    getEnvironment().SOROSWAP_TOKEN_LIST_URL ||
     'https://raw.githubusercontent.com/soroswap/token-list/main/tokenList.json'
 
   const soroswapEnabled =
-    (process.env[`SOROSWAP_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`SOROSWAP_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(soroswapFactory, `SOROSWAP_FACTORY_ADDRESS_${suffix}`)
 
   const soroswapPollMs = parseInt(
-    process.env[`SOROSWAP_POLL_INTERVAL_MS_${suffix}`] ||
-    process.env.SOROSWAP_POLL_INTERVAL_MS ||
+    getEnvironmentValue(`SOROSWAP_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().SOROSWAP_POLL_INTERVAL_MS ||
     '60000',
     10
   )
@@ -278,12 +467,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Aquarius only runs on Stellar classic mainnet today — there is no public
   // testnet deployment, so it is disabled there by default.
   const aquariusApiUrl =
-    process.env[`AQUARIUS_API_URL_${suffix}`] ||
-    process.env.AQUARIUS_API_URL ||
+    getEnvironmentValue(`AQUARIUS_API_URL_${suffix}`) ||
+    getEnvironment().AQUARIUS_API_URL ||
     'https://amm.aquarius.network/api/v1/pools/'
 
   const aquariusEnabled =
-    (process.env[`AQUARIUS_ENABLED_${suffix}`] ?? (network === 'mainnet' ? 'true' : 'false')).toLowerCase() !== 'false'
+    (getEnvironmentValue(`AQUARIUS_ENABLED_${suffix}`) ?? (network === 'mainnet' ? 'true' : 'false')).toLowerCase() !== 'false'
 
   // ── DeFindex vault factory ────────────────────────────────────────────────
   // DeFindex vaults are enumerable from the factory contract. The factory ids
@@ -292,19 +481,19 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // and public/testnet.contracts.json). Testnet redeploys often, so override
   // with DEFINDEX_FACTORY_ADDRESS_TESTNET when the published id changes.
   const defindexFactory =
-    process.env[`DEFINDEX_FACTORY_ADDRESS_${suffix}`] ||
-    process.env.DEFINDEX_FACTORY_ADDRESS ||
+    getEnvironmentValue(`DEFINDEX_FACTORY_ADDRESS_${suffix}`) ||
+    getEnvironment().DEFINDEX_FACTORY_ADDRESS ||
     (network === 'mainnet'
       ? 'CDKFHFJIET3A73A2YN4KV7NSV32S6YGQMUFH3DNJXLBWL4SKEGVRNFKI'
       : 'CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32')
 
   const defindexEnabled =
-    (process.env[`DEFINDEX_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`DEFINDEX_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(defindexFactory, `DEFINDEX_FACTORY_ADDRESS_${suffix}`)
 
   const defindexPollMs = parseInt(
-    process.env[`DEFINDEX_POLL_INTERVAL_MS_${suffix}`] ||
-    process.env.DEFINDEX_POLL_INTERVAL_MS ||
+    getEnvironmentValue(`DEFINDEX_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().DEFINDEX_POLL_INTERVAL_MS ||
     '60000',
     10
   )
@@ -321,25 +510,25 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // names it here. An id that is empty or malformed leaves the venue disabled
   // on that network rather than pointing the ingester at something invented.
   const phoenixFactory =
-    process.env[`PHOENIX_FACTORY_ADDRESS_${suffix}`] ||
-    (network === 'testnet' ? process.env.PHOENIX_FACTORY_ADDRESS : undefined) ||
+    getEnvironmentValue(`PHOENIX_FACTORY_ADDRESS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().PHOENIX_FACTORY_ADDRESS : undefined) ||
     (network === 'mainnet'
       ? 'CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI'
       : '')
 
   const phoenixEnabled =
-    (process.env[`PHOENIX_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`PHOENIX_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(phoenixFactory, `PHOENIX_FACTORY_ADDRESS_${suffix}`)
 
   const phoenixPollMs = parseInt(
-    process.env.PHOENIX_POLL_INTERVAL_MS || '60000',
+    getEnvironment().PHOENIX_POLL_INTERVAL_MS || '60000',
     10
   )
 
   // Pool enumeration is one RPC read of the whole factory, so it is reused
   // across pairs and cycles instead of being paid for on every price poll.
   const phoenixPoolCacheTtlMs = parseInt(
-    process.env.PHOENIX_POOL_CACHE_TTL_MS || '600000',
+    getEnvironment().PHOENIX_POOL_CACHE_TTL_MS || '600000',
     10
   )
 
@@ -349,12 +538,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // Reflector's published deployments. Set REFLECTOR_CONTRACT_ID_<NETWORK> to
   // the oracle contract listed at https://reflector.network to enable it.
   const reflectorContractId =
-    process.env[`REFLECTOR_CONTRACT_ID_${suffix}`] ||
-    process.env.REFLECTOR_CONTRACT_ID ||
+    getEnvironmentValue(`REFLECTOR_CONTRACT_ID_${suffix}`) ||
+    getEnvironment().REFLECTOR_CONTRACT_ID ||
     ''
 
   const oracleEnabled =
-    (process.env[`REFLECTOR_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`REFLECTOR_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(reflectorContractId, `REFLECTOR_CONTRACT_ID_${suffix}`)
 
   // ── Blend lending protocol ────────────────────────────────────────────────
@@ -372,13 +561,13 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   const TESTNET_BLEND_BACKSTOP = 'CBDVWXT433PRVTUNM56C3JREF3HIZHRBA64NB2C3B2UNCKIS65ZYCLZA'
 
   const blendBackstop =
-    process.env[`BLEND_BACKSTOP_${suffix}`] ||
-    (network === 'testnet' ? process.env.BLEND_BACKSTOP : undefined) ||
+    getEnvironmentValue(`BLEND_BACKSTOP_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().BLEND_BACKSTOP : undefined) ||
     (network === 'mainnet' ? MAINNET_BLEND_BACKSTOP : TESTNET_BLEND_BACKSTOP)
 
   const rawBlendPools =
-    process.env[`BLEND_POOLS_${suffix}`] ||
-    (network === 'testnet' ? process.env.BLEND_POOLS : undefined)
+    getEnvironmentValue(`BLEND_POOLS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().BLEND_POOLS : undefined)
 
   const parsedBlendPools: string[] = rawBlendPools
     ? rawBlendPools
@@ -388,13 +577,13 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     : (network === 'mainnet' ? MAINNET_BLEND_POOLS : TESTNET_BLEND_POOLS)
 
   const blendEnabled =
-    (process.env[`BLEND_ENABLED_${suffix}`] ?? (network === 'testnet' ? (process.env.BLEND_ENABLED ?? 'true') : 'true')).toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`BLEND_ENABLED_${suffix}`) ?? (network === 'testnet' ? (getEnvironment().BLEND_ENABLED ?? 'true') : 'true')).toLowerCase() !== 'false' &&
     parsedBlendPools.length > 0 &&
     isUsableContractId(blendBackstop, `BLEND_BACKSTOP_${suffix}`)
 
   const blendPollMs = parseInt(
-    process.env[`BLEND_POLL_INTERVAL_MS_${suffix}`] ||
-    process.env.BLEND_POLL_INTERVAL_MS ||
+    getEnvironmentValue(`BLEND_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().BLEND_POLL_INTERVAL_MS ||
     '60000',
     10
   )
@@ -405,24 +594,24 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // somebody else's contract — or nowhere. `isUsableContractId` rejects a
   // malformed id the same way every other contract address in this file does.
   const sep40ContractId =
-    process.env[`SEP40_CONTRACT_ID_${suffix}`] ||
-    process.env.SEP40_CONTRACT_ID ||
+    getEnvironmentValue(`SEP40_CONTRACT_ID_${suffix}`) ||
+    getEnvironment().SEP40_CONTRACT_ID ||
     ''
 
   const sep40SecretKey =
-    process.env[`SEP40_PUBLISHER_SECRET_KEY_${suffix}`] ||
-    (network === 'testnet' ? process.env.SEP40_PUBLISHER_SECRET_KEY : undefined)
+    getEnvironmentValue(`SEP40_PUBLISHER_SECRET_KEY_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().SEP40_PUBLISHER_SECRET_KEY : undefined)
 
   // A key with no contract, or a contract with no key, is an incomplete
   // deployment rather than a mistake worth crashing on — publication stays off
   // and says so.
   const publisherEnabled =
-    (process.env[`SEP40_ENABLED_${suffix}`] ?? 'false').toLowerCase() !== 'false' &&
+    (getEnvironmentValue(`SEP40_ENABLED_${suffix}`) ?? 'false').toLowerCase() !== 'false' &&
     isUsableContractId(sep40ContractId, `SEP40_CONTRACT_ID_${suffix}`) &&
     Boolean(sep40SecretKey)
 
   if (
-    (process.env[`SEP40_ENABLED_${suffix}`] ?? '').toLowerCase() === 'true' &&
+    (getEnvironmentValue(`SEP40_ENABLED_${suffix}`) ?? '').toLowerCase() === 'true' &&
     !publisherEnabled
   ) {
     log.warn(
@@ -440,33 +629,33 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   // than by asset code — Horizon lists many unrelated assets also called USDC,
   // and picking the wrong one would quote a price no one trades at.
   const rawPairs =
-    process.env[`WATCHED_PAIRS_${suffix}`] ||
-    (network === 'testnet' ? process.env.WATCHED_PAIRS : undefined) ||
+    getEnvironmentValue(`WATCHED_PAIRS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
 
   // ── Multi-hop Routing ───────────────────────────────────────────────────
   const maxHopsRaw =
-    process.env[`ROUTING_MAX_HOPS_${suffix}`] ||
-    (network === 'testnet' ? process.env.ROUTING_MAX_HOPS : undefined) ||
+    getEnvironmentValue(`ROUTING_MAX_HOPS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().ROUTING_MAX_HOPS : undefined) ||
     '3'
   const maxHops = Math.max(1, parseInt(maxHopsRaw, 10) || 3)
 
   const defaultIntermediates =
     network === 'mainnet' ? MAINNET_DEFAULT_INTERMEDIATES : TESTNET_DEFAULT_INTERMEDIATES
   const rawIntermediates =
-    process.env[`ROUTING_INTERMEDIATES_${suffix}`] ||
-    (network === 'testnet' ? process.env.ROUTING_INTERMEDIATES : undefined) ||
+    getEnvironmentValue(`ROUTING_INTERMEDIATES_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().ROUTING_INTERMEDIATES : undefined) ||
     defaultIntermediates
   const intermediates = parseIntermediateAssets(rawIntermediates)
 
   // ── Facilitator ───────────────────────────────────────────────────────────
   const facilitatorSecretKey =
-    process.env[`FACILITATOR_SECRET_KEY_${suffix}`] ||
-    (network === 'testnet' ? process.env.FACILITATOR_SECRET_KEY : undefined)
+    getEnvironmentValue(`FACILITATOR_SECRET_KEY_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().FACILITATOR_SECRET_KEY : undefined)
 
   const facilitatorFeeStroops = parseInt(
-    process.env[`FACILITATOR_FEE_STROOPS_${suffix}`] ||
-    process.env.FACILITATOR_FEE_STROOPS ||
+    getEnvironmentValue(`FACILITATOR_FEE_STROOPS_${suffix}`) ||
+    getEnvironment().FACILITATOR_FEE_STROOPS ||
     '50000',
     10
   )
@@ -518,21 +707,23 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
 const globalConfig = {
   db: {
-    url: process.env.DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
-    connectionLimit: parseInt(process.env.DB_POOL_SIZE ?? '10', 10),
-    poolTimeoutMs: parseInt(process.env.DB_POOL_TIMEOUT_MS ?? '5000', 10),
+    // DATABASE_URL is required when NODE_ENV=production (see parseEnvironment),
+    // so this local default only applies in development and test.
+    url: getEnvironment().DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
+    connectionLimit: parseInt(getEnvironment().DB_POOL_SIZE ?? '10', 10),
+    poolTimeoutMs: parseInt(getEnvironment().DB_POOL_TIMEOUT_MS ?? '5000', 10),
   },
   redis: {
-    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    url: getEnvironment().REDIS_URL ?? 'redis://localhost:6379',
   },
   api: {
-    port: parseInt(process.env.PORT ?? '3002', 10),
-    host: process.env.HOST ?? '0.0.0.0',
+    port: parseInt(getEnvironment().PORT ?? '3002', 10),
+    host: getEnvironment().HOST ?? '0.0.0.0',
   },
   indexer: {
-    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
-    sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
-    ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    pollIntervalMs: parseInt(getEnvironment().POLL_INTERVAL_MS ?? '5000', 10),
+    sdexPageSize: parseInt(getEnvironment().SDEX_PAGE_SIZE ?? '200', 10),
+    ammPageSize: parseInt(getEnvironment().AMM_PAGE_SIZE ?? '200', 10),
   },
   /**
    * When the publisher writes to the SEP-40 feed.
@@ -557,37 +748,37 @@ const globalConfig = {
    *                        it", a price a contract settles against cannot.
    */
   publisher: {
-    deviationPct: positiveNumber(process.env.SEP40_DEVIATION_PCT, 0.5),
-    maxIntervalMs: positiveNumber(process.env.SEP40_MAX_INTERVAL_MS, 15 * 60 * 1000),
-    minWriteIntervalMs: positiveNumber(process.env.SEP40_MIN_WRITE_INTERVAL_MS, 60 * 1000),
-    maxAgeSeconds: positiveNumber(process.env.SEP40_MAX_AGE_SECONDS, 120),
-    pollIntervalMs: positiveNumber(process.env.SEP40_POLL_INTERVAL_MS, 30 * 1000),
+    deviationPct: positiveNumber(getEnvironment().SEP40_DEVIATION_PCT, 0.5),
+    maxIntervalMs: positiveNumber(getEnvironment().SEP40_MAX_INTERVAL_MS, 15 * 60 * 1000),
+    minWriteIntervalMs: positiveNumber(getEnvironment().SEP40_MIN_WRITE_INTERVAL_MS, 60 * 1000),
+    maxAgeSeconds: positiveNumber(getEnvironment().SEP40_MAX_AGE_SECONDS, 120),
+    pollIntervalMs: positiveNumber(getEnvironment().SEP40_POLL_INTERVAL_MS, 30 * 1000),
   },
   cache: {
-    priceTtl: parseInt(process.env.PRICE_CACHE_TTL ?? '10', 10),
+    priceTtl: parseInt(getEnvironment().PRICE_CACHE_TTL ?? '10', 10),
     // How long a network's GET /snapshot response is served from Redis before
     // it is recomputed from Postgres. Deliberately short: the endpoint is a
     // cheap, pollable summary, so a slightly stale copy is preferable to a
     // per-request scan, but callers must never be shown a minutes-old market.
-    snapshotTtl: parseInt(process.env.SNAPSHOT_CACHE_TTL ?? '15', 10),
+    snapshotTtl: parseInt(getEnvironment().SNAPSHOT_CACHE_TTL ?? '15', 10),
     // Issue #495: how long an API-key lookup (positive OR negative) is held in
     // the in-process auth cache before it must be re-read from Postgres. This
     // is the worst-case window in which a key revoked on ANOTHER instance can
     // still authenticate here — on the instance that handles the revoke,
     // invalidation is immediate. Expiry is re-checked on every cache hit, so
     // this TTL never extends a key past its own `expiresAt`. Keep it short.
-    apiKeyTtl: parseInt(process.env.API_KEY_CACHE_TTL ?? '30', 10),
+    apiKeyTtl: parseInt(getEnvironment().API_KEY_CACHE_TTL ?? '30', 10),
   },
   plausibility: {
-    minPrice: parseFloat(process.env.PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
-    maxPrice: parseFloat(process.env.PRICE_MAX_PLAUSIBLE ?? '10000000000'),
+    minPrice: parseFloat(getEnvironment().PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
+    maxPrice: parseFloat(getEnvironment().PRICE_MAX_PLAUSIBLE ?? '10000000000'),
   },
   http: {
-    timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
+    timeoutMs: parseInt(getEnvironment().HTTP_TIMEOUT_MS ?? '10000', 10),
   },
   ws: {
-    pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
-    maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
+    pingIntervalMs: parseInt(getEnvironment().WS_PING_INTERVAL_MS ?? '30000', 10),
+    maxMissedPings: parseInt(getEnvironment().WS_MAX_MISSED_PINGS ?? '2', 10),
   },
   outbound: {
     // One operator-maintained list for every outbound fetch the app makes to a
@@ -595,18 +786,18 @@ const globalConfig = {
     // Empty = "any public host"; a non-empty list narrows reach to these
     // hostnames. It never re-opens a private/link-local/metadata address — that
     // block is unconditional (see net/ssrf.ts).
-    allowedHosts: parseAllowedHosts(process.env.OUTBOUND_ALLOWED_HOSTS ?? ''),
+    allowedHosts: parseAllowedHosts(getEnvironment().OUTBOUND_ALLOWED_HOSTS ?? ''),
   },
   mcp: {
     // Tool results land directly in an agent's context window, so both the body
     // read from a node and the text handed back are capped (#416).
-    maxResultBytes: clampInt(process.env.MCP_MAX_RESULT_BYTES, 16_384, 1_024, 1_048_576),
-    maxUpstreamBytes: clampInt(process.env.MCP_MAX_UPSTREAM_BYTES, 262_144, 4_096, 8_388_608),
+    maxResultBytes: clampInt(getEnvironment().MCP_MAX_RESULT_BYTES, 16_384, 1_024, 1_048_576),
+    maxUpstreamBytes: clampInt(getEnvironment().MCP_MAX_UPSTREAM_BYTES, 262_144, 4_096, 8_388_608),
     // Page size for collection results, mirroring the /discovery limits: a
     // request without an explicit limit gets this many items, and an over-large
     // ask is clamped rather than honoured.
-    defaultPageLimit: clampInt(process.env.MCP_DEFAULT_PAGE_LIMIT, 50, 1, 200),
-    maxPageLimit: clampInt(process.env.MCP_MAX_PAGE_LIMIT, 200, 1, 1000),
+    defaultPageLimit: clampInt(getEnvironment().MCP_DEFAULT_PAGE_LIMIT, 50, 1, 200),
+    maxPageLimit: clampInt(getEnvironment().MCP_MAX_PAGE_LIMIT, 200, 1, 1000),
   },
 } as const
 
@@ -644,7 +835,7 @@ export function getNetworkConfig(network: NetworkName): NetworkConfig {
  * Falls back to `'testnet'` when unset so local dev always works.
  */
 export const activeNetwork: NetworkName =
-  (process.env.STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
+  (getEnvironment().STELLAR_NETWORK?.toLowerCase() as NetworkName | undefined) === 'mainnet'
     ? 'mainnet'
     : 'testnet'
 

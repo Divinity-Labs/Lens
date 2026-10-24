@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 // @ts-expect-error js-yaml types
 import YAML from 'js-yaml'
 import Ajv, { type ErrorObject } from 'ajv'
+import { getEnvironment } from '../config'
 
 const log = createLogger('liveValidator')
 
@@ -359,16 +360,17 @@ export async function postOrUpdateGitHubReport(
   // Precedence: options.token > GITHUB_TOKEN > GH_TOKEN.
   // In automated GitHub Actions CI runners, GITHUB_TOKEN is injected natively into the runner environment.
   // GH_TOKEN is supported as a fallback when running under CLI contexts (e.g. GitHub CLI `gh`).
-  const token = options.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
-  const repo = options.repo ?? process.env.GITHUB_REPOSITORY ?? 'Divinity-Labs/Lens'
+  const token = options.token ?? getEnvironment().GITHUB_TOKEN ?? getEnvironment().GH_TOKEN
+  const repo = options.repo ?? getEnvironment().GITHUB_REPOSITORY ?? 'Divinity-Labs/Lens'
   const title = options.issueTitle ?? 'Live Service Spec Drift Report'
   const label = options.label ?? 'live-spec-report'
 
   // If in GitHub Actions, always write to GITHUB_STEP_SUMMARY
-  if (process.env.GITHUB_STEP_SUMMARY) {
+  const stepSummaryPath = getEnvironment().GITHUB_STEP_SUMMARY
+  if (stepSummaryPath) {
     try {
       const fs = await import('node:fs')
-      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, reportMarkdown + '\n')
+      fs.appendFileSync(stepSummaryPath, reportMarkdown + '\n')
     } catch {
       // Ignore step summary write error
     }

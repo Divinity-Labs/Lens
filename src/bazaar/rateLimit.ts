@@ -1,5 +1,6 @@
 import type Redis from 'ioredis'
 import { redis } from '../redis'
+import { getEnvironment } from '../config'
 
 /**
  * Per-`payTo` rate limiting on catalog writes (#131).
@@ -12,19 +13,21 @@ import { redis } from '../redis'
 
 const WINDOW_SECONDS = 60
 
-function envLimit(name: string, fallback: number): number {
-  const raw = Number(process.env[name])
+// The env schema drops a malformed value with a warning rather than refusing
+// to boot, so this fallback is the layer that decides a bad limit: it applies.
+function envLimit(value: string | undefined, fallback: number): number {
+  const raw = Number(value)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
 }
 
 /** Writes allowed per `payTo` per minute. */
 export function perMinuteLimit(): number {
-  return envLimit('BAZAAR_CATALOG_WRITES_PER_MIN', 10)
+  return envLimit(getEnvironment().BAZAAR_CATALOG_WRITES_PER_MIN, 10)
 }
 
 /** Writes allowed per `payTo` per UTC day. */
 export function perDayLimit(): number {
-  return envLimit('BAZAAR_CATALOG_WRITES_PER_DAY', 200)
+  return envLimit(getEnvironment().BAZAAR_CATALOG_WRITES_PER_DAY, 200)
 }
 
 export interface RateLimitDecision {

@@ -5,7 +5,8 @@ const { mockComputeVWAP } = vi.hoisted(() => ({
   mockComputeVWAP: vi.fn(),
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: {
     cache: { priceTtl: 10 },
   },

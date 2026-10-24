@@ -1,3 +1,5 @@
+import { getEnvironment } from '../config'
+
 /**
  * Websocket backpressure policy.
  *
@@ -62,7 +64,7 @@ export const DEFAULT_BACKPRESSURE_LIMITS: BackpressureLimits = {
   maxCongestedMs: 30_000,
 }
 
-function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, allowZero: boolean): number {
+function intFromEnv(env: Record<string, string | undefined>, name: string, fallback: number, allowZero: boolean): number {
   const raw = Number(env[name])
   if (!Number.isFinite(raw)) return fallback
   if (raw === 0) return allowZero ? 0 : fallback
@@ -79,7 +81,7 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, allo
  * and the coalescing tier — the one that keeps a merely-slow client connected —
  * never runs. So the soft limit is clamped to half the hard one.
  */
-export function resolveBackpressureLimits(env: NodeJS.ProcessEnv = process.env): BackpressureLimits {
+export function resolveBackpressureLimits(env: Record<string, string | undefined> = getEnvironment()): BackpressureLimits {
   const coalesceIntervalMs = intFromEnv(
     env,
     'WS_COALESCE_INTERVAL_MS',

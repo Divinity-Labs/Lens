@@ -4,6 +4,7 @@ import { prisma } from '../db'
 import { admin_auth_failures_total } from '../metrics'
 import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
 import { copyUsageHistory } from '../x402/metering'
+import { getEnvironment } from '../config'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -230,7 +231,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: 'Cannot rotate a revoked API key' })
       }
 
-      const defaultOverlap = parseInt(process.env.KEY_ROTATION_OVERLAP_HOURS ?? '24', 10) || 24
+      const defaultOverlap = parseInt(getEnvironment().KEY_ROTATION_OVERLAP_HOURS ?? '24', 10) || 24
       const overlapHours =
         req.body?.overlapHours !== undefined &&
         Number.isFinite(req.body.overlapHours) &&

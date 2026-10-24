@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: mocks.config,
   activeNetwork: 'testnet',
   // startAquariusIngester / ingestAquariusPair resolve the per-network Aquarius

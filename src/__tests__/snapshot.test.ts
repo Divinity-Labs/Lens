@@ -19,7 +19,8 @@ vi.mock('../redis', () => ({
   setCachedSnapshot: mockSetCachedSnapshot,
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: configState.active,
   getNetworkConfig: (network: string) => ({
     pairs: configState.pairs[network] ?? [],

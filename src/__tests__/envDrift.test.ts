@@ -62,8 +62,6 @@ export const UNDOCUMENTED_ENV_ALLOW_LIST: Record<string, string> = {
     'Legacy unsuffixed fallback for testnet; FACILITATOR_FEE_STROOPS_TESTNET and FACILITATOR_FEE_STROOPS_MAINNET are documented in .env.example.',
   API_KEY_LAST_USED_THROTTLE_SECONDS:
     'Optional alias fallback; primary variable KEY_LAST_USED_THROTTLE_SECONDS is documented in .env.example.',
-  API_KEY_LAST_USED_THROTTLE_SECONDS:
-    'Optional alias fallback; primary variable KEY_LAST_USED_THROTTLE_SECONDS is documented in .env.example.',
 }
 
 /**
@@ -147,6 +145,10 @@ export function extractEnvReadsFromSource(sourceCode: string, fileName: string):
       if (isProcessEnv(node.expression)) {
         addRead(node.name.getText(sourceFile), node)
       }
+      // Typed access through the shared validated config module.
+      if (node.expression.getText(sourceFile) === 'getEnvironment()') {
+        addRead(node.name.getText(sourceFile), node)
+      }
     }
 
     // 2. process.env['X'] or process.env[`X_${suffix}`]
@@ -161,6 +163,19 @@ export function extractEnvReadsFromSource(sourceCode: string, fileName: string):
             addRead(`${head}TESTNET`, node)
             addRead(`${head}MAINNET`, node)
           }
+        }
+      }
+    }
+
+    // Keyed access through the shared validated config module.
+    if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === 'getEnvironmentValue') {
+      const arg = node.arguments[0]
+      if (arg && ts.isStringLiteral(arg)) addRead(arg.text, node)
+      else if (arg && ts.isTemplateExpression(arg)) {
+        const head = arg.head.text
+        if (head.endsWith('_')) {
+          addRead(`${head}TESTNET`, node)
+          addRead(`${head}MAINNET`, node)
         }
       }
     }

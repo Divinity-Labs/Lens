@@ -11,7 +11,8 @@ vi.mock('../redis', () => ({ getCachedPrice: mocks.getCachedPrice }))
 vi.mock('../db', () => ({ pgPool: { query: vi.fn() }, prisma: {} }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: mocks.getAggregatedPrice }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: mocks.getBestRoute }))
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: 'testnet',
   config: {
     pairs: [

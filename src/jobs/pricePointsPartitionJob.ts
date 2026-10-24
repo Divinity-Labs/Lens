@@ -1,6 +1,6 @@
 import { Queue, Worker } from 'bullmq'
 import { pgPool } from '../db'
-import { activeNetwork } from '../config'
+import { activeNetwork, getEnvironment } from '../config'
 import {
   ensurePricePointsPartitions,
   dropExpiredPricePointsPartitions,
@@ -15,18 +15,20 @@ const log = createLogger('job:price-points-partition')
 
 const QUEUE_NAME = `${activeNetwork}:price-points-partition`
 
-export const PRICE_POINTS_RETENTION_DAYS = process.env.PRICE_POINTS_RETENTION_DAYS
-  ? parseInt(process.env.PRICE_POINTS_RETENTION_DAYS, 10)
+const retentionDaysRaw = getEnvironment().PRICE_POINTS_RETENTION_DAYS
+export const PRICE_POINTS_RETENTION_DAYS = retentionDaysRaw
+  ? parseInt(retentionDaysRaw, 10)
   : DEFAULT_RETENTION_DAYS
 
-export const PRICE_POINTS_PRECREATE_DAYS = process.env.PRICE_POINTS_PRECREATE_DAYS
-  ? parseInt(process.env.PRICE_POINTS_PRECREATE_DAYS, 10)
+const precreateDaysRaw = getEnvironment().PRICE_POINTS_PRECREATE_DAYS
+export const PRICE_POINTS_PRECREATE_DAYS = precreateDaysRaw
+  ? parseInt(precreateDaysRaw, 10)
   : DEFAULT_PRECREATE_DAYS
 
-export const PRICE_POINTS_DROP_EXPIRED = process.env.PRICE_POINTS_DROP_EXPIRED === 'true'
+export const PRICE_POINTS_DROP_EXPIRED = getEnvironment().PRICE_POINTS_DROP_EXPIRED === 'true'
 
 function redisConnection() {
-  const url = process.env.REDIS_URL
+  const url = getEnvironment().REDIS_URL
   if (url) return { url }
   return { host: 'localhost', port: 6379 }
 }

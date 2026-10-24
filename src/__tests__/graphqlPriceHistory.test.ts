@@ -10,7 +10,8 @@ vi.mock('../db', () => ({
 }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: { pairs: [], cache: { priceTtl: 60 } },
   activeNetwork: 'testnet',
 }))

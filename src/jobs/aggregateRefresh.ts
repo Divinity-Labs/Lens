@@ -1,6 +1,7 @@
 import { Queue, Worker } from 'bullmq'
 import { config, getNetworkConfig, type NetworkName } from '../config'
 import { prisma } from '../db'
+import { getEnvironment } from '../config'
 import { setCachedPrice } from '../redis'
 import { calculateVWAP, calculateOHLCV, getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
@@ -20,7 +21,7 @@ function queueName(network: NetworkName): string {
 }
 
 function redisConnection() {
-  const url = process.env.REDIS_URL
+  const url = getEnvironment().REDIS_URL
   if (url) return { url }
   return { host: 'localhost', port: 6379 }
 }
