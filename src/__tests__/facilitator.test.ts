@@ -24,7 +24,8 @@ vi.mock('@x402/stellar', () => ({
   createEd25519Signer: vi.fn(),
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   getNetworkConfig: vi.fn(() => ({
     rpc: { url: 'http://localhost' },
     facilitator: { secretKey: 'S_MOCK_SECRET', feeStroops: 50000 },

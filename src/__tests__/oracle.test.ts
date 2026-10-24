@@ -4,7 +4,8 @@ import Fastify from 'fastify'
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
 vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
-vi.mock('../config', () => ({ activeNetwork: 'testnet' }))
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')), activeNetwork: 'testnet' }))
 vi.mock('../ingest/oracles/reflector', () => ({
   reflectorOracleAdapter: {
     name: 'reflector',

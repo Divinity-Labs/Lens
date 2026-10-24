@@ -1,3 +1,4 @@
+import { getEnvironment } from '../config'
 import {
   GraphQLError,
   Kind,
@@ -12,7 +13,7 @@ import {
 export const DEFAULT_MAX_GRAPHQL_QUERY_DEPTH = 3
 
 /** Reads the GraphQL selection-depth ceiling at server registration time. */
-export function getMaxGraphQLQueryDepth(env: NodeJS.ProcessEnv = process.env): number {
+export function getMaxGraphQLQueryDepth(env: Record<string, string | undefined> = getEnvironment()): number {
   const raw = env.GRAPHQL_MAX_QUERY_DEPTH
   if (raw === undefined) return DEFAULT_MAX_GRAPHQL_QUERY_DEPTH
 

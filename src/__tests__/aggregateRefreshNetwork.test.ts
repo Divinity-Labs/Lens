@@ -71,7 +71,8 @@ const { mainnetPair, testnetPair } = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   // activeNetwork and config.pairs are what the pre-fix worker read. They stay
   // here so a regression fails on an assertion rather than at import time.
   activeNetwork: 'testnet',

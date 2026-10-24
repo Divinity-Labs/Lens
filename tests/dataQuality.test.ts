@@ -26,7 +26,7 @@ import {
   VWAP_WINDOW_DEFAULT_MINUTES,
 } from '../src/routes/price'
 import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../src/api/rest'
-import { SCREENER_DEFAULT_LIMIT, SCREENER_MAX_LIMIT } from '../src/routes/screener'
+import { SCREENER_DEFAULT_LIMIT, SCREENER_MAX_LIMIT } from '../src/services/screener'
 import { MIN_OBSERVATIONS as SPREAD_MIN_OBSERVATIONS } from '../src/routes/spreads'
 import { SNAPSHOT_RETENTION_DAYS, SNAPSHOT_PRUNE_BATCH_SIZE } from '../src/jobs/snapshotRetention'
 import { DEFAULT_RETENTION_DAYS as PARTITION_RETENTION_DAYS } from '../src/partitioning/pricePoints'

@@ -7,7 +7,8 @@ vi.mock('../redis', () => ({ getCachedPrice: vi.fn() }))
 vi.mock('../db', () => ({ pgPool: { query: vi.fn() } }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: 'testnet',
   config: {
     pairs: [{

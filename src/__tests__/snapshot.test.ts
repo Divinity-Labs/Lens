@@ -19,7 +19,8 @@ vi.mock('../redis', () => ({
   setCachedSnapshot: mockSetCachedSnapshot,
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: configState.active,
   getNetworkConfig: (network: string) => ({
     pairs: configState.pairs[network] ?? [],
@@ -507,7 +508,12 @@ describe('GET /snapshot', () => {
     const res = await app.inject({ method: 'GET', url: '/snapshot' })
 
     expect(res.statusCode).toBe(500)
-    expect(res.json().error).toMatch(/Snapshot aggregation failed/)
+    expect(res.json()).toEqual({
+      code: 'internal_error',
+      message: 'An internal server error occurred.',
+      correlationId: expect.any(String),
+    })
+    expect(res.body).not.toMatch(/db down/)
     await app.close()
   })
 })

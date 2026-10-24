@@ -3,6 +3,7 @@ import fp from 'fastify-plugin'
 // Single source of truth for candle intervals — shared with the candles
 // route module, so the two can never drift apart (issue #266 review).
 import { INTERVAL_SECONDS as CANDLE_INTERVAL_SECONDS } from '../candleIntervals'
+import { getEnvironment } from '../config'
 
 /**
  * Whether x402 payment gating is active. Mirrors isX402Configured() in
@@ -11,9 +12,9 @@ import { INTERVAL_SECONDS as CANDLE_INTERVAL_SECONDS } from '../candleIntervals'
  */
 function isX402Active(): boolean {
   return Boolean(
-    process.env.ORACLE_PAYMENT_ADDRESS_TESTNET ||
-      process.env.ORACLE_PAYMENT_ADDRESS_MAINNET ||
-      process.env.ORACLE_PAYMENT_ADDRESS,
+    getEnvironment().ORACLE_PAYMENT_ADDRESS_TESTNET ||
+      getEnvironment().ORACLE_PAYMENT_ADDRESS_MAINNET ||
+      getEnvironment().ORACLE_PAYMENT_ADDRESS,
   )
 }
 
@@ -160,6 +161,7 @@ export function cachePolicyFor(
     case '/volumes/:asset':
     case '/screener':
     case '/basket':
+    case '/tvl':
       policy = 'public, max-age=120'
       break
 

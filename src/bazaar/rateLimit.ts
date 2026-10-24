@@ -13,6 +13,8 @@ import { getEnvironment } from '../config'
 
 const WINDOW_SECONDS = 60
 
+// The env schema drops a malformed value with a warning rather than refusing
+// to boot, so this fallback is the layer that decides a bad limit: it applies.
 function envLimit(value: string | undefined, fallback: number): number {
   const raw = Number(value)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback

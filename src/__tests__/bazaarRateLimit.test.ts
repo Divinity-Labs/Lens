@@ -91,9 +91,9 @@ describe('checkCatalogWriteRate', () => {
     expect(perDayLimit()).toBe(30)
   })
 
-  it('fails on a nonsense limit instead of silently accepting invalid configuration', () => {
+  it('falls back to its defaults for a nonsense limit', () => {
     process.env.BAZAAR_CATALOG_WRITES_PER_MIN = 'lots'
 
-    expect(() => perMinuteLimit()).toThrow(/BAZAAR_CATALOG_WRITES_PER_MIN must be a safe integer/)
+    expect(perMinuteLimit()).toBe(10)
   })
 })

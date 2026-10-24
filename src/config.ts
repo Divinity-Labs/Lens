@@ -5,105 +5,161 @@ import { createLogger } from './logger'
 import type { WatchedPair, AssetId } from './types'
 
 const log = createLogger('config')
-const envSchema = z.object({
-  NODE_ENV: z.string().optional(), DATABASE_URL: z.string().optional(), DIRECT_DATABASE_URL: z.string().optional(),
-  REDIS_URL: z.string().optional(), PORT: z.string().optional(), HOST: z.string().optional(),
-  STELLAR_NETWORK: z.string().optional(), ENABLED_NETWORKS: z.string().optional(),
-  HORIZON_URL: z.string().optional(), HORIZON_URL_TESTNET: z.string().optional(), HORIZON_URL_MAINNET: z.string().optional(),
-  RPC_URL: z.string().optional(), RPC_URL_TESTNET: z.string().optional(), RPC_URL_MAINNET: z.string().optional(),
-  NETWORK_PASSPHRASE: z.string().optional(), NETWORK_PASSPHRASE_TESTNET: z.string().optional(), NETWORK_PASSPHRASE_MAINNET: z.string().optional(),
-  SOROSWAP_FACTORY_ADDRESS: z.string().optional(), SOROSWAP_FACTORY_ADDRESS_TESTNET: z.string().optional(), SOROSWAP_FACTORY_ADDRESS_MAINNET: z.string().optional(),
-  SOROSWAP_TOKEN_LIST_URL: z.string().optional(), SOROSWAP_TOKEN_LIST_URL_TESTNET: z.string().optional(), SOROSWAP_TOKEN_LIST_URL_MAINNET: z.string().optional(),
-  SOROSWAP_ENABLED_TESTNET: z.string().optional(), SOROSWAP_ENABLED_MAINNET: z.string().optional(),
-  SOROSWAP_POLL_INTERVAL_MS: z.string().optional(), SOROSWAP_POLL_INTERVAL_MS_TESTNET: z.string().optional(), SOROSWAP_POLL_INTERVAL_MS_MAINNET: z.string().optional(),
-  AQUARIUS_API_URL: z.string().optional(), AQUARIUS_API_URL_TESTNET: z.string().optional(), AQUARIUS_API_URL_MAINNET: z.string().optional(),
-  AQUARIUS_ENABLED_TESTNET: z.string().optional(), AQUARIUS_ENABLED_MAINNET: z.string().optional(),
-  REFLECTOR_CONTRACT_ID: z.string().optional(), REFLECTOR_CONTRACT_ID_TESTNET: z.string().optional(), REFLECTOR_CONTRACT_ID_MAINNET: z.string().optional(),
-  REFLECTOR_ENABLED_TESTNET: z.string().optional(), REFLECTOR_ENABLED_MAINNET: z.string().optional(),
-  WATCHED_PAIRS: z.string().optional(), WATCHED_PAIRS_TESTNET: z.string().optional(), WATCHED_PAIRS_MAINNET: z.string().optional(),
-  FACILITATOR_SECRET_KEY: z.string().optional(), FACILITATOR_SECRET_KEY_TESTNET: z.string().optional(), FACILITATOR_SECRET_KEY_MAINNET: z.string().optional(),
-  FACILITATOR_FEE_STROOPS: z.string().optional(), FACILITATOR_FEE_STROOPS_TESTNET: z.string().optional(), FACILITATOR_FEE_STROOPS_MAINNET: z.string().optional(),
-  POLL_INTERVAL_MS: z.string().optional(), SDEX_PAGE_SIZE: z.string().optional(), AMM_PAGE_SIZE: z.string().optional(), PRICE_CACHE_TTL: z.string().optional(),
-  SNAPSHOT_CACHE_TTL: z.string().optional(), HTTP_TIMEOUT_MS: z.string().optional(), OUTBOUND_ALLOWED_HOSTS: z.string().optional(),
-  GLOBAL_RATE_LIMIT_MAX: z.string().optional(),
-  ADMIN_API_KEY: z.string().optional(), ADMIN_TOKEN: z.string().optional(), REQUIRE_API_KEY: z.string().optional(), RATE_LIMIT_IP_MAX: z.string().optional(),
-  X402_FACILITATOR_URL: z.string().optional(), ORACLE_PAYMENT_ADDRESS: z.string().optional(),
-  ORACLE_PAYMENT_ADDRESS_TESTNET: z.string().optional(), ORACLE_PAYMENT_ADDRESS_MAINNET: z.string().optional(),
-  SNAPSHOT_PRUNE_BATCH_SIZE: z.string().optional(), BAZAAR_CATALOG_WRITES_PER_MIN: z.string().optional(), BAZAAR_CATALOG_WRITES_PER_DAY: z.string().optional(),
-}).strict()
 
-const numericEnvironmentKeys = [
-  'PORT', 'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE', 'PRICE_CACHE_TTL', 'RATE_LIMIT_IP_MAX',
-  'SNAPSHOT_CACHE_TTL', 'HTTP_TIMEOUT_MS', 'GLOBAL_RATE_LIMIT_MAX',
-  'SNAPSHOT_PRUNE_BATCH_SIZE', 'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
-  'SOROSWAP_POLL_INTERVAL_MS', 'SOROSWAP_POLL_INTERVAL_MS_TESTNET', 'SOROSWAP_POLL_INTERVAL_MS_MAINNET',
-  'FACILITATOR_FEE_STROOPS', 'FACILITATOR_FEE_STROOPS_TESTNET', 'FACILITATOR_FEE_STROOPS_MAINNET',
+/**
+ * Every environment variable the process reads. This module is the only place
+ * that reads `process.env`; everything else goes through `getEnvironment()` or
+ * `getEnvironmentValue()`, so a variable cannot be read without being declared
+ * here and documented in .env.example.
+ */
+const PER_NETWORK_BASES = [
+  'HORIZON_URL', 'RPC_URL', 'NETWORK_PASSPHRASE', 'SOROSWAP_FACTORY_ADDRESS', 'SOROSWAP_TOKEN_LIST_URL',
+  'SOROSWAP_ENABLED', 'SOROSWAP_POLL_INTERVAL_MS', 'AQUARIUS_API_URL', 'AQUARIUS_ENABLED',
+  'REFLECTOR_CONTRACT_ID', 'REFLECTOR_ENABLED', 'WATCHED_PAIRS', 'FACILITATOR_SECRET_KEY', 'FACILITATOR_FEE_STROOPS',
+  'DEFINDEX_FACTORY_ADDRESS', 'DEFINDEX_ENABLED', 'DEFINDEX_POLL_INTERVAL_MS',
+  'PHOENIX_FACTORY_ADDRESS', 'PHOENIX_ENABLED', 'BLEND_POOLS', 'BLEND_BACKSTOP', 'BLEND_ENABLED', 'BLEND_POLL_INTERVAL_MS',
+  'SEP40_CONTRACT_ID', 'SEP40_PUBLISHER_SECRET_KEY', 'SEP40_ENABLED',
+  'ROUTING_MAX_HOPS', 'ROUTING_INTERMEDIATES', 'ORACLE_PAYMENT_ADDRESS',
 ] as const
-const booleanEnvironmentKeys = [
-  'REQUIRE_API_KEY',
-  'SOROSWAP_ENABLED_TESTNET', 'SOROSWAP_ENABLED_MAINNET', 'AQUARIUS_ENABLED_TESTNET', 'AQUARIUS_ENABLED_MAINNET',
-  'REFLECTOR_ENABLED_TESTNET', 'REFLECTOR_ENABLED_MAINNET',
+
+const GLOBAL_KEYS = [
+  'NODE_ENV', 'STELLAR_NETWORK', 'ENABLED_NETWORKS', 'LOG_LEVEL',
+  'DATABASE_URL', 'DIRECT_DATABASE_URL', 'DB_POOL_SIZE', 'DB_POOL_TIMEOUT_MS',
+  'REDIS_URL', 'READINESS_REDIS_CHECK', 'PORT', 'HOST',
+  'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE', 'PRICE_CACHE_TTL', 'SNAPSHOT_CACHE_TTL',
+  'API_KEY_CACHE_TTL', 'PRICE_MIN_PLAUSIBLE', 'PRICE_MAX_PLAUSIBLE', 'HTTP_TIMEOUT_MS',
+  'OUTBOUND_ALLOWED_HOSTS', 'X402_FACILITATOR_URL', 'COINBASE_EXCHANGE_BASE_URL',
+  'WS_PING_INTERVAL_MS', 'WS_MAX_MISSED_PINGS',
+  'MCP_MAX_RESULT_BYTES', 'MCP_MAX_UPSTREAM_BYTES', 'MCP_DEFAULT_PAGE_LIMIT', 'MCP_MAX_PAGE_LIMIT',
+  'MCP_OPENAPI_PATH', 'MCP_TRANSPORT', 'MCP_HTTP_AUTH_TOKEN', 'MCP_HTTP_HOST', 'MCP_HTTP_PORT', 'MCP_HTTP_PATH',
+  'SEP40_DEVIATION_PCT', 'SEP40_MAX_INTERVAL_MS', 'SEP40_MIN_WRITE_INTERVAL_MS', 'SEP40_MAX_AGE_SECONDS', 'SEP40_POLL_INTERVAL_MS',
+  'PHOENIX_POLL_INTERVAL_MS', 'PHOENIX_POOL_CACHE_TTL_MS',
+  'INGEST_CYCLE_DEADLINE_MS',
+  'GLOBAL_RATE_LIMIT_MAX', 'ADMIN_API_KEY', 'ADMIN_TOKEN', 'REQUIRE_API_KEY', 'RATE_LIMIT_IP_MAX',
+  'KEY_ROTATION_OVERLAP_HOURS', 'KEY_LAST_USED_THROTTLE_SECONDS', 'API_KEY_LAST_USED_THROTTLE_SECONDS',
+  'CORS_ALLOWED_ORIGINS', 'CORS_ADMIN_ALLOWED_ORIGINS', 'CORS_PUBLIC_BLOCKED_ORIGINS',
+  'SNAPSHOT_PRUNE_BATCH_SIZE', 'RATE_PRUNE_BATCH_SIZE',
+  'PRICE_POINTS_RETENTION_DAYS', 'PRICE_POINTS_PRECREATE_DAYS', 'PRICE_POINTS_DROP_EXPIRED', 'PRICE_POINTS_PRUNE_BATCH_SIZE',
+  'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
+  'LIVE_API_URL', 'LENS_URL', 'GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_STEP_SUMMARY',
+  'GRAPHQL_MAX_QUERY_DEPTH', 'READINESS_TIMEOUT_MS', 'READINESS_CACHE_MS',
+  'WS_BUFFER_SWEEP_INTERVAL_MS', 'WS_COALESCE_INTERVAL_MS', 'WS_MAX_CONGESTED_MS', 'WS_MAX_BUFFERED_BYTES', 'WS_SLOW_CLIENT_BUFFER_BYTES',
 ] as const
-const urlEnvironmentKeys = [
-  'DATABASE_URL', 'DIRECT_DATABASE_URL', 'REDIS_URL',
-  'HORIZON_URL', 'HORIZON_URL_TESTNET', 'HORIZON_URL_MAINNET',
-  'RPC_URL', 'RPC_URL_TESTNET', 'RPC_URL_MAINNET',
-  'SOROSWAP_TOKEN_LIST_URL', 'SOROSWAP_TOKEN_LIST_URL_TESTNET', 'SOROSWAP_TOKEN_LIST_URL_MAINNET',
-  'AQUARIUS_API_URL', 'AQUARIUS_API_URL_TESTNET', 'AQUARIUS_API_URL_MAINNET', 'X402_FACILITATOR_URL',
+
+/**
+ * Per-venue cycle deadlines are keyed by venue name, which the adapter registry
+ * owns and which can grow, so they are read by prefix rather than listed here.
+ */
+const CYCLE_DEADLINE_VENUE_PREFIX = 'INGEST_CYCLE_DEADLINE_MS_'
+const CYCLE_DEADLINE_KEYS = ['INGEST_CYCLE_DEADLINE_MS_TESTNET', 'INGEST_CYCLE_DEADLINE_MS_MAINNET'] as const
+
+const ENVIRONMENT_KEYS = [
+  ...GLOBAL_KEYS,
+  ...PER_NETWORK_BASES,
+  ...PER_NETWORK_BASES.flatMap(base => [`${base}_TESTNET`, `${base}_MAINNET`]),
+  ...CYCLE_DEADLINE_KEYS,
 ] as const
-const parsedEnvironmentSchema = envSchema.superRefine((env, ctx) => {
-  for (const key of numericEnvironmentKeys) {
-    const value = env[key]
-    if (value !== undefined && value.trim() !== '' && (!/^-?\d+$/.test(value.trim()) || !Number.isSafeInteger(Number(value)))) {
-      ctx.addIssue({ code: 'custom', path: [key], message: 'must be a safe integer' })
-    }
-  }
-  for (const key of booleanEnvironmentKeys) {
-    const value = env[key]
-    if (value !== undefined && value !== '' && value !== 'true' && value !== 'false') {
-      ctx.addIssue({ code: 'custom', path: [key], message: 'must be true or false' })
-    }
-  }
-  for (const key of urlEnvironmentKeys) {
-    const value = env[key]
-    if (value?.trim()) {
-      try {
-        new URL(value)
-      } catch {
-        ctx.addIssue({ code: 'custom', path: [key], message: 'must be a valid URL' })
-      }
-    }
-  }
-  if (env.NODE_ENV && !['development', 'test', 'production'].includes(env.NODE_ENV)) {
-    ctx.addIssue({ code: 'custom', path: ['NODE_ENV'], message: 'must be development, test, or production' })
-  }
-  if (env.STELLAR_NETWORK && !['testnet', 'mainnet'].includes(env.STELLAR_NETWORK.toLowerCase())) {
-    ctx.addIssue({ code: 'custom', path: ['STELLAR_NETWORK'], message: 'must be testnet or mainnet' })
-  }
-  if (env.NODE_ENV === 'production') {
-    for (const key of ['DATABASE_URL', 'REDIS_URL', 'ADMIN_API_KEY', 'ADMIN_TOKEN'] as const) {
-      if (!env[key]?.trim()) ctx.addIssue({ code: 'custom', path: [key], message: 'is required in production' })
-    }
-  }
-})
+
+export type EnvironmentKey = (typeof ENVIRONMENT_KEYS)[number]
+
+/** Whether a name is a declared variable, for lookups keyed by a computed name. */
+export function isDeclaredEnvironmentKey(name: string): name is EnvironmentKey {
+  return (ENVIRONMENT_KEYS as readonly string[]).includes(name)
+}
+
+const envSchema = z.object(
+  Object.fromEntries(ENVIRONMENT_KEYS.map(key => [key, z.string().optional()])) as Record<EnvironmentKey, z.ZodOptional<z.ZodString>>
+)
 
 export type Environment = z.infer<typeof envSchema>
+
+/** Variables that must be an integer (a number of ms, pages, bytes, days, ...). */
+const numericEnvironmentKeys: readonly EnvironmentKey[] = [
+  ...CYCLE_DEADLINE_KEYS,
+  'PORT', 'DB_POOL_SIZE', 'DB_POOL_TIMEOUT_MS', 'POLL_INTERVAL_MS', 'SDEX_PAGE_SIZE', 'AMM_PAGE_SIZE',
+  'PRICE_CACHE_TTL', 'SNAPSHOT_CACHE_TTL', 'API_KEY_CACHE_TTL', 'HTTP_TIMEOUT_MS',
+  'WS_PING_INTERVAL_MS', 'WS_MAX_MISSED_PINGS', 'GLOBAL_RATE_LIMIT_MAX', 'RATE_LIMIT_IP_MAX',
+  'KEY_ROTATION_OVERLAP_HOURS', 'KEY_LAST_USED_THROTTLE_SECONDS', 'API_KEY_LAST_USED_THROTTLE_SECONDS',
+  'SNAPSHOT_PRUNE_BATCH_SIZE', 'RATE_PRUNE_BATCH_SIZE', 'PRICE_POINTS_PRUNE_BATCH_SIZE',
+  'PRICE_POINTS_RETENTION_DAYS', 'PRICE_POINTS_PRECREATE_DAYS',
+  'BAZAAR_CATALOG_WRITES_PER_MIN', 'BAZAAR_CATALOG_WRITES_PER_DAY',
+  'SEP40_MAX_INTERVAL_MS', 'SEP40_MIN_WRITE_INTERVAL_MS', 'SEP40_MAX_AGE_SECONDS', 'SEP40_POLL_INTERVAL_MS',
+  'PHOENIX_POLL_INTERVAL_MS', 'PHOENIX_POOL_CACHE_TTL_MS', 'INGEST_CYCLE_DEADLINE_MS',
+  'MCP_MAX_RESULT_BYTES', 'MCP_MAX_UPSTREAM_BYTES', 'MCP_DEFAULT_PAGE_LIMIT', 'MCP_MAX_PAGE_LIMIT', 'MCP_HTTP_PORT',
+  'ROUTING_MAX_HOPS',
+  'WS_BUFFER_SWEEP_INTERVAL_MS', 'WS_COALESCE_INTERVAL_MS', 'WS_MAX_CONGESTED_MS', 'WS_MAX_BUFFERED_BYTES', 'WS_SLOW_CLIENT_BUFFER_BYTES',
+  'GRAPHQL_MAX_QUERY_DEPTH', 'READINESS_TIMEOUT_MS', 'READINESS_CACHE_MS',
+  ...PER_NETWORK_BASES.filter(b => /_(POLL_INTERVAL_MS|FEE_STROOPS|MAX_HOPS)$/.test(b))
+    .flatMap(base => [base, `${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+/** Variables that must be true or false when set. */
+const booleanEnvironmentKeys: readonly EnvironmentKey[] = [
+  'REQUIRE_API_KEY', 'READINESS_REDIS_CHECK',
+  ...PER_NETWORK_BASES.filter(b => /_ENABLED$/.test(b)).flatMap(base => [base, `${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+/** Variables that must parse as an absolute URL when set. */
+const urlEnvironmentKeys: readonly EnvironmentKey[] = [
+  'REDIS_URL', 'X402_FACILITATOR_URL', 'COINBASE_EXCHANGE_BASE_URL',
+  'SOROSWAP_TOKEN_LIST_URL', 'AQUARIUS_API_URL', 'HORIZON_URL', 'RPC_URL',
+  ...(['SOROSWAP_TOKEN_LIST_URL', 'AQUARIUS_API_URL', 'HORIZON_URL', 'RPC_URL'] as const).flatMap(base => [`${base}_TESTNET`, `${base}_MAINNET`] as EnvironmentKey[]),
+]
+
+function isBlank(value: string | undefined): boolean {
+  return value === undefined || value.trim() === ''
+}
+
+/** Describe a malformed value without echoing it (it may be a secret). */
+function malformedReason(key: EnvironmentKey, value: string): string | undefined {
+  if (numericEnvironmentKeys.includes(key)) {
+    const trimmed = value.trim()
+    if (!/^-?\d+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed))) return 'must be a safe integer'
+  }
+  if (booleanEnvironmentKeys.includes(key) && value !== 'true' && value !== 'false') return 'must be true or false'
+  if (urlEnvironmentKeys.includes(key)) {
+    try {
+      new URL(value)
+    } catch {
+      return 'must be a valid URL'
+    }
+  }
+  if (key === 'NODE_ENV' && !['development', 'test', 'production'].includes(value)) return 'must be development, test, or production'
+  if (key === 'STELLAR_NETWORK' && !['testnet', 'mainnet'].includes(value.toLowerCase())) return 'must be testnet or mainnet'
+  return undefined
+}
+
+/**
+ * Only the database URL is checked at boot, because without it the process does
+ * nothing useful. Every other malformed value is logged and ignored, so its
+ * default applies at the point of use: a bad cache address or a bad optional
+ * tuning knob must not take the whole API down at import time.
+ */
+export function parseEnvironment(source: Record<string, string | undefined>): Environment {
+  const accepted: Record<string, string> = {}
+  for (const key of ENVIRONMENT_KEYS) {
+    const value = source[key]
+    if (isBlank(value)) continue
+    const reason = malformedReason(key, value as string)
+    if (reason) {
+      log.warn({ envVar: key }, `${key} ${reason}; ignoring it and using the default`)
+      continue
+    }
+    accepted[key] = value as string
+  }
+
+  if (source.NODE_ENV === 'production' && isBlank(accepted.DATABASE_URL)) {
+    throw new Error('[config] Invalid environment: DATABASE_URL is required in production')
+  }
+  return envSchema.parse(accepted)
+}
+
 let parsedEnvironment: Environment | undefined
 let environmentFingerprint = ''
 
-export function parseEnvironment(source: Record<string, string | undefined>): Environment {
-  const defined = Object.fromEntries(Object.entries(source).filter((entry): entry is [string, string] => entry[1] !== undefined))
-  const parsed = parsedEnvironmentSchema.safeParse(defined)
-  if (!parsed.success) {
-    const details = parsed.error.issues.map(issue => `${String(issue.path[0] ?? 'environment')} ${issue.message}`)
-    throw new Error(`[config] Invalid environment: ${details.join('; ')}`)
-  }
-  return parsed.data
-}
-
-/** Parse the complete process environment once, and again only if a caller changes it. */
+/** Parse the complete declared environment once, and again only if a caller changes it. */
 export function getEnvironment(): Environment {
-  const source = Object.fromEntries(Object.keys(envSchema.shape).map(key => [key, process.env[key]]))
+  const source = Object.fromEntries(ENVIRONMENT_KEYS.map(key => [key, process.env[key]]))
   const fingerprint = JSON.stringify(source)
   if (!parsedEnvironment || fingerprint !== environmentFingerprint) {
     parsedEnvironment = parseEnvironment(source)
@@ -112,9 +168,24 @@ export function getEnvironment(): Environment {
   return parsedEnvironment
 }
 
-/** Read a schema-declared variable selected dynamically by a network suffix. */
+/** Read a declared variable selected dynamically by a network suffix or venue name. */
 export function getEnvironmentValue(name: string): string | undefined {
+  if (!(ENVIRONMENT_KEYS as readonly string[]).includes(name)) {
+    throw new Error(`[config] ${name} is not a declared environment variable`)
+  }
   return (getEnvironment() as Record<string, string | undefined>)[name]
+}
+
+/**
+ * Read a per-venue override whose name is built from a venue name, under the
+ * one prefix that allows it. Any other name is a programming error.
+ */
+export function getPrefixedEnvironmentValue(name: string): string | undefined {
+  if (!name.startsWith(CYCLE_DEADLINE_VENUE_PREFIX)) {
+    throw new Error(`[config] ${name} is not a prefixed environment variable`)
+  }
+  const raw = process.env[name]
+  return raw === undefined || raw.trim() === '' ? undefined : raw
 }
 
 /** Prisma's CLI uses DIRECT_DATABASE_URL; fall back to the application URL. */
@@ -154,14 +225,72 @@ export interface NetworkConfig {
     /** Aquarius AMM pools API base URL for this network. */
     apiUrl: string
   }
+  defindex: {
+    /** Whether DeFindex has a usable deployment on this network. */
+    enabled: boolean
+    /**
+     * DeFindex factory contract id — the on-chain registry used to enumerate
+     * vaults (56-char `C...`). Sourced from the protocol's own
+     * `*.contracts.json`; a malformed id disables the venue.
+     */
+    factoryAddress: string
+    /** How often to poll DeFindex vault share prices in ms. */
+    pollIntervalMs: number
+  }
+  phoenix: {
+    /** Whether Phoenix has a usable deployment on this network. */
+    enabled: boolean
+    /**
+     * Phoenix factory contract id for this network. Pools are enumerated from
+     * it (`query_pools`) rather than from a list kept in this repo.
+     */
+    factoryAddress: string
+    /** How often to poll Phoenix pool reserves in ms. */
+    pollIntervalMs: number
+    /** How long the discovered pool list is reused before re-enumerating, in ms. */
+    poolCacheTtlMs: number
+  }
   oracle: {
     /** Whether the Reflector oracle is deployed on this network. */
     enabled: boolean
     /** Reflector oracle contract ID for this network. */
     reflectorContractId: string
   }
+  blend: {
+    /** Whether Blend lending rate ingestion is enabled on this network. */
+    enabled: boolean
+    /** Blend pool contract addresses for this network. */
+    pools: string[]
+    /** Blend backstop contract address for this network. */
+    backstopContractId: string
+    /** How often to poll Blend pool reserves in ms. */
+    pollIntervalMs: number
+  }
+  /**
+   * The SEP-40 publisher — the one direction that writes. `oracle` above is
+   * Lens reading somebody else's feed; this is Lens pushing its own aggregate
+   * on chain for contracts to read.
+   */
+  publisher: {
+    /** Whether Lens publishes to a SEP-40 feed on this network. */
+    enabled: boolean
+    /** Deployed SEP-40 oracle contract the aggregate is pushed into. */
+    contractId: string
+    /**
+     * Secret key of the account authorized on the contract as publisher. Never
+     * committed; see docs/sep40-oracle-publisher.md for how it is funded and
+     * rotated. Unset means the publisher cannot sign, so publication stays off.
+     */
+    secretKey?: string
+  }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
+  routing: {
+    /** Maximum hop depth for multi-hop routing (default: 3) */
+    maxHops: number
+    /** Configured intermediate assets for multi-hop routing */
+    intermediates: AssetId[]
+  }
   facilitator: {
     /** Secret key for the facilitator's fee-paying account */
     secretKey?: string
@@ -188,6 +317,21 @@ function makePairKey(a: AssetId, b: AssetId): string {
 }
 
 /**
+ * Read a positive numeric env var, falling back when it is unset, blank, not a
+ * number, or not positive.
+ *
+ * The publisher thresholds below are used as divisors, comparison bases and
+ * `setInterval` delays. A typo'd `SEP40_MAX_INTERVAL_MS=abc` would otherwise
+ * arrive there as `NaN`, and `NaN` comparisons are false — which reads as
+ * "never trigger", silently turning the feed off. Refusing the value and using
+ * the documented default keeps a bad env var loud instead of inert.
+ */
+function positiveNumber(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
  * Parse a comma-separated hostname allowlist into a normalized, de-duplicated
  * list. Empty entries and surrounding whitespace are dropped; hostnames are
  * lowercased and any IPv6 brackets / trailing dot are stripped so the stored
@@ -202,8 +346,30 @@ function parseAllowedHosts(raw: string): string[] {
   return Array.from(seen)
 }
 
+/**
+ * Parse a positive integer env var, clamped into [min, max]. Unset, unparsable
+ * or out-of-range values fall back to `fallback` rather than silently removing
+ * a bound: an operator typo should not turn a limit off altogether.
+ */
+function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = parseInt(raw ?? '', 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(Math.max(parsed, min), max)
+}
+
 const MAINNET_DEFAULT_PAIRS =
   'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM'
+
+const TESTNET_DEFAULT_INTERMEDIATES =
+  'XLM:native,USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'
+
+const MAINNET_DEFAULT_INTERMEDIATES =
+  'XLM:native,USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+
+function parseIntermediateAssets(raw: string): AssetId[] {
+  if (!raw.trim()) return []
+  return raw.split(',').map(a => parseAsset(a.trim()))
+}
 
 function parseWatchedPairs(raw: string): WatchedPair[] {
   if (!raw.trim()) return []
@@ -308,6 +474,64 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
   const aquariusEnabled =
     (getEnvironmentValue(`AQUARIUS_ENABLED_${suffix}`) ?? (network === 'mainnet' ? 'true' : 'false')).toLowerCase() !== 'false'
 
+  // ── DeFindex vault factory ────────────────────────────────────────────────
+  // DeFindex vaults are enumerable from the factory contract. The factory ids
+  // below are copied whole from the protocol's published deployments —
+  // https://github.com/defindex-io/stellar-contracts (public/mainnet.contracts.json
+  // and public/testnet.contracts.json). Testnet redeploys often, so override
+  // with DEFINDEX_FACTORY_ADDRESS_TESTNET when the published id changes.
+  const defindexFactory =
+    getEnvironmentValue(`DEFINDEX_FACTORY_ADDRESS_${suffix}`) ||
+    getEnvironment().DEFINDEX_FACTORY_ADDRESS ||
+    (network === 'mainnet'
+      ? 'CDKFHFJIET3A73A2YN4KV7NSV32S6YGQMUFH3DNJXLBWL4SKEGVRNFKI'
+      : 'CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32')
+
+  const defindexEnabled =
+    (getEnvironmentValue(`DEFINDEX_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
+    isUsableContractId(defindexFactory, `DEFINDEX_FACTORY_ADDRESS_${suffix}`)
+
+  const defindexPollMs = parseInt(
+    getEnvironmentValue(`DEFINDEX_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().DEFINDEX_POLL_INTERVAL_MS ||
+    '60000',
+    10
+  )
+
+  // ── Phoenix AMM (Soroban) ─────────────────────────────────────────────────
+  // Mainnet factory id taken verbatim from Phoenix's own repository —
+  // scripts/extend-queries.sh and scripts/deploy_pool.sh both set
+  // FACTORY="CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI"
+  // alongside RPC_URL=https://mainnet.sorobanrpc.com and the public-network
+  // passphrase (https://github.com/Phoenix-Protocol-Group/phoenix-contracts).
+  //
+  // There is no built-in testnet id: Phoenix does not publish a testnet
+  // deployment, so a testnet factory only exists if an operator deploys one and
+  // names it here. An id that is empty or malformed leaves the venue disabled
+  // on that network rather than pointing the ingester at something invented.
+  const phoenixFactory =
+    getEnvironmentValue(`PHOENIX_FACTORY_ADDRESS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().PHOENIX_FACTORY_ADDRESS : undefined) ||
+    (network === 'mainnet'
+      ? 'CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI'
+      : '')
+
+  const phoenixEnabled =
+    (getEnvironmentValue(`PHOENIX_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
+    isUsableContractId(phoenixFactory, `PHOENIX_FACTORY_ADDRESS_${suffix}`)
+
+  const phoenixPollMs = parseInt(
+    getEnvironment().PHOENIX_POLL_INTERVAL_MS || '60000',
+    10
+  )
+
+  // Pool enumeration is one RPC read of the whole factory, so it is reused
+  // across pairs and cycles instead of being paid for on every price poll.
+  const phoenixPoolCacheTtlMs = parseInt(
+    getEnvironment().PHOENIX_POOL_CACHE_TTL_MS || '600000',
+    10
+  )
+
   // ── Reflector oracle ──────────────────────────────────────────────────────
   // No built-in default: the previous mainnet literal was a malformed
   // (55-character) id and a replacement could not be verified against
@@ -322,6 +546,80 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (getEnvironmentValue(`REFLECTOR_ENABLED_${suffix}`) ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(reflectorContractId, `REFLECTOR_CONTRACT_ID_${suffix}`)
 
+  // ── Blend lending protocol ────────────────────────────────────────────────
+  const MAINNET_BLEND_POOLS = [
+    'CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD', // Fixed Pool v2
+    'CCCCIQSDILITHMM7PBSLVDT5MISSY7R26MNZXCX4H7J5JQ5FPIYOGYFS', // YieldBlox Pool v2
+    'CDVQVKOY2YSXS2IC7KN6MNASSHPAO7UN2UR2ON4OI2SKMFJNVAMDX6DP', // Fixed Pool v1
+    'CBP7NO6F7FRDHSOFQBT2L2UWYIZ2PU76JKVRYAQTG3KZSQLYAOKIF2WB', // YieldBlox Pool v1
+  ]
+  const MAINNET_BLEND_BACKSTOP = 'CAQQR5SWBXKIGZKPBZDH3KM5GQ5GUTPKB7JAFCINLZBC5WXPJKRG3IM7'
+
+  const TESTNET_BLEND_POOLS = [
+    'CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF', // TestnetV2 Pool
+  ]
+  const TESTNET_BLEND_BACKSTOP = 'CBDVWXT433PRVTUNM56C3JREF3HIZHRBA64NB2C3B2UNCKIS65ZYCLZA'
+
+  const blendBackstop =
+    getEnvironmentValue(`BLEND_BACKSTOP_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().BLEND_BACKSTOP : undefined) ||
+    (network === 'mainnet' ? MAINNET_BLEND_BACKSTOP : TESTNET_BLEND_BACKSTOP)
+
+  const rawBlendPools =
+    getEnvironmentValue(`BLEND_POOLS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().BLEND_POOLS : undefined)
+
+  const parsedBlendPools: string[] = rawBlendPools
+    ? rawBlendPools
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => isUsableContractId(p, `BLEND_POOLS_${suffix}`))
+    : (network === 'mainnet' ? MAINNET_BLEND_POOLS : TESTNET_BLEND_POOLS)
+
+  const blendEnabled =
+    (getEnvironmentValue(`BLEND_ENABLED_${suffix}`) ?? (network === 'testnet' ? (getEnvironment().BLEND_ENABLED ?? 'true') : 'true')).toLowerCase() !== 'false' &&
+    parsedBlendPools.length > 0 &&
+    isUsableContractId(blendBackstop, `BLEND_BACKSTOP_${suffix}`)
+
+  const blendPollMs = parseInt(
+    getEnvironmentValue(`BLEND_POLL_INTERVAL_MS_${suffix}`) ||
+    getEnvironment().BLEND_POLL_INTERVAL_MS ||
+    '60000',
+    10
+  )
+  // ── SEP-40 publisher ──────────────────────────────────────────────────────
+  // Off unless a contract is deployed AND a key is provided. There is no
+  // default contract id: the feed is deployed by the operator (see
+  // oracle/contract/), and a guessed id would push Lens's aggregate into
+  // somebody else's contract — or nowhere. `isUsableContractId` rejects a
+  // malformed id the same way every other contract address in this file does.
+  const sep40ContractId =
+    getEnvironmentValue(`SEP40_CONTRACT_ID_${suffix}`) ||
+    getEnvironment().SEP40_CONTRACT_ID ||
+    ''
+
+  const sep40SecretKey =
+    getEnvironmentValue(`SEP40_PUBLISHER_SECRET_KEY_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().SEP40_PUBLISHER_SECRET_KEY : undefined)
+
+  // A key with no contract, or a contract with no key, is an incomplete
+  // deployment rather than a mistake worth crashing on — publication stays off
+  // and says so.
+  const publisherEnabled =
+    (getEnvironmentValue(`SEP40_ENABLED_${suffix}`) ?? 'false').toLowerCase() !== 'false' &&
+    isUsableContractId(sep40ContractId, `SEP40_CONTRACT_ID_${suffix}`) &&
+    Boolean(sep40SecretKey)
+
+  if (
+    (getEnvironmentValue(`SEP40_ENABLED_${suffix}`) ?? '').toLowerCase() === 'true' &&
+    !publisherEnabled
+  ) {
+    log.warn(
+      { network, envVar: `SEP40_ENABLED_${suffix}`, contractId: sep40ContractId || undefined },
+      `SEP40_ENABLED_${suffix}=true but publication is disabled on ${network}: it needs a valid SEP40_CONTRACT_ID_${suffix} and a SEP40_PUBLISHER_SECRET_KEY_${suffix}`
+    )
+  }
+
   // ── Watched pairs ─────────────────────────────────────────────────────────
   // Mainnet gets a default for the same reason every field above does: turning
   // it on should not require knowing an issuer address by heart. USDC/XLM is
@@ -334,6 +632,21 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     getEnvironmentValue(`WATCHED_PAIRS_${suffix}`) ||
     (network === 'testnet' ? getEnvironment().WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
+
+  // ── Multi-hop Routing ───────────────────────────────────────────────────
+  const maxHopsRaw =
+    getEnvironmentValue(`ROUTING_MAX_HOPS_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().ROUTING_MAX_HOPS : undefined) ||
+    '3'
+  const maxHops = Math.max(1, parseInt(maxHopsRaw, 10) || 3)
+
+  const defaultIntermediates =
+    network === 'mainnet' ? MAINNET_DEFAULT_INTERMEDIATES : TESTNET_DEFAULT_INTERMEDIATES
+  const rawIntermediates =
+    getEnvironmentValue(`ROUTING_INTERMEDIATES_${suffix}`) ||
+    (network === 'testnet' ? getEnvironment().ROUTING_INTERMEDIATES : undefined) ||
+    defaultIntermediates
+  const intermediates = parseIntermediateAssets(rawIntermediates)
 
   // ── Facilitator ───────────────────────────────────────────────────────────
   const facilitatorSecretKey =
@@ -361,8 +674,31 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
       enabled: aquariusEnabled,
       apiUrl: aquariusApiUrl,
     },
+    defindex: {
+      enabled: defindexEnabled,
+      factoryAddress: defindexFactory,
+      pollIntervalMs: defindexPollMs,
+    },
+    phoenix: {
+      enabled: phoenixEnabled,
+      factoryAddress: phoenixFactory,
+      pollIntervalMs: phoenixPollMs,
+      poolCacheTtlMs: phoenixPoolCacheTtlMs,
+    },
     oracle: { enabled: oracleEnabled, reflectorContractId },
+    blend: {
+      enabled: blendEnabled,
+      pools: parsedBlendPools,
+      backstopContractId: blendBackstop,
+      pollIntervalMs: blendPollMs,
+    },
+    publisher: {
+      enabled: publisherEnabled,
+      contractId: sep40ContractId,
+      secretKey: sep40SecretKey,
+    },
     pairs: parseWatchedPairs(rawPairs),
+    routing: { maxHops, intermediates },
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
 }
@@ -371,7 +707,11 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
 const globalConfig = {
   db: {
+    // DATABASE_URL is required when NODE_ENV=production (see parseEnvironment),
+    // so this local default only applies in development and test.
     url: getEnvironment().DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
+    connectionLimit: parseInt(getEnvironment().DB_POOL_SIZE ?? '10', 10),
+    poolTimeoutMs: parseInt(getEnvironment().DB_POOL_TIMEOUT_MS ?? '5000', 10),
   },
   redis: {
     url: getEnvironment().REDIS_URL ?? 'redis://localhost:6379',
@@ -385,6 +725,35 @@ const globalConfig = {
     sdexPageSize: parseInt(getEnvironment().SDEX_PAGE_SIZE ?? '200', 10),
     ammPageSize: parseInt(getEnvironment().AMM_PAGE_SIZE ?? '200', 10),
   },
+  /**
+   * When the publisher writes to the SEP-40 feed.
+   *
+   * Cost is the reason an oracle batches: a write per tick would put one
+   * transaction per pair per poll interval on chain, which is why every feed
+   * that charges for gas publishes on CHANGE. These are the three knobs that
+   * make that true, and the ceiling that keeps a bad change off chain:
+   *
+   * - `deviationPct`     — publish when the aggregate has moved at least this
+   *                        much from the value already on chain.
+   * - `maxIntervalMs`    — and publish even without movement once this long has
+   *                        passed, so a quiet market does not leave consumers
+   *                        reading a feed with no recent timestamp.
+   * - `minWriteIntervalMs` — the floor between two writes for the same asset,
+   *                        whatever triggered them. This is the rate limit:
+   *                        it bounds the transaction count during a fast market
+   *                        to one per floor, not one per sample.
+   * - `maxAgeSeconds`    — the aggregate itself must be younger than this.
+   *                        Stricter than the API's own stale flag on purpose:
+   *                        the HTTP price can afford to be "as good as we have
+   *                        it", a price a contract settles against cannot.
+   */
+  publisher: {
+    deviationPct: positiveNumber(getEnvironment().SEP40_DEVIATION_PCT, 0.5),
+    maxIntervalMs: positiveNumber(getEnvironment().SEP40_MAX_INTERVAL_MS, 15 * 60 * 1000),
+    minWriteIntervalMs: positiveNumber(getEnvironment().SEP40_MIN_WRITE_INTERVAL_MS, 60 * 1000),
+    maxAgeSeconds: positiveNumber(getEnvironment().SEP40_MAX_AGE_SECONDS, 120),
+    pollIntervalMs: positiveNumber(getEnvironment().SEP40_POLL_INTERVAL_MS, 30 * 1000),
+  },
   cache: {
     priceTtl: parseInt(getEnvironment().PRICE_CACHE_TTL ?? '10', 10),
     // How long a network's GET /snapshot response is served from Redis before
@@ -392,9 +761,24 @@ const globalConfig = {
     // cheap, pollable summary, so a slightly stale copy is preferable to a
     // per-request scan, but callers must never be shown a minutes-old market.
     snapshotTtl: parseInt(getEnvironment().SNAPSHOT_CACHE_TTL ?? '15', 10),
+    // Issue #495: how long an API-key lookup (positive OR negative) is held in
+    // the in-process auth cache before it must be re-read from Postgres. This
+    // is the worst-case window in which a key revoked on ANOTHER instance can
+    // still authenticate here — on the instance that handles the revoke,
+    // invalidation is immediate. Expiry is re-checked on every cache hit, so
+    // this TTL never extends a key past its own `expiresAt`. Keep it short.
+    apiKeyTtl: parseInt(getEnvironment().API_KEY_CACHE_TTL ?? '30', 10),
+  },
+  plausibility: {
+    minPrice: parseFloat(getEnvironment().PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
+    maxPrice: parseFloat(getEnvironment().PRICE_MAX_PLAUSIBLE ?? '10000000000'),
   },
   http: {
     timeoutMs: parseInt(getEnvironment().HTTP_TIMEOUT_MS ?? '10000', 10),
+  },
+  ws: {
+    pingIntervalMs: parseInt(getEnvironment().WS_PING_INTERVAL_MS ?? '30000', 10),
+    maxMissedPings: parseInt(getEnvironment().WS_MAX_MISSED_PINGS ?? '2', 10),
   },
   outbound: {
     // One operator-maintained list for every outbound fetch the app makes to a
@@ -403,6 +787,17 @@ const globalConfig = {
     // hostnames. It never re-opens a private/link-local/metadata address — that
     // block is unconditional (see net/ssrf.ts).
     allowedHosts: parseAllowedHosts(getEnvironment().OUTBOUND_ALLOWED_HOSTS ?? ''),
+  },
+  mcp: {
+    // Tool results land directly in an agent's context window, so both the body
+    // read from a node and the text handed back are capped (#416).
+    maxResultBytes: clampInt(getEnvironment().MCP_MAX_RESULT_BYTES, 16_384, 1_024, 1_048_576),
+    maxUpstreamBytes: clampInt(getEnvironment().MCP_MAX_UPSTREAM_BYTES, 262_144, 4_096, 8_388_608),
+    // Page size for collection results, mirroring the /discovery limits: a
+    // request without an explicit limit gets this many items, and an over-large
+    // ask is clamped rather than honoured.
+    defaultPageLimit: clampInt(getEnvironment().MCP_DEFAULT_PAGE_LIMIT, 50, 1, 200),
+    maxPageLimit: clampInt(getEnvironment().MCP_MAX_PAGE_LIMIT, 200, 1, 1000),
   },
 } as const
 
@@ -473,8 +868,12 @@ export const config = {
   get network()  { return resolveNetwork(activeNetwork).network },
   get soroswap() { return resolveNetwork(activeNetwork).soroswap },
   get aquarius() { return resolveNetwork(activeNetwork).aquarius },
+  get defindex() { return resolveNetwork(activeNetwork).defindex },
+  get phoenix()  { return resolveNetwork(activeNetwork).phoenix },
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
+  get blend()    { return resolveNetwork(activeNetwork).blend },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
+  get routing()  { return resolveNetwork(activeNetwork).routing },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 
   // ── Global / network-agnostic ──────────────────────────────────────────────
@@ -482,7 +881,15 @@ export const config = {
   redis:   globalConfig.redis,
   api:     globalConfig.api,
   indexer: globalConfig.indexer,
+  // WHEN to publish, shared by both networks. WHICH contract to publish to is
+  // per-network and lives at `getNetworkConfig(network).publisher` — there is
+  // deliberately no active-network `publisher` shortcut, because the two blocks
+  // are different things and one name for both would be read wrongly.
+  publisher: globalConfig.publisher,
   cache:   globalConfig.cache,
+  plausibility: globalConfig.plausibility,
   http:    globalConfig.http,
+  ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
+  mcp: globalConfig.mcp,
 }

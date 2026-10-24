@@ -62,11 +62,12 @@ Data is stored in a PostgreSQL database optimized with declarative range partiti
 *   **`price_points`**: A unified table for all trade events across both SDEX and AMM, range-partitioned by `timestamp` into daily partitions (`price_points_yYYYYmMMdDD`). Automatic background workers pre-create future partitions ahead of need. Partition retention via metadata-only `DROP TABLE` operations is opt-in (`PRICE_POINTS_DROP_EXPIRED=true`, default: off) to safeguard raw historical records until rollups are completed (#231). Query execution plans on recent time windows leverage PostgreSQL partition pruning to scan only active partitions and skip all historical data.
 *   **`pool_snapshots`**: Stores the reserve state of AMM liquidity pools, which is critical for slippage estimation and constant-product price calculations.
 
-### 3. Aggregation & Routing (`bestRoute`)
+### 3. Aggregation & Routing (`bestRoute` & Volume)
 When a price is requested, the `bestRoute` engine compares the available liquidity on both SDEX and AMM:
 *   **SDEX Pricing**: Fetches real-time path payment quotes from Horizon to determine the effective rate for a specific trade size.
 *   **AMM Pricing**: Uses the constant-product formula (`x * y = k`) against the latest pool snapshots to estimate the output and slippage.
 *   **Optimal Routing**: Compares the rates and recommends the best execution path (SDEX, AMM, or a SPLIT for large orders) to minimize slippage for the user.
+*   **Venue Classification & Volume Accounting**: Venues in the venue registry are categorized as either primary markets (SDEX, native AMM, Soroswap) or aggregators (Aquarius). Aggregate volume metrics report labelled net (primary markets) and gross figures to eliminate trade double-counting. See [venues.md](./venues.md) for details.
 
 ### 4. API Layer & x402 Payment Gate
 The system exposes both REST and GraphQL interfaces. To monetize the high-fidelity data, Lens implements the **x402 protocol**.
