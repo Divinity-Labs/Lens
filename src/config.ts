@@ -585,6 +585,10 @@ const globalConfig = {
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
+  shutdown: {
+    // Bounded grace period for in-flight work after SIGTERM/SIGINT. Exceeding it is logged loudly and the process exits anyway.
+    graceMs: positiveNumber(process.env.SHUTDOWN_GRACE_MS, 25_000),
+  },
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
     maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
@@ -699,6 +703,7 @@ export const config = {
   plausibility: globalConfig.plausibility,
   http:    globalConfig.http,
   ws:      globalConfig.ws,
+  shutdown: globalConfig.shutdown,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,
 }
