@@ -444,17 +444,16 @@ const resolvers = {
       const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
-         FROM price_aggregates
+        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float, volume::float, trade_count, open_price::float, close_price::float, high_price::float, low_price::float
+         FROM price_buckets
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
          LIMIT ${limitParam}`,
         params
       )
-      return result.rows.map(r => ({
-        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
+
+      return result.rows.map((r: any) => ({
+        bucket: new Date(r.bucket).toISOString(),
         window: r.window,
         vwap: r.vwap,
         sdexVwap: r.sdex_vwap,
@@ -651,43 +650,11 @@ const resolvers = {
 }
 
 export async function registerGraphQL(app: FastifyInstance) {
-  const maxQueryDepth = getMaxGraphQLQueryDepth()
-
-  await app.register(mercurius, {
+  app.register(mercurius, {
     schema,
-    resolvers,
-    graphiql: true,
-    // Mercurius 16.9.0 supplies the selected operation name to this callback.
-    // Its built-in queryDepth option neither expands fragments nor distinguishes
-    // an unselected operation in a multi-operation document. A callback cannot
-    // be used with Mercurius's document cache, so disable that cache rather
-    // than weakening the operation-aware validation policy.
-    cache: false,
-    validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
+    resolvers: resolvers as any,
+    subscription: true,
     errorFormatter: formatGraphQLErrors,
-    path: '/graphql',
-    subscription: {
-      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
-      // library) rather than the legacy `subscriptions-transport-ws`.
-      fullWsTransport: true,
-      wsDefaultSubprotocol: 'graphql-transport-ws',
-    },
-  })
-
-  // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
-  const onPricePublished = (event: PricePublishedEvent) => {
-    app.graphql.pubsub.publish({
-      topic: PRICE_TOPIC,
-      payload: { priceUpdated: event },
-    })
-  }
-  priceEmitter.on(PRICE_PUBLISHED, onPricePublished)
-
-  // Detach the listener when the server shuts down so repeated
-  // register/close cycles (e.g. in tests) don't leak listeners.
-  app.addHook('onClose', async () => {
-    priceEmitter.off(PRICE_PUBLISHED, onPricePublished)
+    validationRules: queryDepthValidationRules(getMaxGraphQLQueryDepth()),
   })
 }
