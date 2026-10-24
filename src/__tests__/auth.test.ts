@@ -9,6 +9,7 @@ vi.mock('../db', () => ({
     apiKey: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
+      count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -44,6 +45,7 @@ import {
 
 const mockFindUnique = prisma.apiKey.findUnique as unknown as ReturnType<typeof vi.fn>
 const mockFindMany = prisma.apiKey.findMany as unknown as ReturnType<typeof vi.fn>
+const mockCount = prisma.apiKey.count as unknown as ReturnType<typeof vi.fn>
 const mockCreate = prisma.apiKey.create as unknown as ReturnType<typeof vi.fn>
 const mockUpdate = prisma.apiKey.update as unknown as ReturnType<typeof vi.fn>
 
@@ -80,6 +82,7 @@ beforeEach(() => {
   resetApiKeyLastUsedThrottle()
   mockFindUnique.mockReset()
   mockFindMany.mockReset()
+  mockCount.mockReset()
   mockCreate.mockReset()
   mockUpdate.mockReset()
   // The lookup cache is module-global; a stale entry from a previous test
@@ -525,6 +528,69 @@ describe('admin endpoints', () => {
   it('generateApiKey produces a prefixed opaque key', () => {
     const k = generateApiKey()
     expect(k).toMatch(/^lens_[a-f0-9]{48}$/)
+  })
+
+  it('lists only safe key metadata, paginates, and hides revoked keys by default', async () => {
+    const createdAt = new Date('2026-10-01T12:00:00.000Z')
+    mockFindMany.mockResolvedValue([{
+      id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 5000,
+      monthlyQuotaCents: 20000, dailyQuotaCents: 1000, overagePolicy: 'block',
+      createdAt, revokedAt: null, expiresAt: null, scopes: ['read:prices'], lastUsedAt: null,
+      hash: 'do-not-return-this-hash',
+    }])
+    mockCount.mockResolvedValue(3)
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?limit=1&offset=2',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { revokedAt: null }, skip: 2, take: 1,
+      select: expect.not.objectContaining({ hash: true }),
+    }))
+    expect(mockCount).toHaveBeenCalledWith({ where: { revokedAt: null } })
+    expect(res.json()).toEqual({
+      keys: [{
+        id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 5000,
+        monthlyQuotaCents: 20000, dailyQuotaCents: 1000, overagePolicy: 'block',
+        scopes: ['read:prices'], createdAt: createdAt.toISOString(), revokedAt: null, expiresAt: null, lastUsedAt: null,
+      }],
+      pagination: { limit: 1, offset: 2, total: 3 },
+    })
+    expect(JSON.stringify(res.json())).not.toContain('do-not-return-this-hash')
+  })
+
+  it('requires the admin token to list API keys', async () => {
+    const before = (await admin_auth_failures_total.get()).values[0]?.value ?? 0
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'GET', url: '/admin/keys' })
+    expect(res.statusCode).toBe(401)
+    expect(mockFindMany).not.toHaveBeenCalled()
+    expect((await admin_auth_failures_total.get()).values[0]?.value).toBe(before + 1)
+  })
+
+  it('can include revoked keys when explicitly requested', async () => {
+    mockFindMany.mockResolvedValue([])
+    mockCount.mockResolvedValue(0)
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?revoked=true',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: { revokedAt: { not: null } } }))
+  })
+
+  it('rejects invalid key-list pagination and filters', async () => {
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?limit=1000&revoked=maybe',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(mockFindMany).not.toHaveBeenCalled()
   })
 
   it('rejects minting without the admin token', async () => {
