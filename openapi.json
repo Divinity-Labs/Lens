@@ -1672,7 +1672,7 @@
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
-        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`.",
+        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`. Venues are classified as primary markets or aggregators in the registry. `totals.net` / `netVolume` sum primary markets only, while `totals.gross` / `grossVolume` include aggregator venues (e.g. Aquarius) that re-report trades settled elsewhere. `totalVolume` and `tradeCount` report the net figures; the trade-size statistics and provenance cover every venue (gross).",
         "security": [],
         "parameters": [
           {
@@ -2783,6 +2783,75 @@
           }
         }
       }
+    },
+    "/rates": {
+      "get": {
+        "operationId": "getLendingRates",
+        "summary": "Query latest lending and borrow rates across pools",
+        "description": "Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "required": false,
+            "description": "Filter by asset symbol (e.g. USDC, XLM)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "poolId",
+            "in": "query",
+            "required": false,
+            "description": "Filter by pool contract ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "network",
+            "in": "query",
+            "required": false,
+            "description": "Stellar network to query (testnet or mainnet)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "testnet",
+                "mainnet"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of rate records to return",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest lending rates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LendingRatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2935,6 +3004,108 @@
       }
     },
     "schemas": {
+      "LendingRateEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "venue",
+          "source",
+          "network",
+          "poolId",
+          "asset",
+          "supplyApy",
+          "borrowApy",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string",
+            "example": "blend"
+          },
+          "source": {
+            "type": "string",
+            "example": "blend"
+          },
+          "network": {
+            "type": "string",
+            "example": "mainnet"
+          },
+          "poolId": {
+            "type": "string"
+          },
+          "poolName": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset": {
+            "type": "string",
+            "example": "USDC"
+          },
+          "assetAddress": {
+            "type": "string",
+            "nullable": true
+          },
+          "supplyApy": {
+            "type": "number"
+          },
+          "borrowApy": {
+            "type": "number"
+          },
+          "supplyApr": {
+            "type": "number",
+            "nullable": true
+          },
+          "borrowApr": {
+            "type": "number",
+            "nullable": true
+          },
+          "utilization": {
+            "type": "number",
+            "nullable": true,
+            "description": "Borrowed / supplied as a fraction. Null for venues that publish rates only."
+          },
+          "totalSupply": {
+            "type": "number",
+            "nullable": true
+          },
+          "totalBorrowed": {
+            "type": "number",
+            "nullable": true
+          },
+          "reserves": {
+            "type": "number",
+            "nullable": true
+          },
+          "ledger": {
+            "type": "integer"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LendingRatesResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "rates"
+        ],
+        "properties": {
+          "network": {
+            "type": "string"
+          },
+          "rates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LendingRateEntry"
+            }
+          }
+        }
+      },
       "InternalErrorResponse": {
         "type": "object",
         "required": [
@@ -4549,6 +4720,24 @@
           }
         }
       },
+      "VolumeTotals": {
+        "type": "object",
+        "required": [
+          "net",
+          "gross"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "net": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "gross": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          }
+        }
+      },
       "VolumeResponse": {
         "type": "object",
         "required": [
@@ -4558,9 +4747,14 @@
           "startTime",
           "endTime",
           "totalVolume",
+          "netVolume",
+          "grossVolume",
+          "totals",
           "byVenue",
           "venues",
           "tradeCount",
+          "netTradeCount",
+          "grossTradeCount",
           "medianTradeSize",
           "topTradeVolumeShare",
           "volumeConcentration",
@@ -4596,8 +4790,20 @@
             "type": "string",
             "format": "date-time"
           },
+          "totals": {
+            "$ref": "#/components/schemas/VolumeTotals"
+          },
+          "netVolume": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "grossVolume": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          },
           "totalVolume": {
-            "type": "number"
+            "type": "number",
+            "description": "Primary volume total (alias for netVolume for backward compatibility)"
           },
           "byVenue": {
             "type": "object",
@@ -4613,7 +4819,15 @@
           },
           "tradeCount": {
             "type": "integer",
-            "description": "Number of positive-volume price point samples in the selected window."
+            "description": "Number of positive-volume samples from primary markets (equals netTradeCount)."
+          },
+          "netTradeCount": {
+            "type": "integer",
+            "description": "Number of positive-volume samples from primary markets."
+          },
+          "grossTradeCount": {
+            "type": "integer",
+            "description": "Number of positive-volume samples across all venues, including aggregators."
           },
           "medianTradeSize": {
             "type": "number",

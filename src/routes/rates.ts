@@ -1,6 +1,17 @@
 import type { FastifyInstance } from 'fastify'
-import { pgPool } from '../db'
+import { z } from 'zod'
+import { pgPool, getLatestLendingRates } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import '../middleware/network'
+
+const RatesQuerySchema = z.object({
+  asset: z.string().optional(),
+  poolId: z.string().optional(),
+  network: z.enum(['testnet', 'mainnet']).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+})
+
+const nullableNumber = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v))
 
 /**
  * One venue's best offer for the asset. The pool fields say *which* market the
@@ -53,6 +64,53 @@ interface RateVenue {
  * honest in a way a 404 (which reads as "endpoint broken") is not.
  */
 export async function registerRateRoutes(app: FastifyInstance) {
+  /**
+   * `GET /rates?asset=&poolId=&network=&limit=`
+   *
+   * The latest full reserve state per (pool, asset): both rates as APY and APR,
+   * utilisation, and the supply/borrow totals behind them. Where `/rates/:asset`
+   * answers "where is the best yield?", this lists every market as ingested so
+   * the numbers can be checked against the pool itself.
+   */
+  app.get<{
+    Querystring: { asset?: string; poolId?: string; network?: string; limit?: string | number }
+  }>('/rates', async (req, reply) => {
+    const parsed = RatesQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+      return reply.status(400).send({ error: parsed.error.issues[0].message || 'Invalid parameters' })
+    }
+    const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
+    const rows = await getLatestLendingRates(network, {
+      asset: parsed.data.asset,
+      poolId: parsed.data.poolId,
+      limit: parsed.data.limit,
+    })
+
+    return {
+      network,
+      rates: rows.map(r => ({
+        id: r.id,
+        venue: r.venue,
+        source: r.source,
+        network: r.network,
+        poolId: r.pool_id,
+        poolName: r.pool_name ?? null,
+        asset: r.asset,
+        assetAddress: r.asset_address,
+        supplyApy: Number(r.supply_apy),
+        borrowApy: Number(r.borrow_apy),
+        supplyApr: nullableNumber(r.supply_apr),
+        borrowApr: nullableNumber(r.borrow_apr),
+        utilization: nullableNumber(r.utilization),
+        totalSupply: nullableNumber(r.total_supply),
+        totalBorrowed: nullableNumber(r.total_borrowed),
+        reserves: nullableNumber(r.reserves),
+        ledger: r.ledger,
+        timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
+      })),
+    }
+  })
+
   app.get<{
     Params: { asset: string }
     Querystring: { network?: string }

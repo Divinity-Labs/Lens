@@ -13,6 +13,11 @@ import {
   getLastPrice,
   resetLastPrice,
   setLastPrice,
+  VENUE_CLASSIFICATIONS,
+  getVenueClassification,
+  isPrimaryVenue,
+  isAggregatorVenue,
+  getVenueReasoning,
   type VenueAdapter,
 } from '../ingest/venues'
 
@@ -50,6 +55,7 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     for (const adapter of venueAdapters) {
       expect(typeof adapter.name).toBe('string')
       expect(typeof adapter.source).toBe('string')
+      expect(['primary', 'aggregator']).toContain(adapter.classification)
       expect(typeof adapter.isEnabled).toBe('function')
       expect(typeof adapter.getPollIntervalMs).toBe('function')
       expect(typeof adapter.discover).toBe('function')
@@ -58,6 +64,29 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
       expect(typeof adapter.write).toBe('function')
       expect(typeof adapter.ingestPair).toBe('function')
     }
+  })
+
+  it('classifies SDEX, AMM, and Soroswap as primary markets and Aquarius as an aggregator', () => {
+    expect(sdexAdapter.classification).toBe('primary')
+    expect(ammAdapter.classification).toBe('primary')
+    expect(soroswapAdapter.classification).toBe('primary')
+    expect(aquariusAdapter.classification).toBe('aggregator')
+
+    expect(isPrimaryVenue('SDEX')).toBe(true)
+    expect(isPrimaryVenue('AMM')).toBe(true)
+    expect(isPrimaryVenue('soroswap_amm')).toBe(true)
+    expect(isPrimaryVenue('aquarius_amm')).toBe(false)
+
+    expect(isAggregatorVenue('aquarius_amm')).toBe(true)
+    expect(isAggregatorVenue('Aquarius')).toBe(true)
+    expect(isAggregatorVenue('SDEX')).toBe(false)
+    expect(isAggregatorVenue('AMM')).toBe(false)
+
+    // Documented reasoning must be present
+    expect(getVenueReasoning('SDEX')).toMatch(/order book|CLOB/i)
+    expect(getVenueReasoning('AMM')).toMatch(/liquidity pool|reserves/i)
+    expect(getVenueReasoning('soroswap_amm')).toMatch(/Soroban/i)
+    expect(getVenueReasoning('aquarius_amm')).toMatch(/aggregator|double-count/i)
   })
 
   it('preserves exact source strings for backward compatibility', () => {
@@ -92,6 +121,7 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     const customAdapter: VenueAdapter = {
       name: 'CustomDEX',
       source: 'custom_dex',
+      classification: 'primary',
       isEnabled: () => false,
       getPollIntervalMs: () => 1000,
       discover: async () => [],
@@ -105,5 +135,55 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
 
     await startVenueAdapter(customAdapter, 'testnet')
     expect(cycleExecuted).toBe(false)
+  })
+})
+
+describe('venue classification has one source of truth (#244)', () => {
+  // `classification` is required on VenueAdapter, so the compiler makes every
+  // venue state what it is. VENUE_CLASSIFICATIONS is hand-maintained prose
+  // beside it. Two records of the same fact drift, and this one decides whether
+  // a venue's volume is counted toward the published net total — so the
+  // disagreement has to fail the build, not be resolved quietly at runtime.
+  it('agrees with every registered adapter', () => {
+    const disagreements: string[] = []
+    for (const adapter of venueAdapters) {
+      const documented =
+        VENUE_CLASSIFICATIONS[adapter.source] ?? VENUE_CLASSIFICATIONS[adapter.name]
+      if (!documented) {
+        disagreements.push(`${adapter.name} (${adapter.source}) has no entry in VENUE_CLASSIFICATIONS`)
+        continue
+      }
+      if (documented.classification !== adapter.classification) {
+        disagreements.push(
+          `${adapter.name}: adapter says ${adapter.classification}, VENUE_CLASSIFICATIONS says ${documented.classification}`,
+        )
+      }
+    }
+    expect(disagreements).toEqual([])
+  })
+
+  it('documents reasoning for every registered adapter', () => {
+    const missing = venueAdapters
+      .filter((adapter) => !getVenueReasoning(adapter.source) && !getVenueReasoning(adapter.name))
+      .map((adapter) => `${adapter.name} (${adapter.source})`)
+    expect(missing).toEqual([])
+  })
+
+  it('resolves a venue by its adapter even when the map disagrees', () => {
+    // The adapter wins: it is the declaration a venue cannot be written
+    // without, and it is what the ingester actually ran.
+    for (const adapter of venueAdapters) {
+      expect(getVenueClassification(adapter.source)).toBe(adapter.classification)
+      expect(getVenueClassification(adapter.name)).toBe(adapter.classification)
+    }
+  })
+
+  it('counts an unregistered source as primary, never silently as an aggregator', () => {
+    // A CEX feed has no adapter and is a real independent market. The inverse —
+    // an unregistered aggregator counted toward net volume — is what the
+    // agreement test above prevents, since an aggregator needs an adapter to be
+    // ingested at all.
+    expect(getVenueClassification('some_cex_feed')).toBe('primary')
+    expect(isAggregatorVenue('some_cex_feed')).toBe(false)
   })
 })

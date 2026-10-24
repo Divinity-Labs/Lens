@@ -365,7 +365,7 @@ export interface paths {
         };
         /**
          * Get cross-venue traded volume for an asset
-         * @description Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`.
+         * @description Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`. Venues are classified as primary markets or aggregators in the registry. `totals.net` / `netVolume` sum primary markets only, while `totals.gross` / `grossVolume` include aggregator venues (e.g. Aquarius) that re-report trades settled elsewhere. `totalVolume` and `tradeCount` report the net figures; the trade-size statistics and provenance cover every venue (gross).
          */
         get: operations["getVolumes"];
         put?: never;
@@ -1103,6 +1103,12 @@ export interface components {
             /** @enum {string} */
             filterMethod: "iqr" | "modified_zscore";
         };
+        VolumeTotals: {
+            /** @description Volume summed across primary markets only (excluding aggregator double-counts) */
+            net: number;
+            /** @description Gross volume summed across all venues including aggregators */
+            gross: number;
+        };
         VolumeResponse: {
             asset: string;
             /** @enum {string} */
@@ -1113,13 +1119,23 @@ export interface components {
             startTime: string;
             /** Format: date-time */
             endTime: string;
+            totals: components["schemas"]["VolumeTotals"];
+            /** @description Volume summed across primary markets only (excluding aggregator double-counts) */
+            netVolume: number;
+            /** @description Gross volume summed across all venues including aggregators */
+            grossVolume: number;
+            /** @description Primary volume total (alias for netVolume for backward compatibility) */
             totalVolume: number;
             byVenue: {
                 [key: string]: number;
             };
             venues: string[];
-            /** @description Number of positive-volume price point samples in the selected window. */
+            /** @description Number of positive-volume samples from primary markets (equals netTradeCount). */
             tradeCount: number;
+            /** @description Number of positive-volume samples from primary markets. */
+            netTradeCount: number;
+            /** @description Number of positive-volume samples across all venues, including aggregators. */
+            grossTradeCount: number;
             /** @description Median per-sample volume measured in the requested asset's units. */
             medianTradeSize: number | null;
             /** @description Largest single sample's share of total volume, from 0 to 1. */

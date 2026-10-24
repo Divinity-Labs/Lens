@@ -24,7 +24,12 @@ describe('BazaarMcpServer — server identity', () => {
 
 describe('BazaarMcpServer', () => {
   it('should map signature expiration ledger error to ERR_EXPIRED_AUTHORISATION', async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error('Transaction signature expired. Signature expiration ledger 123 is less than current ledger 125'));
+    // What the payment client actually surfaces: @x402/fetch rethrows a scheme
+    // failure as `Failed to create payment payload: <cause>`, and the cause for a
+    // lapsed signature is the SDK's own `The transaction has expired`
+    // (@stellar/stellar-sdk lib/webauth/utils.js).
+    const expired = new Error('Failed to create payment payload: The transaction has expired');
+    const mockFetch = vi.fn().mockRejectedValue(expired);
     const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
 
     // The SDK server doesn't expose the router directly without a client, but we can test the handlePaidCallError method directly,
@@ -80,11 +85,15 @@ describe('BazaarMcpServer', () => {
   });
 
   it('should map 402 rejected error to ERR_PAYMENT_REJECTED', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 402,
-      text: async () => 'Payment Required'
-    });
+    // fetchWithPayment does not throw on a rejected payment: it pays, retries,
+    // and hands back the seller's second response, so this is a real Response
+    // carrying the x402 error body rather than a hand-rolled object.
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ x402Version: 1, error: 'Payment failed: signature invalid' }),
+        { status: 402, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
     
     const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
 
@@ -111,11 +120,19 @@ describe('BazaarMcpServer', () => {
   });
   
   it('should return successfully on a successful call', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ success: true, data: "hello" })
-    });
+    // A settled call is a real Response whose body is the resource's payload and
+    // whose X-PAYMENT-RESPONSE header carries the seller's settlement echo; the
+    // ledger decodes that header, so a stand-in without Headers would skip the
+    // only code path that reads it.
+    const settlement = Buffer.from(
+      JSON.stringify({ success: true, network: 'stellar:testnet' }),
+    ).toString('base64url');
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: 'hello' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'X-PAYMENT-RESPONSE': settlement },
+      }),
+    );
     
     const server = new BazaarMcpServer({ fetchWithPayment: mockFetch, paidCallAllowlist: ['example.com'] });
 
@@ -1063,20 +1080,25 @@ describe('bazaar_search discovery routing', () => {
     expect(JSON.parse(response.content[0].text)).toEqual(body);
   });
 
-  it('maps an empty resources array to ERR_NO_RESULTS', async () => {
+  it('returns an empty resources array as a success, not an error (#414)', async () => {
+    // "I searched and there were none" is a successful search. Handed an error,
+    // an agent retries, rephrases, or reports a failure to the user — none of
+    // which is the right response to an empty set, and all of which cost a paid
+    // call. The empty collection is the answer.
     const { callTool } = searchHarness(() => jsonResponse({ resources: [] }));
 
     const response = await callTool('bazaar_search', { url: 'https://bazaar.example' });
 
-    expect(response.isError).toBe(true);
-    expect(JSON.parse(response.content[0].text)).toEqual({
-      isError: true,
-      code: MCP_ERROR_CODES.ERR_NO_RESULTS,
-      reason: 'No resources found',
-    });
+    expect(response.isError).toBeFalsy();
+    const body = JSON.parse(response.content[0].text);
+    expect(body.resources).toEqual([]);
+    // Explicit, not merely absent: the agent can tell "none matched" from a
+    // response whose shape it did not understand.
+    expect(body.isError).toBeUndefined();
+    expect(body.code).toBeUndefined();
   });
 
-  it('maps an empty top-level array to ERR_NO_RESULTS', async () => {
+  it('returns an empty top-level array as a success, not an error (#414)', async () => {
     const { callTool } = searchHarness(() => jsonResponse([]));
 
     const response = await callTool('bazaar_search', {
@@ -1084,12 +1106,9 @@ describe('bazaar_search discovery routing', () => {
       query: 'nothing indexed yet',
     });
 
-    expect(response.isError).toBe(true);
-    expect(JSON.parse(response.content[0].text)).toEqual({
-      isError: true,
-      code: MCP_ERROR_CODES.ERR_NO_RESULTS,
-      reason: 'No resources found',
-    });
+    expect(response.isError).toBeFalsy();
+    const body = JSON.parse(response.content[0].text);
+    expect(Array.isArray(body) ? body : body.items ?? body.resources).toEqual([]);
   });
 
   it('maps a non-2xx response to ERR_SERVICE_UNREACHABLE with the status in the reason', async () => {

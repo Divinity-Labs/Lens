@@ -109,6 +109,107 @@ describe('GET /volumes/:asset', () => {
     await app.close()
   })
 
+  it('separates net (primary markets) and gross (including aggregators) totals when traded on primary and aggregator venues', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          total_volume: '150.0',
+          by_venue: { SDEX: 100.0, aquarius_amm: 50.0 },
+          trade_count_by_venue: { SDEX: 2, aquarius_amm: 1 },
+          venues: ['SDEX', 'aquarius_amm'],
+          trade_count: 3,
+          observed_sample_count: 3,
+        },
+      ],
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/volumes/XLM?window=24h' })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.asset).toBe('XLM')
+    expect(body.byVenue).toEqual({ SDEX: 100.0, aquarius_amm: 50.0 })
+    expect(body.totals).toEqual({
+      net: 100.0,
+      gross: 150.0,
+    })
+    expect(body.netVolume).toBe(100.0)
+    expect(body.grossVolume).toBe(150.0)
+    // totalVolume defaults to net volume to avoid overstating real activity
+    expect(body.totalVolume).toBe(100.0)
+    expect(body.tradeCount).toBe(2)
+    expect(body.netTradeCount).toBe(2)
+    expect(body.grossTradeCount).toBe(3)
+    await app.close()
+  })
+
+  it('aggregates across multiple primaries (SDEX, AMM, Soroswap) alongside an aggregator (Aquarius)', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          total_volume: '430.0',
+          by_venue: { SDEX: 100.0, AMM: 200.0, soroswap_amm: 50.0, aquarius_amm: 80.0 },
+          trade_count_by_venue: { SDEX: 5, AMM: 8, soroswap_amm: 2, aquarius_amm: 3 },
+          venues: ['AMM', 'SDEX', 'aquarius_amm', 'soroswap_amm'],
+          trade_count: 18,
+          observed_sample_count: 18,
+        },
+      ],
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/volumes/USDC?window=24h' })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.asset).toBe('USDC')
+    expect(body.totals.net).toBe(350.0)
+    expect(body.totals.gross).toBe(430.0)
+    expect(body.netVolume).toBe(350.0)
+    expect(body.grossVolume).toBe(430.0)
+    expect(body.totalVolume).toBe(350.0)
+    expect(body.tradeCount).toBe(15)
+    expect(body.netTradeCount).toBe(15)
+    expect(body.grossTradeCount).toBe(18)
+    expect(body.byVenue).toEqual({
+      SDEX: 100.0,
+      AMM: 200.0,
+      soroswap_amm: 50.0,
+      aquarius_amm: 80.0,
+    })
+    await app.close()
+  })
+
+  it('returns zero net volume if only aggregator trades exist', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          total_volume: '75.0',
+          by_venue: { aquarius_amm: 75.0 },
+          trade_count_by_venue: { aquarius_amm: 4 },
+          venues: ['aquarius_amm'],
+          trade_count: 4,
+          observed_sample_count: 4,
+        },
+      ],
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/volumes/XLM?window=24h' })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.totals).toEqual({ net: 0, gross: 75.0 })
+    expect(body.netVolume).toBe(0)
+    expect(body.grossVolume).toBe(75.0)
+    expect(body.totalVolume).toBe(0)
+    expect(body.tradeCount).toBe(0)
+    expect(body.netTradeCount).toBe(0)
+    expect(body.grossTradeCount).toBe(4)
+    await app.close()
+  })
+
   it('defaults to the 24h window', async () => {
     mockQuery.mockResolvedValue({ rows: [] })
     const app = await buildApp()

@@ -188,6 +188,9 @@ describe('last_trade_timestamp', () => {
 
   it('tracks the AMM loop per network too', async () => {
     global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
       json: async () => ({
         _embedded: {
           records: [

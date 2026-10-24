@@ -78,10 +78,11 @@ export interface PoolEntry {
  * degrades gracefully without affecting other ingesters.
  */
 export async function fetchSoroswapTokenList(
-  tokenListUrl: string = getNetworkConfig(activeNetwork).soroswap.tokenListUrl
+  tokenListUrl: string = getNetworkConfig(activeNetwork).soroswap.tokenListUrl,
+  signal?: AbortSignal
 ): Promise<SoroswapToken[]> {
   try {
-    const res = await fetchWithTimeout(tokenListUrl)
+    const res = await fetchWithTimeout(tokenListUrl, { signal })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as SoroswapTokenList
     return Array.isArray(data.tokens) ? data.tokens : []
@@ -305,9 +306,14 @@ export async function ingestPool(
   pair: WatchedPair,
   _fetchReserves: (poolAddress: string, network?: NetworkName) => Promise<[bigint, bigint] | null> = fetchPoolReserves,
   network: NetworkName = activeNetwork,
-  _fetchDecimals: (tokenAddress: string, network?: NetworkName) => Promise<number | null> = fetchTokenDecimals
+  _fetchDecimals: (tokenAddress: string, network?: NetworkName) => Promise<number | null> = fetchTokenDecimals,
+  signal?: AbortSignal
 ): Promise<void> {
   try {
+    // Cycle-deadline checkpoint (#351): an abandoned cycle does not start
+    // another RPC simulation for a pool whose unit has not begun.
+    if (signal?.aborted) return
+
     const reserves = await _fetchReserves(poolEntry.poolAddress, network)
     if (!reserves) return
 
@@ -342,6 +348,13 @@ export async function ingestPool(
       })
       return
     }
+
+    // Cycle-deadline checkpoint (#351), ahead of the write: nothing has been
+    // written yet, so skipping leaves no partial state — the reserves are
+    // re-read next cycle. The write itself is one upsert, so it commits whole
+    // or not at all, and Soroswap keeps no cursor whose advance could be
+    // separated from it.
+    if (signal?.aborted) return
 
     await upsertPricePoints(
       [
@@ -412,7 +425,8 @@ export async function ingestPair(
     tokenB: string,
     network?: NetworkName
   ) => Promise<string[]> = fetchPoolsFromFactory,
-  network: NetworkName = activeNetwork
+  network: NetworkName = activeNetwork,
+  signal?: AbortSignal
 ): Promise<void> {
   const tokenA = tokens.find(
     (t) => t.symbol.toUpperCase() === pair.assetA.code.toUpperCase()
@@ -438,13 +452,23 @@ export async function ingestPair(
     return
   }
 
+  // Cycle-deadline checkpoint (#351): discovery above is one bounded RPC call
+  // we cannot interrupt mid-flight; this is where an abandoned cycle stops
+  // instead of scheduling a reserves read per pool after its deadline.
+  if (signal?.aborted) return
+
   await Promise.all(
     poolAddresses.map((addr) =>
       ingestPool(
         { poolAddress: addr, tokenA, tokenB },
         pair,
         fetchPoolReserves,
-        network
+        network,
+        // `_fetchDecimals` sits between `network` and `signal` in the
+        // signature, so pass the real implementation explicitly — omitting it
+        // puts the AbortSignal in its place.
+        fetchTokenDecimals,
+        signal
       )
     )
   )
@@ -454,6 +478,7 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   name: 'Soroswap',
   kind: 'amm',
   source: 'soroswap_amm',
+  classification: 'primary',
   type: 'AMM DEX',
   description: 'Soroswap constant-product automated market maker on Soroban',
 
@@ -532,11 +557,11 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
     await ingestPool(target, pair, fetchPoolReserves, network)
   },
 
-  async ingestPair(pair: WatchedPair, network: NetworkName): Promise<void> {
+  async ingestPair(pair: WatchedPair, network: NetworkName, signal?: AbortSignal): Promise<void> {
     const netConfig = getNetworkConfig(network)
-    const tokens = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl)
+    const tokens = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, signal)
     if (tokens.length === 0) return
-    await ingestPair(pair, tokens, netConfig.soroswap.factoryAddress, fetchPoolsFromFactory, network)
+    await ingestPair(pair, tokens, netConfig.soroswap.factoryAddress, fetchPoolsFromFactory, network, signal)
   },
 
   _resetLastPrice,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync as readFileRaw } from 'node:fs'
+
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
 import { venueAdapters } from '../src/ingest/venues'
@@ -14,6 +15,19 @@ import {
   ENDPOINTS_END_TAG,
 } from '../scripts/generate-readme'
 import { INTERNAL_ROUTES, isInternalRoute } from '../src/openapi/coverage'
+
+/**
+ * Read a file with its line endings normalised to LF.
+ *
+ * The generators join rows with a bare newline, but git hands a Windows
+ * checkout CRLF, so a byte comparison against README.md fails on every line
+ * of an identical table. .gitattributes pins README.md to LF for the same
+ * reason; normalising here as well means a contributor whose git config
+ * differs is not blocked by a diff that is only line endings.
+ */
+function readFileSync(path: string, encoding: 'utf8'): string {
+  return readFileRaw(path, encoding).replace(/\r\n/g, String.fromCharCode(10))
+}
 
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
 const openApiPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
