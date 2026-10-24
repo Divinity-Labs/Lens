@@ -46,6 +46,10 @@ describe('GraphQL getPriceHistory with time range (Issue #370)', () => {
     mockQuery.mockReset()
   })
 
+  // NOTE: Network-scoping enforcement for raw SQL against network-scoped tables
+  // (e.g. price_points) is intentionally not covered in this file; it belongs in a
+  // dedicated static test that enumerates queries and asserts a network predicate.
+
   it('documents boundary inclusivity in the schema description', () => {
     expect(schema).toContain('The time range is inclusive at both ends: a bucket is included if bucket >= from and bucket <= to')
     expect(schema).toContain('adjacent windows')

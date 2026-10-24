@@ -4,6 +4,12 @@ import { activeNetwork, type NetworkName } from '../config'
 
 const VALID_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
 
+/**
+ * Exported so the network-predicate CI check can verify the set of values a
+ * request may resolve to. Keep in sync with {@link NetworkName}.
+ */
+export const NETWORK_NAMES: readonly NetworkName[] = VALID_NETWORKS
+
 declare module 'fastify' {
   interface FastifyRequest {
     /**
