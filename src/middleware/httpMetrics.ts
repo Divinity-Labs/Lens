@@ -10,6 +10,27 @@ interface TimedRequest extends FastifyRequest {
 }
 
 /**
+ * Symbol key under which the GraphQL layer may record a bounded operation
+ * label for the current request. The GraphQL plugin sets this once it has
+ * parsed the operation; `routeLabel` reads it so that `POST /graphql` traffic
+ * is broken down by operation name and type instead of collapsing into a
+ * single series. The value MUST already be bounded by the caller — client
+ * supplied operation names are folded into a fixed `unknown` bucket there.
+ */
+export const GRAPHQL_OPERATION = Symbol('lens.httpMetrics.graphqlOperation')
+
+/**
+ * The fixed label value used when a GraphQL operation name cannot be resolved
+ * or is not on the allow-list. Exported so the GraphQL layer folds unknown
+ * client-supplied names into exactly this value, keeping cardinality bounded.
+ */
+export const GRAPHQL_UNKNOWN_OPERATION = 'unknown'
+
+interface GraphQLRequest extends TimedRequest {
+  [GRAPHQL_OPERATION]?: string
+}
+
+/**
  * Routes excluded from HTTP metrics. `/metrics` is scraped on a fixed interval,
  * so counting it would have the scraper continuously inflate the very numbers
  * it is reading — request rate would never fall to zero on an idle service.
@@ -47,6 +68,8 @@ export function statusClass(statusCode: number): string {
  * a thousand URLs produces one series, not a thousand.
  */
 export function routeLabel(req: FastifyRequest): string {
+  const gqlLabel = (req as GraphQLRequest)[GRAPHQL_OPERATION]
+  if (gqlLabel !== undefined) return gqlLabel
   return req.routeOptions?.url ?? 'unmatched'
 }
 
@@ -86,7 +109,7 @@ async function httpMetricsPlugin(app: FastifyInstance) {
  * shared Prometheus registry.
  *
  * Registration order matters: this plugin must be registered BEFORE the x402,
- * auth and rate-limit plugins. All four attach `onRequest` hooks and Fastify
+ * auth and rate-limit plugins. All four attach `onRequest` hooks and Fastly
  * runs them in registration order, so registering later would mean a request
  * rejected by auth or x402 short-circuits before the timer starts and goes
  * uncounted — losing exactly the 401/402/429 traffic an operator most wants to
