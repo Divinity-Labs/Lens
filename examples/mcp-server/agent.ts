@@ -84,6 +84,17 @@ async function main() {
   const tools = await client.listTools();
   console.log('[agent] Available tools:', tools.tools.map(t => t.name).join(', '));
 
+  // Resources are the other half of the capability: read-only facts about Lens
+  // itself, attached to the agent's context once instead of re-fetched by
+  // calling a tool every turn. Each reports a content-hash version, so a client
+  // can tell whether a copy it cached is still current.
+  const resources = await client.listResources();
+  console.log('[agent] Available resources:', resources.resources.map(r => r.uri).join(', '));
+
+  const statusResource = await client.readResource({ uri: 'lens://status' });
+  console.log('[agent] lens://status:', statusResource.contents[0].text);
+  console.log('[agent] version:', statusResource.contents[0]._meta?.version);
+
   const BAZAAR_URL = 'http://localhost:3000';
 
   // Step 0 is the one that needs no Bazaar node and no payment: Lens answering
@@ -126,8 +137,16 @@ async function main() {
     } else {
       console.log('[agent] Search result:', searchResult.content[0].text);
       const data = JSON.parse(searchResult.content[0].text);
-      if (data.resources && data.resources.length > 0) {
+      if (Array.isArray(data.resources) && data.resources.length > 0) {
         paidEndpoint = data.resources[0].url;
+      } else {
+        // The point of #414: an empty result is a successful search, so the
+        // agent says "none matched" and moves on rather than treating it as a
+        // failure to retry — a retry here is a paid call for a question already
+        // answered. Keyed off the empty collection, not a count field:
+        // /discovery/search reports `totalMatched`, and another bazaar node may
+        // send neither.
+        console.log('[agent] Search completed with no matching resources.');
       }
     }
   } catch (err: any) {

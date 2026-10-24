@@ -131,8 +131,8 @@ describe('GraphQL priceUpdated subscription', () => {
     // Since #117 every enabled network runs its own ingester loop and all of
     // them publish to this one emitter. Without the network filter a mainnet
     // print and a testnet print for XLM/USDC arrive on the same stream,
-    // indistinguishable — a chart that looks noisy rather than wrong, which is
-    // the harder kind of bug to notice.
+    // indistinguishable — a chart that looks noisy rather than wrong, which
+    // is the harder kind of bug to notice.
     const ws = await connect(url)
     ws.send(JSON.stringify(SUBSCRIBE('XLM/USDC', 'mainnet')))
     await new Promise(r => setTimeout(r, 100))
@@ -190,17 +190,12 @@ describe('GraphQL priceUpdated subscription', () => {
 describe('GraphQL exact decimal fields', () => {
   it('returns stored decimal text without converting it through a double', async () => {
     vi.mocked(getAggregatedPrice).mockResolvedValue({
-      price: 0, priceExact: '0.123456789012345678',
-      sdexPrice: 0, sdexPriceExact: '0.123456789012345678',
-      ammPrice: 0, ammPriceExact: '0',
-      volume24h: 0, volume24hExact: '0',
-      sdexVolume24h: 0, sdexVolume24hExact: '0',
-      ammVolume24h: 0, ammVolume24hExact: '0',
-      vwap1m: 0, vwap1mExact: '0', vwap5m: 0, vwap5mExact: '0',
-      vwap1h: 0, vwap1hExact: '0', vwap24h: 0, vwap24hExact: '0',
-      priceChange24h: 0, priceChange24hExact: '0', sources: 0,
+      price: '0.123456789012345678', sdexPrice: '0.123456789012345678', ammPrice: '0',
+      volume24h: '0', sdexVolume24h: '0', ammVolume24h: '0',
+      vwap1m: '0', vwap5m: '0', vwap1h: '0', vwap24h: '0',
+      priceChange24h: '0', sources: 0,
       confidence: 'unknown', lastTradeAgeSeconds: null, stale: false,
-    })
+    } as any)
     vi.mocked(getBestRoute).mockResolvedValue({ route: 'SDEX' } as any)
 
     const { app } = await buildServer()

@@ -4,6 +4,7 @@ import { config, getNetworkConfig, type NetworkName } from '../config'
 import { prisma } from '../db'
 import { setCachedPrice } from '../redis'
 import { calculateVWAPExact, calculateOHLCVExact, getAggregatedPrice } from '../aggregator/vwap'
+import { withExactPriceFields } from '../aggregator/priceFields'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { createLogger } from '../logger'
 
@@ -36,7 +37,7 @@ export function startAggregateWorker(network: NetworkName) {
     async (job) => {
       const { pairKey, pair } = job.data
       try {
-        const agg = await getAggregatedPrice(pairKey, network)
+        const agg = await getAggregatedPrice(pairKey, network, { decimalFormat: 'string' })
         const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, network)
 
         const result = {
@@ -47,7 +48,7 @@ export function startAggregateWorker(network: NetworkName) {
           // the payload has to carry the same network the route stamps — a
           // cache hit is served verbatim, network field included.
           network,
-          ...agg,
+          ...withExactPriceFields(agg),
           bestRoute: route.route,
           lastUpdated: new Date(),
         }

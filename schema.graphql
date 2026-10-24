@@ -1,19 +1,46 @@
+scalar Decimal
+
+type Asset {
+  code: String!
+  issuer: String
+}
+
+type Pair {
+  pairKey: String!
+  network: String!
+  assetA: Asset!
+  assetB: Asset!
+  latestPrice: Float
+  lastUpdated: String
+}
+
 type AggregatedPrice {
   assetA: String!
   assetB: String!
   pairKey: String!
-  price: Float!
-  sdexPrice: Float!
-  ammPrice: Float!
+  price: Float! @deprecated(reason: "Use priceExact to preserve decimal precision")
+  priceExact: Decimal!
+  sdexPrice: Float! @deprecated(reason: "Use sdexPriceExact to preserve decimal precision")
+  sdexPriceExact: Decimal!
+  ammPrice: Float! @deprecated(reason: "Use ammPriceExact to preserve decimal precision")
+  ammPriceExact: Decimal!
   bestRoute: String!
-  volume24h: Float!
-  sdexVolume24h: Float!
-  ammVolume24h: Float!
-  vwap1m: Float!
-  vwap5m: Float!
-  vwap1h: Float!
-  vwap24h: Float!
-  priceChange24h: Float!
+  volume24h: Float! @deprecated(reason: "Use volume24hExact to preserve decimal precision")
+  volume24hExact: Decimal!
+  sdexVolume24h: Float! @deprecated(reason: "Use sdexVolume24hExact to preserve decimal precision")
+  sdexVolume24hExact: Decimal!
+  ammVolume24h: Float! @deprecated(reason: "Use ammVolume24hExact to preserve decimal precision")
+  ammVolume24hExact: Decimal!
+  vwap1m: Float! @deprecated(reason: "Use vwap1mExact to preserve decimal precision")
+  vwap1mExact: Decimal!
+  vwap5m: Float! @deprecated(reason: "Use vwap5mExact to preserve decimal precision")
+  vwap5mExact: Decimal!
+  vwap1h: Float! @deprecated(reason: "Use vwap1hExact to preserve decimal precision")
+  vwap1hExact: Decimal!
+  vwap24h: Float! @deprecated(reason: "Use vwap24hExact to preserve decimal precision")
+  vwap24hExact: Decimal!
+  priceChange24h: Float! @deprecated(reason: "Use priceChange24hExact to preserve decimal precision")
+  priceChange24hExact: Decimal!
   lastUpdated: String!
   sources: Int!
   confidence: String!
@@ -27,20 +54,29 @@ type RouteInfo {
   estimatedOutput: Float!
   slippagePct: Float!
   recommendation: String!
+  network: String
 }
 
 type PriceBucket {
   bucket: String!
   window: String!
-  vwap: Float!
-  sdexVwap: Float
-  ammVwap: Float
-  volume: Float!
+  vwap: Float! @deprecated(reason: "Use vwapExact to preserve decimal precision")
+  vwapExact: Decimal!
+  sdexVwap: Float @deprecated(reason: "Use sdexVwapExact to preserve decimal precision")
+  sdexVwapExact: Decimal
+  ammVwap: Float @deprecated(reason: "Use ammVwapExact to preserve decimal precision")
+  ammVwapExact: Decimal
+  volume: Float! @deprecated(reason: "Use volumeExact to preserve decimal precision")
+  volumeExact: Decimal!
   tradeCount: Int!
-  open: Float
-  close: Float
-  high: Float
-  low: Float
+  open: Float @deprecated(reason: "Use openExact to preserve decimal precision")
+  openExact: Decimal
+  close: Float @deprecated(reason: "Use closeExact to preserve decimal precision")
+  closeExact: Decimal
+  high: Float @deprecated(reason: "Use highExact to preserve decimal precision")
+  highExact: Decimal
+  low: Float @deprecated(reason: "Use lowExact to preserve decimal precision")
+  lowExact: Decimal
 }
 
 type PriceUpdate {
@@ -84,6 +120,56 @@ type OracleComparison {
   oracles: [OracleSource!]!
 }
 
+"""Sort order for the `screener` query."""
+enum ScreenerSortOrder {
+  ASC
+  DESC
+}
+
+"""
+Filters for the `screener` query — the same filters REST GET /screener
+accepts. Every field is optional; an omitted field does not filter.
+
+`marketCap` is declared only so it can be rejected with an explanation,
+mirroring the REST route: Lens has no circulating supply data to compute a
+market cap from. Passing it fails the query with UNSUPPORTED_PARAMETER
+rather than being silently ignored.
+"""
+input ScreenerFilters {
+  volume: Float
+  change24hMin: Float
+  change24hMax: Float
+  priceMin: Float
+  priceMax: Float
+  liquidity: Float
+  marketCap: Float
+}
+
+"""
+One row of screener results. `liquidityUnit` is the quote asset of
+`pairKey`; liquidity is summed AMM reserve value denominated in it.
+"""
+type ScreenerRow {
+  pairKey: String!
+  volume: Float!
+  price: Float!
+  change24h: Float!
+  liquidity: Float!
+  liquidityUnit: String!
+}
+
+"""
+One page of screener results, cursor-paginated exactly like REST
+GET /screener: pass `nextCursor` back as `cursor` for the following page;
+it is null on the last page. `hasMore` reports whether another page exists.
+"""
+type ScreenerPage {
+  network: String!
+  rows: [ScreenerRow!]!
+  nextCursor: String
+  hasMore: Boolean!
+}
+
 type Query {
   """
   Aggregated price for a pair. Three outcomes are kept distinct:
@@ -109,13 +195,28 @@ type Query {
   return the boundary bucket at t1 in both results.
   """
   getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int, from: String, to: String): [PriceBucket]
-  listPairs: [String]!
+  listPairs: [String]! @deprecated(reason: "Use 'pairs' instead")
+  pairs: [Pair!]!
 
   """
   Compares the Lens price for an asset against every configured oracle.
   The network argument defaults to the active network.
   """
   oracle(asset: String!, network: String): OracleComparison
+
+  """
+  The pair screener: filter, sort and cursor-paginate tracked pairs. Shares
+  its implementation, filters, sort fields and cursor pagination with REST
+  GET /screener, and resolves against the active network.
+  
+  - `sortBy` accepts the REST route's fields: volume, change_24h, price,
+    liquidity. Sorting on `market_cap` fails with the same explanation REST
+    gives (UNSUPPORTED_PARAMETER is reserved for the `marketCap` filter):
+    Lens has no circulating supply data to compute it from.
+  - `limit` is clamped to [1, 100] like REST, never
+    rejected.
+  """
+  screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
 }
 
 type Subscription {

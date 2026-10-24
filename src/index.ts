@@ -1,21 +1,25 @@
 import 'dotenv/config'
-import { execSync } from 'child_process'
+import Fastify from 'fastify'
 
 if (!process.env.DIRECT_DATABASE_URL && process.env.DATABASE_URL) {
   process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL
 }
-import { config, type NetworkName } from './config'
+import { installProcessErrorHandlers } from './processErrorHandlers'
+import { config, getNetworkConfig, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
 import { pgPool } from './db'
+import { assertSchemaValid } from './db/schemaVerify'
+import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
-import { venueAdapters, startVenueAdapter } from './ingest/venues'
+import { venueAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
 import {
   createPricePointsPartitionQueue,
   startPricePointsPartitionWorker,
@@ -24,14 +28,31 @@ import {
   PRICE_POINTS_RETENTION_DAYS,
 } from './jobs/pricePointsPartitionJob'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+import { markHealthy, recordCrash } from './ingester/restart'
 import { markBootComplete } from './health'
+import { startSep40Publisher } from './publish/publisher'
 
 const log = createLogger('startup')
 
+// The house logger, not a throwaway Fastify instance built only to borrow one:
+// buildLogger pipes every line through redactSecrets, and a fatal handler that
+// prints an unredacted error is the one place that matters most — a crash log
+// is exactly where a connection string or an API key tends to surface.
+installProcessErrorHandlers(log)
+
 async function main() {
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
-  log.info('running database migrations')
-  execSync('node node_modules/prisma/build/index.js db push --accept-data-loss', { stdio: 'inherit' })
+  // #233: apply committed, reviewable migrations — never `db push`. `migrate
+  // deploy` only runs migrations already in prisma/migrations and fails loudly
+  // if the DB is ahead of them, instead of silently diffing the live schema and
+  // applying whatever it decides. See docs/database-migrations.md.
+  //
+  // Every database Lens has today was made by `db push`, so it carries the
+  // schema with no migration history and `migrate deploy` alone would collide
+  // with its own baseline — a crash loop, since this function exits(1). The
+  // one-time adoption is in applyMigrations(); see src/db/migrate.ts.
+  log.info('applying committed database migrations')
+  await applyMigrations({ db: pgPool, warn: (context, message) => log.warn(context, message) })
   log.info('database ready')
 
   // ── Connect dependencies ──────────────────────────────────────────────────
@@ -52,6 +73,10 @@ async function main() {
 
   await pgPool.connect()
   log.info('postgresql connected')
+
+  // Verify database schema matches expected tables and columns (#352)
+  await assertSchemaValid()
+  log.info('database schema verified')
 
   // ── Load persisted runtime pairs ──────────────────────────────────────────
   await loadPersistedPairs()
@@ -143,6 +168,37 @@ async function main() {
     }
   }
 
+  // ── Lending rate retention ────────────────────────────────────────────────
+  const safeRatePrune = async () => {
+    try {
+      const counts = await pruneAllRateNetworks()
+      for (const [network, pruned] of Object.entries(counts)) {
+        if (pruned > 0) {
+          log.info({ network, pruned, retentionDays: RATE_RETENTION_DAYS }, 'pruned old lending rates')
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'lending rate prune failed')
+    }
+  }
+
+  await safeRatePrune()
+
+  {
+    let rateRetentionQueue: ReturnType<typeof createRateRetentionQueue> | undefined
+    let rateRetentionWorker: ReturnType<typeof startRateRetentionWorker> | undefined
+    try {
+      rateRetentionQueue = createRateRetentionQueue()
+      rateRetentionWorker = startRateRetentionWorker()
+      await scheduleRateRetention(rateRetentionQueue)
+      log.info('lending rate retention worker started')
+    } catch (err) {
+      log.warn({ err }, 'lending rate retention worker unavailable; falling back to hourly in-process prune')
+      await Promise.allSettled([rateRetentionQueue?.close(), rateRetentionWorker?.close()])
+      setInterval(() => { void safeRatePrune() }, 60 * 60 * 1000).unref()
+    }
+  }
+
   // ── Price points partition maintenance & retention ────────────────────────
   // price_points is range-partitioned by timestamp. We pre-create future partitions
   // ahead of need so ingesters never fail on unmapped timestamp ranges. Dropping
@@ -187,11 +243,46 @@ async function main() {
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
   // mainnet only restarts that one instance and cannot affect SDEX/AMM or the
   // ingesters running on testnet.
+  //
+  // A crash-looping ingester must not be invisible: restarts are counted, the
+  // delay grows exponentially up to a ceiling, and the last crash is recorded
+  // so /status can surface it. A sustained healthy run resets the backoff so a
+  // one-off blip does not permanently slow restarts.
+  const INGESTER_RESTART_BASE_MS = 10_000
+  const INGESTER_RESTART_MAX_MS = 5 * 60_000
+  const INGESTER_HEALTHY_RESET_MS = 5 * 60_000
+
   const restartIngester = (name: string, network: NetworkName, fn: () => Promise<void>) => {
-    fn().catch(err => {
-      log.error({ ingester: name, network, err }, 'ingester crashed; restarting in 10s')
-      setTimeout(() => restartIngester(name, network, fn), 10_000)
-    })
+    let healthyTimer: NodeJS.Timeout | undefined
+
+    const run = () => {
+      fn().then(() => {
+        // fn() resolving means the ingester ran to completion rather than
+        // looping forever. Treat that as healthy and reset the backoff.
+        if (healthyTimer) clearTimeout(healthyTimer)
+        markHealthy(name, network)
+      }).catch(err => {
+        if (healthyTimer) clearTimeout(healthyTimer)
+        const state = recordCrash(name, network, err)
+
+        const delay = Math.min(
+          INGESTER_RESTART_BASE_MS * 2 ** (state.failures - 1),
+          INGESTER_RESTART_MAX_MS,
+        )
+        log.error(
+          { err, ingester: name, network, failures: state.failures, delayMs: delay },
+          'ingester crashed, restarting after backoff',
+        )
+        setTimeout(run, delay)
+      })
+
+      // If the ingester stays up past the healthy threshold, reset the
+      // backoff even though fn() has not resolved (infinite loops never do).
+      healthyTimer = setTimeout(() => markHealthy(name, network), INGESTER_HEALTHY_RESET_MS)
+      healthyTimer.unref()
+    }
+
+    run()
   }
 
   const enabledNetworks = getEnabledNetworks()
@@ -201,6 +292,18 @@ async function main() {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))
+    restartIngester('Blend', network, () => startBlendIngester(network))
+
+    // The publisher is the one loop in this process that writes to a chain, so
+    // it is started on its own per-network switch rather than alongside the
+    // readers: an operator who has deployed a feed but has not put a key in the
+    // environment gets an explicit "not started", not a crash loop. Same fault
+    // isolation as every ingester above.
+    if (getNetworkConfig(network).publisher.enabled) {
+      restartIngester('SEP-40 Publisher', network, () => startSep40Publisher(network))
+    } else {
+      log.info({ network }, 'SEP-40 publication disabled; publisher not started')
+    }
   }
 
   log.info(

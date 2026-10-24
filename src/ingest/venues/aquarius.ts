@@ -42,9 +42,12 @@ export interface AquariusListResponse {
 
 export async function fetchAquariusPools(
   pair: WatchedPair,
-  apiUrl: string = config.aquarius.apiUrl
+  apiUrl: string = config.aquarius.apiUrl,
+  signal?: AbortSignal
 ): Promise<AquariusPool[]> {
   try {
+    if (signal?.aborted) return []
+
     const assetAStr = pair.assetA.issuer
       ? `${pair.assetA.code}:${pair.assetA.issuer}`
       : 'native'
@@ -56,7 +59,7 @@ export async function fetchAquariusPools(
     params.append('assets[]', assetAStr)
     params.append('assets[]', assetBStr)
 
-    const res = await fetchWithTimeout(`${apiUrl}?${params.toString()}`)
+    const res = await fetchWithTimeout(`${apiUrl}?${params.toString()}`, { signal })
     if (!res.ok) return []
     const data = (await res.json()) as AquariusListResponse
     return data.results ?? []
@@ -97,13 +100,24 @@ export function deriveAquariusPricePoints(
 
 export async function ingestAquariusPair(
   pair: WatchedPair,
-  network: NetworkName = activeNetwork
+  network: NetworkName = activeNetwork,
+  signal?: AbortSignal
 ): Promise<void> {
-  const pools = await fetchAquariusPools(pair, getNetworkConfig(network).aquarius.apiUrl)
+  const pools = await fetchAquariusPools(
+    pair,
+    getNetworkConfig(network).aquarius.apiUrl,
+    signal
+  )
   if (pools.length === 0) return
 
   const points = deriveAquariusPricePoints(pools, pair)
   if (points.length === 0) return
+
+  // Cycle-deadline checkpoint (#351): if the signal aborted while we were
+  // fetching, skip the write instead of committing points from an abandoned
+  // cycle. Nothing has been written yet, so skipping leaves no partial state
+  // — the same pools are re-read next cycle.
+  if (signal?.aborted) return
 
   await writeVenuePricePoints('Aquarius', points, pair, network)
 }
@@ -112,6 +126,9 @@ export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
   name: 'Aquarius',
   kind: 'amm',
   source: 'aquarius_amm',
+  classification: 'aggregator',
+  type: 'Liquidity Pool',
+  description: 'Aquarius AMM liquidity pools',
 
   isEnabled(network: NetworkName): boolean {
     return getNetworkConfig(network).aquarius.enabled
@@ -138,8 +155,8 @@ export const aquariusAdapter: VenueAdapter<AquariusPool[], AquariusPool[]> = {
     await writeVenuePricePoints('Aquarius', points, pair, network)
   },
 
-  async ingestPair(pair: WatchedPair, network: NetworkName): Promise<void> {
-    await ingestAquariusPair(pair, network)
+  async ingestPair(pair: WatchedPair, network: NetworkName, signal?: AbortSignal): Promise<void> {
+    await ingestAquariusPair(pair, network, signal)
   },
 
   _resetLastPrice,

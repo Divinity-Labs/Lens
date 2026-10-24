@@ -133,7 +133,7 @@ describe('aggregateRefresh runs once per enabled network', () => {
 
     await processor({ data: { pairKey: mainnetPair.pairKey, pair: mainnetPair, network: 'mainnet' } })
 
-    expect(mockGetAggregatedPrice).toHaveBeenCalledWith(mainnetPair.pairKey, 'mainnet')
+    expect(mockGetAggregatedPrice).toHaveBeenCalledWith(mainnetPair.pairKey, 'mainnet', { decimalFormat: 'string' })
     expect(mockGetBestRoute).toHaveBeenCalledWith(
       mainnetPair.assetA, mainnetPair.assetB, mainnetPair.pairKey, 1000, 'mainnet'
     )

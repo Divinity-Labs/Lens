@@ -106,6 +106,15 @@ describe('GET /prices/history', () => {
     expect(res.json().error).toMatch(/from/)
   })
 
+  it('rejects an invalid to date', async () => {
+    const app = await buildApp()
+
+    const res = await app.inject({ method: 'GET', url: '/prices/history?pair=XLM/USDC&to=nope' })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/to/)
+  })
+
   it('rejects from after to', async () => {
     const app = await buildApp()
 
@@ -128,7 +137,7 @@ describe('GET /prices/history', () => {
     })
 
     expect(res.statusCode).toBe(400)
-    expect(res.json().error).toMatch(/too large/)
+    expect(res.json().error).toMatch(/too\ large/)
     expect(mockQuery).not.toHaveBeenCalled()
   })
 
@@ -158,6 +167,18 @@ describe('GET /prices/history', () => {
     expect(params[1]).toBe('XLM/USDC')
     expect(new Date(params[2]).toISOString()).toBe(from)
     expect(new Date(params[3]).toISOString()).toBe(to)
+  })
+
+  it('uses half-open interval [from, to) in SQL query', async () => {
+    const app = await buildApp()
+    mockQuery.mockResolvedValue({ rows: [] })
+
+    await app.inject({ method: 'GET', url: '/prices/history?pair=XLM/USDC&from=2025-01-01T00:00:00Z&to=2025-01-01T01:00:00Z' })
+
+    // The SQL query should use < (exclusive) for the upper bound, not <=
+    const sql = mockQuery.mock.calls[0][0]
+    expect(sql).toMatch(/AND ts < \$4/)
+    expect(sql).not.toMatch(/AND ts <= \$4/)
   })
 
   it('MAX_HISTORY_POINTS guard math is interval-aware', () => {
