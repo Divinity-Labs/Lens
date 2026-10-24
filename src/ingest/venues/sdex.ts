@@ -1,11 +1,12 @@
 import { Asset } from '@stellar/stellar-sdk'
-import { trades_ingested_total, last_trade_timestamp } from '../../metrics'
+import { trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '../../metrics'
 import { config, activeNetwork, type NetworkName } from '../../config'
 import { getHorizonServer } from '../../network/clients'
 import { upsertPricePoints, getIndexerState, setIndexerCursor } from '../../db'
 import { resolvePageLedgers } from '../../ingesters/toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
+import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
@@ -14,6 +15,8 @@ import {
   setLastPrice,
   startVenueAdapter,
 } from './runner'
+
+const log = createLogger('ingester:sdex')
 
 export function _resetLastPrice(): void {
   resetLastPrice('SDEX')
@@ -37,13 +40,20 @@ export interface SdexRawTrades {
 
 export async function fetchSdexTrades(
   pair: WatchedPair,
-  network: NetworkName = activeNetwork
+  network: NetworkName = activeNetwork,
+  signal?: AbortSignal
 ): Promise<SdexRawTrades | null> {
   const stateId = `sdex:${network}:${pair.pairKey}`
   const state = await getIndexerState(stateId, network)
   const cursor = state.cursor ?? '0'
 
   try {
+    // Cycle-deadline checkpoint (#351): an already-abandoned cycle must not
+    // start a fresh round trip. The SDK call below cannot take our signal
+    // mid-flight, but it is one bounded HTTP request — we only ever refuse to
+    // *begin* one on behalf of an abandoned cycle.
+    if (signal?.aborted) return null
+
     const assetA = toAsset(pair.assetA)
     const assetB = toAsset(pair.assetB)
 
@@ -65,7 +75,7 @@ export async function fetchSdexTrades(
       lastLedger: state.ledger,
     }
   } catch (err) {
-    console.error(`[sdex] Error fetching trades for ${pair.pairKey}:`, (err as Error).message)
+    log.error({ pair: pair.pairKey, err }, 'error fetching trades')
     return null
   }
 }
@@ -82,7 +92,10 @@ export function deriveSdexPricePoints(
     lastLedger,
   )
   if (ledgers === null) {
-    console.error(`[sdex] ${pair.pairKey}: no ledger derivable from ${records.length} trades; skipping batch`)
+    log.error(
+      { pair: pair.pairKey, trades: records.length },
+      'no ledger derivable from trades; skipping batch'
+    )
     return null
   }
 
@@ -129,6 +142,7 @@ export async function writeSdexPricePoints(
   const { previousPrice, currentPrice } = setLastPrice('SDEX', network, trackerKey, points[points.length - 1].price)
 
   await upsertPricePoints(points, network)
+  markIngestSuccess('SDEX', network)
 
   trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
   last_trade_timestamp.set(
@@ -137,7 +151,7 @@ export async function writeSdexPricePoints(
   )
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
-  console.log(`[sdex] ${pair.pairKey}: ingested ${points.length} trades`)
+  log.info({ pair: pair.pairKey, trades: points.length }, 'ingested trades')
 
   publishPriceUpdate({
     pair: pair.pairKey,
@@ -152,22 +166,33 @@ export async function writeSdexPricePoints(
     previousPrice,
     currentPrice,
     network,
-  }).catch((err) => console.error('[sdex] webhook dispatch error:', err.message))
+  }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
 }
 
-export async function ingestPair(pair: WatchedPair, network: NetworkName = activeNetwork): Promise<void> {
-  const raw = await fetchSdexTrades(pair, network)
+export async function ingestPair(pair: WatchedPair, network: NetworkName = activeNetwork, signal?: AbortSignal): Promise<void> {
+  const raw = await fetchSdexTrades(pair, network, signal)
   if (!raw) return
 
   const derived = deriveSdexPricePoints(raw, pair)
   if (!derived || derived.points.length === 0) return
+
+  // Cycle-deadline checkpoint (#351), placed before the write SEQUENCE as a
+  // whole: `writeSdexPricePoints` commits the page upsert and the cursor
+  // advance together, so a cycle abandoned here skips both — never one
+  // without the other. Skipping merely re-reads the same page next cycle;
+  // `upsertPricePoints` uses skipDuplicates, so the replay is idempotent.
+  if (signal?.aborted) return
 
   await writeSdexPricePoints(derived, pair, network)
 }
 
 export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
   name: 'SDEX',
+  kind: 'orderbook',
   source: 'SDEX',
+  classification: 'primary',
+  type: 'Order Book',
+  description: "Stellar's Classic Order Book (SDEX)",
 
   isEnabled(_network: NetworkName): boolean {
     return true
@@ -194,8 +219,8 @@ export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
     await ingestPair(pair, network)
   },
 
-  async ingestPair(pair: WatchedPair, network: NetworkName): Promise<void> {
-    await ingestPair(pair, network)
+  async ingestPair(pair: WatchedPair, network: NetworkName, signal?: AbortSignal): Promise<void> {
+    await ingestPair(pair, network, signal)
   },
 
   _resetLastPrice,

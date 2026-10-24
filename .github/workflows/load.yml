@@ -81,8 +81,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Apply database schema
-        run: node node_modules/prisma/build/index.js db push --accept-data-loss
+      - name: Apply committed migrations
+        run: node node_modules/prisma/build/index.js migrate deploy
 
       - name: Start server
         run: |

@@ -17,18 +17,18 @@ export interface AggregatedPrice {
   assetA: string
   assetB: string
   pairKey: string
-  price: number
-  sdexPrice: number
-  ammPrice: number
+  price: number | string
+  sdexPrice: number | string
+  ammPrice: number | string
   bestRoute: 'SDEX' | 'AMM' | 'SPLIT' | 'UNKNOWN'
-  volume24h: number
-  sdexVolume24h: number
-  ammVolume24h: number
-  vwap1m: number
-  vwap5m: number
-  vwap1h: number
-  vwap24h: number
-  priceChange24h: number
+  volume24h: number | string
+  sdexVolume24h: number | string
+  ammVolume24h: number | string
+  vwap1m: number | string
+  vwap5m: number | string
+  vwap1h: number | string
+  vwap24h: number | string
+  priceChange24h: number | string
   lastUpdated: Date
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
@@ -36,66 +36,54 @@ export interface AggregatedPrice {
   stale: boolean
 }
 
-export interface SplitVenueAllocation {
+export interface RouteHop {
+  assetIn: AssetId
+  assetOut: AssetId
   venue: 'SDEX' | 'AMM'
-  proportion: number
-  amount: number
+  poolId?: string
+  inputAmount: number
+  outputAmount: number
+  price: number
+  spotPrice: number
+  slippagePct: number
+}
+
+export interface RouteOption {
+  hops: RouteHop[]
+  hopCount: number
   estimatedOutput: number
   effectivePrice: number
+  slippagePct: number
 }
 
-export interface SplitComparison {
-  singleVenueRoute: 'SDEX' | 'AMM'
-  singleVenueOutput: number
-  singleVenueEffectivePrice: number
-  singleVenueSlippagePct: number
-  outputImprovement: number
-  outputImprovementPct: number
-}
-
-export interface SplitProvenance {
-  venues: string[]
-  samples: number
-  asOf: string
+export interface RouteProvenance {
+  sampledAt: string
+  network: string
+  venuesQueried: string[]
+  sampleCount: number
   freshnessSeconds: number | null
 }
 
-export interface SplitRecommendation {
-  splitRecommended: boolean
-  assetA: string
-  assetB: string
-  pairKey: string
-  network: string
-  amount: number
-  reason?: string
-  message: string
-  proportions?: {
-    SDEX: number
-    AMM: number
-  }
-  allocations?: SplitVenueAllocation[]
-  estimatedOutput?: number
-  effectivePrice?: number
-  slippagePct?: number
-  singleVenue?: {
-    route: 'SDEX' | 'AMM'
-    output: number
-    price: number
-    slippagePct: number
-  }
-  comparison?: SplitComparison
-  provenance: SplitProvenance
-  error?: string
-}
-
 export interface RouteInfo {
-  route: 'SDEX' | 'AMM' | 'SPLIT' | 'UNKNOWN'
+  route: 'SDEX' | 'AMM' | 'SPLIT' | 'MULTI_HOP' | 'UNKNOWN'
   sdexPrice: number
   ammPrice: number
   estimatedOutput: number
   slippagePct: number
   recommendation: string
-  split?: SplitRecommendation
+  network?: string
+  hops?: RouteHop[]
+  comparison?: {
+    direct: {
+      route: 'SDEX' | 'AMM' | 'SPLIT' | 'UNKNOWN'
+      sdexPrice: number
+      ammPrice: number
+      estimatedOutput: number
+      slippagePct: number
+    }
+    multiHop: RouteOption | null
+  }
+  provenance?: RouteProvenance
 }
 
 export interface WatchedPair {
