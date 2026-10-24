@@ -15,10 +15,11 @@ import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
-import { venueAdapters, startVenueAdapter } from './ingest/venues'
+import { venueAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
 import { startSnapshotIngester } from './ingesters/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
 import {
   createPricePointsPartitionQueue,
   startPricePointsPartitionWorker,
@@ -167,6 +168,37 @@ async function main() {
     }
   }
 
+  // ── Lending rate retention ────────────────────────────────────────────────
+  const safeRatePrune = async () => {
+    try {
+      const counts = await pruneAllRateNetworks()
+      for (const [network, pruned] of Object.entries(counts)) {
+        if (pruned > 0) {
+          log.info({ network, pruned, retentionDays: RATE_RETENTION_DAYS }, 'pruned old lending rates')
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'lending rate prune failed')
+    }
+  }
+
+  await safeRatePrune()
+
+  {
+    let rateRetentionQueue: ReturnType<typeof createRateRetentionQueue> | undefined
+    let rateRetentionWorker: ReturnType<typeof startRateRetentionWorker> | undefined
+    try {
+      rateRetentionQueue = createRateRetentionQueue()
+      rateRetentionWorker = startRateRetentionWorker()
+      await scheduleRateRetention(rateRetentionQueue)
+      log.info('lending rate retention worker started')
+    } catch (err) {
+      log.warn({ err }, 'lending rate retention worker unavailable; falling back to hourly in-process prune')
+      await Promise.allSettled([rateRetentionQueue?.close(), rateRetentionWorker?.close()])
+      setInterval(() => { void safeRatePrune() }, 60 * 60 * 1000).unref()
+    }
+  }
+
   // ── Price points partition maintenance & retention ────────────────────────
   // price_points is range-partitioned by timestamp. We pre-create future partitions
   // ahead of need so ingesters never fail on unmapped timestamp ranges. Dropping
@@ -260,6 +292,7 @@ async function main() {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))
+    restartIngester('Blend', network, () => startBlendIngester(network))
 
     // The publisher is the one loop in this process that writes to a chain, so
     // it is started on its own per-network switch rather than alongside the

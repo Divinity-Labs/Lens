@@ -50,6 +50,32 @@ export const price_snapshots_total = new Counter({
   registers: [register]
 })
 
+export const blend_pool_errors_total = new Counter({
+  name: 'blend_pool_errors_total',
+  help: 'Total number of Blend pool read failures',
+  labelNames: ['pool', 'network'],
+  registers: [register],
+})
+
+export const blend_rates_ingested_total = new Counter({
+  name: 'blend_rates_ingested_total',
+  help: 'Total number of Blend pool rate records ingested',
+  labelNames: ['pool', 'network'],
+  registers: [register],
+})
+
+export const ingester_abandoned_cycles_total = new Counter({
+  name: 'ingester_abandoned_cycles_total',
+  help: 'Total number of ingester cycles abandoned after exceeding their per-cycle deadline',
+  // `venue` is the ingester loop's own name (SDEX, AMM, Soroswap, Aquarius,
+  // Snapshot) — a bounded set hard-coded in the adapter registry, exactly like
+  // the network factor above. Together they give `venues x networks` series:
+  // this is the label #351 asks for, so an on-call can tell WHICH loop is
+  // stalling on WHICH network without an unbounded dimension ever appearing.
+  labelNames: ['venue', 'network'],
+  registers: [register]
+})
+
 export const price_points_pruned_total = new Counter({
   name: 'price_points_pruned_total',
   help: 'Total number of old price points pruned from the database',
@@ -138,6 +164,13 @@ export const last_trade_timestamp = new Gauge({
   help: 'Unix timestamp of the last trade ingested for a pair',
   labelNames: ['pair', 'network'],
   registers: [register]
+})
+
+export const horizon_rate_limit_remaining = new Gauge({
+  name: 'horizon_rate_limit_remaining',
+  help: 'Remaining Horizon API requests in the current rate-limit window',
+  labelNames: ['network'],
+  registers: [register],
 })
 
 // Ingestion health is labelled only by the finite adapter registry and the

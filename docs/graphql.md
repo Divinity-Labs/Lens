@@ -13,6 +13,7 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
    - [`etBestRoute`](#2-getbestroute)
    - [`getPriceHistory`](#3-getpricehistory)
    - [`listPairs`](#4-listpairs)
+   - [`screener`](#5-screener)
 4. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
@@ -69,6 +70,7 @@ type Query {
   getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
   getPriceHistory(assetA: String!, assetB: String!, window: String!, from: String, to: String, limit: Int): [PriceBucket]
   listPairs: [String]!
+  screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
 }
 
 type Subscription {
@@ -361,6 +363,92 @@ curl -s -X POST http://localhost:3002/graphql \
   }
 }
 ```
+
+---
+
+### 5. `screener`
+
+Screens tracked pairs by volume, 24-hour change, price and AMM liquidity,
+with cursor pagination. It shares its implementation with the REST
+`GET /screener` route: same filters, same sort fields, same cursor semantics
+and the same `[1, 100]` limit clamp (never rejected).
+
+#### Arguments
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `filters` | `ScreenerFilters` | none | Numeric filters (`volume`, `change24hMin`, `change24hMax`, `priceMin`, `priceMax`, `liquidity`); omitted fields do not filter. Each numeric filter is a lower/upper bound as its name says. |
+| `sortBy` | `String` | `"volume"` | One of `volume`, `change_24h`, `price`, `liquidity`. |
+| `order` | `ScreenerSortOrder` | `DESC` | `ASC` or `DESC`. |
+| `cursor` | `String` | none | Opaque `nextCursor` from the previous page. |
+| `limit` | `Int` | `20` | Page size, clamped to `[1, 100]`. |
+
+> [!IMPORTANT]
+> **`market_cap` is rejected, not ignored.** Lens has no circulating supply
+data to compute a market cap from. Both the `marketCap` filter and
+> `sortBy: "market_cap"` fail the query with an `UNSUPPORTED_PARAMETER` /
+> `INVALID_INPUT` error carrying the same explanation REST gives — never a
+> silent null. Use `liquidity` instead.
+
+#### Query Definition
+```graphql
+query ScreenPairs($filters: ScreenerFilters, $sortBy: String, $limit: Int) {
+  screener(filters: $filters, sortBy: $sortBy, limit: $limit) {
+    network
+    hasMore
+    nextCursor
+    rows {
+      pairKey
+      volume
+      price
+      change24h
+      liquidity
+      liquidityUnit
+    }
+  }
+}
+```
+
+#### Runnable `curl` Command
+[```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query ScreenPairs($filters: ScreenerFilters, $sortBy: String, $limit: Int) { screener(filters: $filters, sortBy: $sortBy, limit: $limit) { network hasMore nextCursor rows { pairKey volume price change24h liquidity liquidityUnit } } }",
+    "variables": {
+      "filters": { "volume": 1000, "change24hMin": -10 },
+      "sortBy": "liquidity",
+      "limit": 5
+    }
+  }'
+```]
+
+#### Example Response
+```json
+{
+  "data": {
+    "screener": {
+      "network": "testnet",
+      "hasMore": true,
+      "nextCursor": "eyJib2x1bWUiOjUwMDAwfQ==",
+      "rows": [
+        {
+          "pairKey": "XLM/USDC",
+          "volume": 1425000.5,
+          "price": 0.1245,
+          "change24h": 1.25,
+          "liquidity": 83000.4,
+          "liquidityUnit": "USDC"
+        }
+      ]
+    }
+  }
+}
+```
+
+To fetch the next page, pass the previous response's `nextCursor` back as the
+`cursor` argument. `nextCursor` is `null` on the last page; `hasMore` reports
+whether another page exists.
 
 ---
 

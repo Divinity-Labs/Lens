@@ -62,7 +62,7 @@ TWAP and VWAP computations apply statistical filtering to reject manipulation sp
 - **TWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L8) to [`1440`](../src/routes/price.ts#L9) minutes (default [`60`](../src/routes/price.ts#L10) minutes). Sample intervals range from [`1`](../src/routes/price.ts#L11) to [`3600`](../src/routes/price.ts#L12) seconds (default [`60`](../src/routes/price.ts#L13) seconds).
 - **VWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L15) to [`1440`](../src/routes/price.ts#L16) minutes (default [`60`](../src/routes/price.ts#L17) minutes).
 - **Price History Limits**: Bucket count is capped at [`1000`](../src/api/rest.ts#L25) buckets (default [`100`](../src/api/rest.ts#L24) buckets).
-- **Screener Pair Limits**: Pair count defaults to [`20`](../src/routes/screener.ts#L22) and is clamped between [`1`](../src/routes/screener.ts#L33) and [`100`](../src/routes/screener.ts#L23).
+- **Screener Pair Limits**: Pair count defaults to [`20`](../src/services/screener.ts#L16) and is clamped between [`1`](../src/services/screener.ts#L109) and [`100`](../src/services/screener.ts#L17).
 - **Spread Observations**: Venues must quote at least [`2`](../src/routes/spreads.ts#L20) observations in the window to report a spread.
 - **Violation Behavior**: Inputs outside allowed ranges trigger HTTP [`400`](../src/routes/price.ts#L55) Bad Request with validation details.
 
@@ -144,8 +144,8 @@ When a data quality guarantee is breached, Lens behaves deterministically:
 | `vwap_window_default` | [`60`](../src/routes/price.ts#L17) | minutes | [`src/routes/price.ts:17`](../src/routes/price.ts#L17) | Default VWAP window |
 | `history_default_limit` | [`100`](../src/api/rest.ts#L24) | buckets | [`src/api/rest.ts:24`](../src/api/rest.ts#L24) | Default bucket limit for historical aggregates |
 | `history_max_limit` | [`1000`](../src/api/rest.ts#L25) | buckets | [`src/api/rest.ts:25`](../src/api/rest.ts#L25) | Upper ceiling for historical aggregates |
-| `screener_default_limit` | [`20`](../src/routes/screener.ts#L22) | pairs | [`src/routes/screener.ts:22`](../src/routes/screener.ts#L22) | Default limit of pairs returned by screener |
-| `screener_max_limit` | [`100`](../src/routes/screener.ts#L23) | pairs | [`src/routes/screener.ts:23`](../src/routes/screener.ts#L23) | Maximum clamped limit of pairs returned by screener |
+| `screener_default_limit` | [`20`](../src/services/screener.ts#L16) | pairs | [`src/services/screener.ts:16`](../src/services/screener.ts#L16) | Default limit of pairs returned by screener |
+| `screener_max_limit` | [`100`](../src/services/screener.ts#L17) | pairs | [`src/services/screener.ts:17`](../src/services/screener.ts#L17) | Maximum clamped limit of pairs returned by screener |
 | `spread_min_observations` | [`2`](../src/routes/spreads.ts#L20) | observations | [`src/routes/spreads.ts:20`](../src/routes/spreads.ts#L20) | Minimum observations required before a venue spread is reported |
 | `registered_venues_count` | [`6`](../src/ingest/venues/index.ts#L23) | adapters | [`src/ingest/venues/index.ts:23`](../src/ingest/venues/index.ts#L23) | Total number of registered venue adapters |
 | `database_price_precision` | [`36`](../prisma/schema.prisma#L20) | digits | [`prisma/schema.prisma:20`](../prisma/schema.prisma#L20) | Total numeric precision in PostgreSQL decimal columns |

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { sendInternalError } from '../errors'
+import { isAggregatorVenue } from '../ingest/venues'
 
 // Supported windows → lookback in hours.
 const WINDOW_HOURS = {
@@ -20,10 +21,15 @@ const WINDOWS = Object.keys(WINDOW_HOURS) as VolumeWindow[]
  * GET /volumes/:asset?window=24h|7d|30d&network=testnet|mainnet
  *
  * Sums traded volume for `asset` across every pair it appears in and across all
- * venues (SDEX, AMM, …) over the requested window. Volume is measured in the
- * asset's own units: when it is the base asset of a pair we count `base_volume`,
- * when it is the counter asset we count `counter_volume`. The response breaks the
- * total down per venue and also returns the cross-venue sum.
+ * venues (SDEX, AMM, Soroswap, Aquarius, …) over the requested window. Volume is
+ * measured in the asset's own units: when it is the base asset of a pair we count
+ * `base_volume`, when it is the counter asset we count `counter_volume`.
+ *
+ * Venues are classified as either primary markets (e.g. SDEX, AMM, Soroswap) or
+ * aggregators (e.g. Aquarius) that route trades through underlying primary venues.
+ * To prevent double-counting of trades, the response reports labelled net totals
+ * (summed across primary venues) and gross totals (including aggregators), alongside
+ * a per-venue breakdown.
  *
  * Only one network's rows are summed: testnet and mainnet volume added together
  * is not a volume of anything. `network` defaults to this process's own network,
@@ -73,7 +79,9 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
               AND timestamp >= $3
          ),
          venue_totals AS (
-           SELECT source, SUM(volume)::float8 AS volume
+           SELECT source,
+                  SUM(volume)::float8 AS volume,
+                  (COUNT(*) FILTER (WHERE volume > 0))::int AS trade_count
              FROM asset_trades
             GROUP BY source
          ),
@@ -92,10 +100,11 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
          ),
          venue_summary AS (
            SELECT COALESCE(jsonb_object_agg(source, volume) FILTER (WHERE volume > 0), '{}'::jsonb) AS by_venue,
-                  COALESCE(jsonb_agg(source ORDER BY source) FILTER (WHERE volume > 0), '[]'::jsonb) AS venues
+                  COALESCE(jsonb_agg(source ORDER BY source) FILTER (WHERE volume > 0), '[]'::jsonb) AS venues,
+                  COALESCE(jsonb_object_agg(source, trade_count) FILTER (WHERE volume > 0), '{}'::jsonb) AS trade_count_by_venue
              FROM venue_totals
          )
-         SELECT trade_stats.*, venue_summary.by_venue, venue_summary.venues
+         SELECT trade_stats.*, venue_summary.by_venue, venue_summary.venues, venue_summary.trade_count_by_venue
            FROM trade_stats CROSS JOIN venue_summary`,
         [asset, network, startTime],
       )
@@ -116,16 +125,44 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
           ? 'no_positive_volume'
           : 'ok'
 
+      // Net excludes aggregator venues, which re-report trades that already
+      // settled on a primary market; gross is everything observed. The
+      // distribution statistics above (median, HHI, status) stay on gross.
+      const byVenue: Record<string, number> = row.by_venue ?? {}
+      const tradesByVenue: Record<string, number> = row.trade_count_by_venue ?? {}
+      let aggregatorVolume = 0
+      let aggregatorTradeCount = 0
+      for (const [source, volume] of Object.entries(byVenue)) {
+        if (!isAggregatorVenue(source)) continue
+        aggregatorVolume += Number(volume) || 0
+        aggregatorTradeCount += Number(tradesByVenue[source]) || 0
+      }
+      const grossVolume = totalVolume
+      const grossTradeCount = tradeCount
+      const netVolume = Math.max(0, grossVolume - aggregatorVolume)
+      const netTradeCount = Math.max(0, grossTradeCount - aggregatorTradeCount)
+
       return {
         asset,
         network,
         window,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        totalVolume,
-        byVenue: row.by_venue ?? {},
+        // Labelled net and gross totals to eliminate aggregator double-counting.
+        totals: {
+          net: netVolume,
+          gross: grossVolume,
+        },
+        netVolume,
+        grossVolume,
+        // Backward-compatible alias for net volume.
+        totalVolume: netVolume,
+        // Per-venue breakdown that the totals are summed from.
+        byVenue,
         venues: row.venues ?? [],
-        tradeCount,
+        tradeCount: netTradeCount,
+        netTradeCount,
+        grossTradeCount,
         medianTradeSize: row.median_trade_size == null ? null : Number(row.median_trade_size),
         topTradeVolumeShare: row.top_trade_volume_share == null ? null : Number(row.top_trade_volume_share),
         volumeConcentration: row.volume_concentration == null ? null : Number(row.volume_concentration),
@@ -133,7 +170,7 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
         status,
         provenance: {
           venues: row.venues ?? [],
-          sampleCount: tradeCount,
+          sampleCount: grossTradeCount,
           observedSampleCount,
           latestTradeAt,
           dataAgeSeconds,

@@ -169,7 +169,14 @@ describe('ingestPool', () => {
   }
 
   beforeEach(() => {
+    // `clearAllMocks` clears calls but leaves implementations in place, so the
+    // `mockRejectedValue` set by the "does not throw when upsertPricePoints
+    // rejects" case below would otherwise survive into whichever test runs
+    // next. Under a shuffled run that poisons this test (upsertPricePoints
+    // rejects, ingestPool bails early, dispatchPriceUpdate is never called),
+    // so re-establish the default resolution every time.
     vi.clearAllMocks()
+    ;(upsertPricePoints as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
     // clearAllMocks resets call history but not implementations, so restore the
     // default resolved behavior each test starts from. Without this, a prior
     // test's mockRejectedValue could survive into the next one under shuffled

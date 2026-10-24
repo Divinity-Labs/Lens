@@ -75,9 +75,24 @@ model LendingRate {
   ledger      Int
   timestamp   DateTime
 
+  // Reserve state behind the two rates above, written by the Blend ingester.
+  // Nullable because a venue that publishes only rates has nothing to put here.
+  /// Contract id of the asset (Stellar Asset Contract for classic assets).
+  assetAddress  String?  @map("asset_address")
+  /// Annual rates before compounding, as fractions; supplyRate/borrowRate are the APYs.
+  supplyApr     Decimal? @map("supply_apr") @db.Decimal(18, 8)
+  borrowApr     Decimal? @map("borrow_apr") @db.Decimal(18, 8)
+  /// Borrowed / supplied, as a fraction (0.5 == 50%).
+  utilization   Decimal? @db.Decimal(18, 8)
+  totalSupply   Decimal? @map("total_supply") @db.Decimal(36, 7)
+  totalBorrowed Decimal? @map("total_borrowed") @db.Decimal(36, 7)
+  /// Liquidity left to borrow (totalSupply - totalBorrowed).
+  reserves      Decimal? @db.Decimal(36, 7)
+
   @@id([id, timestamp])
   @@index([network, asset, timestamp(sort: Desc)])
   @@index([network, asset, venue, timestamp(sort: Desc)])
+  @@index([network, poolId, asset, timestamp(sort: Desc)])
   @@map("lending_rates")
 }
 

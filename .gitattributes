@@ -17,3 +17,6 @@
 # because the file is a generated artifact and the four guards above all learned
 # this the hard way.
 *.sql text eol=lf
+# README.md holds the generated venue and endpoint tables, which
+# tests/readme.test.ts compares against generate-readme.ts output (always LF).
+README.md text eol=lf

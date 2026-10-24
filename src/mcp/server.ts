@@ -537,11 +537,6 @@ export class BazaarMcpServer {
 
           const hasResources = (d: unknown): d is { resources: unknown[] } => 
             typeof d === 'object' && d !== null && 'resources' in d && Array.isArray((d as Record<string, unknown>).resources);
-
-          if ((Array.isArray(data) && data.length === 0) || (hasResources(data) && data.resources.length === 0)) {
-            return this.createErrorResponse('ERR_NO_RESULTS', 'No resources found');
-          }
-
           return this.createBoundedResult(data, {
             maxBytes: this.limits.maxResultBytes,
             maxItems: page.limit,

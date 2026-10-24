@@ -13,6 +13,16 @@ import { parseAssetStr, getActivePairs } from '../pairsRegistry'
 import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
 import { compareOracles } from '../services/oracleComparison'
+import {
+  ALLOWED_SORT_FIELDS,
+  MARKET_CAP_CODE,
+  MARKET_CAP_UNSUPPORTED,
+  runScreener,
+  ScreenerCursorError,
+  ScreenerSortError,
+  SCREENER_DEFAULT_LIMIT,
+  SCREENER_MAX_LIMIT,
+} from '../services/screener'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
 import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
@@ -28,8 +38,14 @@ const WINDOW_SECONDS: Record<string, number> = {
 const PRICE_TOPIC = 'PRICE_UPDATED'
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
-// unexpected internal failure and masked.
-const USER_FACING_CODES = new Set(['INVALID_INPUT', 'PAIR_NOT_FOUND', 'UNAUTHORIZED'])
+// unexpected internal failure and masked. UNSUPPORTED_PARAMETER carries the
+// screener's market_cap rejection (shared with the REST route).
+const USER_FACING_CODES = new Set([
+  'INVALID_INPUT',
+  'PAIR_NOT_FOUND',
+  'UNAUTHORIZED',
+  'UNSUPPORTED_PARAMETER',
+])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
 function isUserFacing(err: GraphQLError): boolean {
@@ -163,6 +179,58 @@ export const schema = `
     oracles: [OracleSource!]!
   }
 
+  """
+  Sort order for the \`screener\` query.
+  """
+  enum ScreenerSortOrder {
+    ASC
+    DESC
+  }
+
+  """
+  Filters for the \`screener\` query — the same filters REST GET /screener
+  accepts. Every field is optional; an omitted field does not filter.
+
+  \`marketCap\` is declared only so it can be rejected with an explanation,
+  mirroring the REST route: Lens has no circulating supply data to compute a
+  market cap from. Passing it fails the query with UNSUPPORTED_PARAMETER
+  rather than being silently ignored.
+  """
+  input ScreenerFilters {
+    volume: Float
+    change24hMin: Float
+    change24hMax: Float
+    priceMin: Float
+    priceMax: Float
+    liquidity: Float
+    marketCap: Float
+  }
+
+  """
+  One row of screener results. \`liquidityUnit\` is the quote asset of
+  \`pairKey\`; liquidity is summed AMM reserve value denominated in it.
+  """
+  type ScreenerRow {
+    pairKey: String!
+    volume: Float!
+    price: Float!
+    change24h: Float!
+    liquidity: Float!
+    liquidityUnit: String!
+  }
+
+  """
+  One page of screener results, cursor-paginated exactly like REST
+  GET /screener: pass \`nextCursor\` back as \`cursor\` for the following page;
+  it is null on the last page. \`hasMore\` reports whether another page exists.
+  """
+  type ScreenerPage {
+    network: String!
+    rows: [ScreenerRow!]!
+    nextCursor: String
+    hasMore: Boolean!
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -201,6 +269,25 @@ export const schema = `
     The network argument defaults to the active network.
     """
     oracle(asset: String!, network: String): OracleComparison
+    """
+    The pair screener: filter, sort and cursor-paginate tracked pairs. Shares
+    its implementation, filters, sort fields and cursor pagination with REST
+    GET /screener, and resolves against the active network.
+
+    - \`sortBy\` accepts the REST route's fields: volume, change_24h, price,
+      liquidity. Sorting on \`market_cap\` fails with the same explanation REST
+      gives (UNSUPPORTED_PARAMETER is reserved for the \`marketCap\` filter):
+      Lens has no circulating supply data to compute it from.
+    - \`limit\` is clamped to [1, ${SCREENER_MAX_LIMIT}] like REST, never
+      rejected.
+    """
+    screener(
+      filters: ScreenerFilters
+      sortBy: String = "volume"
+      order: ScreenerSortOrder = DESC
+      cursor: String
+      limit: Int = ${SCREENER_DEFAULT_LIMIT}
+    ): ScreenerPage!
   }
 
   type Subscription {
@@ -378,6 +465,186 @@ const resolvers = {
         high: r.high_price,
         low: r.low_price,
       }))
+    },
+
+    listPairs() {
+      return getActivePairs().map(p => p.pairKey)
+    },
+
+    async pairs() {
+      const activePairs = getActivePairs()
+      if (activePairs.length === 0) {
+        return []
+      }
+
+      const result = await pgPool.query(
+        `SELECT p.pair_key, l.price, l.timestamp
+           FROM unnest($2::text[]) AS p(pair_key)
+          CROSS JOIN LATERAL (
+                SELECT price, timestamp
+                  FROM price_points
+                 WHERE network = $1
+                   AND pair_key = p.pair_key
+                 ORDER BY timestamp DESC
+                 LIMIT 1
+               ) l`,
+        [activeNetwork, activePairs.map(p => p.pairKey)]
+      )
+
+      const latestPrices = new Map<string, { price: number; timestamp: Date }>()
+      result.rows.forEach(row => {
+        latestPrices.set(row.pair_key, {
+          price: parseFloat(row.price),
+          timestamp: row.timestamp,
+        })
+      })
+
+      return activePairs.map(p => {
+        const latest = latestPrices.get(p.pairKey)
+        return {
+          pairKey: p.pairKey,
+          network: activeNetwork,
+          assetA: p.assetA,
+          assetB: p.assetB,
+          latestPrice: latest?.price ?? null,
+          lastUpdated: latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp.toISOString() : new Date(latest.timestamp).toISOString()) : null,
+        }
+      })
+    },
+
+    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
+      if (network != null && network !== 'testnet' && network !== 'mainnet') {
+        throw new ErrorWithProps('network must be one of: testnet, mainnet', {
+          code: 'INVALID_INPUT',
+          field: 'network',
+        })
+      }
+      const comparison = await compareOracles(
+        asset.toUpperCase(),
+        (network ?? activeNetwork) as NetworkName,
+        oracleAdapters
+      )
+      if (!comparison) return null
+      return {
+        ...comparison,
+        oracles: comparison.oracles.map(o => ({ ...o, status: o.status.toUpperCase() })),
+      }
+    },
+
+    async screener(
+      _: unknown,
+      {
+        filters,
+        sortBy,
+        order,
+        cursor,
+        limit,
+      }: {
+        filters?: {
+          volume?: number | null
+          change24hMin?: number | null
+          change24hMax?: number | null
+          priceMin?: number | null
+          priceMax?: number | null
+          liquidity?: number | null
+          marketCap?: number | null
+        } | null
+        sortBy?: string | null
+        order?: 'ASC' | 'DESC' | null
+        cursor?: string | null
+        limit?: number | null
+      }
+    ) {
+      // market_cap is rejected with the same explanation REST gives, rather
+      // than being quietly ignored: the `marketCap` filter exists only to be
+      // refused, and `sortBy: "market_cap"` gets the same treatment below.
+      if (filters?.marketCap != null) {
+        throw new ErrorWithProps(MARKET_CAP_UNSUPPORTED, {
+          code: MARKET_CAP_CODE,
+          field: 'marketCap',
+        })
+      }
+      // Mirrors REST: sortBy is a validated string parameter, so an invalid
+      // value (market_cap included) is an input error carrying the
+      // market_cap explanation when that is the reason.
+      const sortField = sortBy ?? 'volume'
+      if (sortField === 'market_cap') {
+        throw new ErrorWithProps(MARKET_CAP_UNSUPPORTED, {
+          code: 'INVALID_INPUT',
+          field: 'sortBy',
+        })
+      }
+      if (!(ALLOWED_SORT_FIELDS as readonly string[]).includes(sortField)) {
+        throw new ErrorWithProps(`sortBy must be one of: ${ALLOWED_SORT_FIELDS.join(', ')}`, {
+          code: 'INVALID_INPUT',
+          field: 'sortBy',
+        })
+      }
+      try {
+        // Filtering, sorting, cursor pagination and the limit clamp are the
+        // REST route's implementation (src/services/screener.ts); this layer
+        // only maps GraphQL naming (camelCase) onto it. The network is the
+        // active one, matching every other GraphQL query here.
+        const page = await runScreener({
+          network: activeNetwork,
+          filters: {
+            volume: filters?.volume ?? undefined,
+            change_24h_min: filters?.change24hMin ?? undefined,
+            change_24h_max: filters?.change24hMax ?? undefined,
+            price_min: filters?.priceMin ?? undefined,
+            price_max: filters?.priceMax ?? undefined,
+            liquidity: filters?.liquidity ?? undefined,
+          },
+          sortBy: sortField,
+          order: order?.toLowerCase() ?? 'desc',
+          cursor,
+          limit: limit ?? SCREENER_DEFAULT_LIMIT,
+        })
+        return {
+          network: page.network,
+          rows: page.data.map(row => ({
+            pairKey: row.pair_key,
+            volume: row.volume,
+            price: row.price,
+            change24h: row.change_24h,
+            liquidity: row.liquidity,
+            liquidityUnit: row.liquidity_unit,
+          })),
+          nextCursor: page.nextCursor,
+          hasMore: page.hasMore,
+        }
+      } catch (error) {
+        if (error instanceof ScreenerCursorError || error instanceof ScreenerSortError) {
+          throw new ErrorWithProps(error.message, {
+            code: 'INVALID_INPUT',
+            field: error instanceof ScreenerCursorError ? 'cursor' : 'sortBy',
+          })
+        }
+        throw error
+      }
+    },
+  },
+
+  Subscription: {
+    priceUpdated: {
+      subscribe: withFilter<
+        { priceUpdated: PricePublishedEvent },
+        unknown,
+        MercuriusContext,
+        { pair: string; network?: string | null }
+      >(
+        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
+        // Both loops publish to one topic, so the network filter has to happen
+        // here. Omitting `network` keeps every chain — the message carries its
+        // own `network` field, so the subscriber can still tell them apart.
+        (payload, { pair, network }) =>
+          payload.priceUpdated.pair === pair &&
+          // == null, not === undefined: a client that passes the variable
+          // explicitly sends null rather than omitting it, and both mean
+          // "every network". Comparing against undefined alone would filter
+          // out every message for those clients.
+          (network == null || payload.priceUpdated.network === network)
+      ),
     },
   },
 }
