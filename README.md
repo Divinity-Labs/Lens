@@ -92,6 +92,7 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | Method | Path | Description |
 |---|---|---|
 | GET | `/venues/registry` | List registered venues and their network liveness |
+| GET | `/venues` | Venue Share of Volume |
 | GET | `/live` | Liveness probe — no dependency checks (see [`docs/health.md`](docs/health.md)) |
 | GET | `/tvl` | Total Value Locked across Stellar DeFi venues |
 | GET | `/ready` | Readiness probe — boot complete + dependencies reachable |
