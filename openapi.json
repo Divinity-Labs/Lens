@@ -2904,6 +2904,9 @@
       }
     },
     "responses": {
+      "BadRequest": {
+        "description": "Invalid parameters"
+      },
       "PaymentRequired": {
         "description": "Payment Required",
         "content": {
