@@ -118,6 +118,7 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/screener?sortBy=volume&order=desc&limit=20` | Screen pairs by volume, 24h change, liquidity and price |
 | GET | `/movers` | Get biggest gainers, biggest losers, and volume movers |
 | GET | `/benchmark/:asset?target=USD` | Peg-deviation statistics versus a target |
+| GET | `/pegs?network=testnet` | Comparative peg deviation (current and worst in bps) and provenance across all configured pegged assets |
 | GET | `/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4` | Weighted price of a basket of assets |
 | GET | `/correlation` | Compute price correlation matrix across a basket of assets over a window |
 | GET | `/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=` | Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md)) |

@@ -118,6 +118,10 @@ export const ENDPOINT_METADATA: Record<string, { displayPath?: string; descripti
     displayPath: '/benchmark/:asset?target=USD',
     description: 'Peg-deviation statistics versus a target',
   },
+  'GET /pegs': {
+    displayPath: '/pegs?network=testnet',
+    description: 'Comparative peg deviation (current and worst in bps) and provenance across all configured pegged assets',
+  },
   'GET /basket': {
     displayPath: '/basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4',
     description: 'Weighted price of a basket of assets',

@@ -868,6 +868,62 @@ export const snapshotResponseSchema = {
   },
 } as const
 
+/** GET /pegs */
+export const pegsResponseSchema = {
+  type: 'object',
+  required: ['network', 'pegs'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    pegs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: [
+          'asset',
+          'code',
+          'issuer',
+          'target',
+          'targetPrice',
+          'pairKey',
+          'currentPrice',
+          'currentDeviationBps',
+          'worstDeviationBps',
+          'window',
+          'provenance',
+        ],
+        additionalProperties: false,
+        properties: {
+          asset: { type: 'string' },
+          code: { type: 'string' },
+          issuer: { type: ['string', 'null'] },
+          target: { type: 'string' },
+          targetPrice: { type: 'number' },
+          pairKey: { type: ['string', 'null'] },
+          currentPrice: { type: ['number', 'null'] },
+          currentDeviationBps: { type: ['number', 'null'] },
+          worstDeviationBps: { type: ['number', 'null'] },
+          window: { type: 'string' },
+          provenance: {
+            type: 'object',
+            required: ['venues', 'sampleCount', 'freshnessSeconds', 'lastSampleTimestamp'],
+            additionalProperties: false,
+            properties: {
+              venues: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              sampleCount: { type: 'integer' },
+              freshnessSeconds: { type: ['integer', 'null'] },
+              lastSampleTimestamp: { type: ['string', 'null'] },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const
+
 /**
  * Install response-shape validation on a Fastify instance.
  *

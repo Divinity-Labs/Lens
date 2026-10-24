@@ -9,6 +9,17 @@ const log = createLogger('config')
 
 export type NetworkName = 'testnet' | 'mainnet'
 
+export interface PeggedAssetConfig {
+  /** The pegged asset (e.g. USDC, EURC, etc.) */
+  asset: AssetId
+  /** The target code or asset it is pegged to (e.g. "USD", "EUR") */
+  target: string
+  /** The explicit numeric target price against target (e.g. 1.0) */
+  targetPrice: number
+  /** Lookback window in hours for rolling worst deviation (default: 24) */
+  windowHours?: number
+}
+
 /** Per-network configuration block. */
 export interface NetworkConfig {
   horizon: {
@@ -96,6 +107,8 @@ export interface NetworkConfig {
   }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
+  /** Configured pegged assets for this network. */
+  pegged: PeggedAssetConfig[]
   routing: {
     /** Maximum hop depth for multi-hop routing (default: 3) */
     maxHops: number
@@ -194,6 +207,42 @@ function parseWatchedPairs(raw: string): WatchedPair[] {
     const assetA = parseAsset(a)
     const assetB = parseAsset(b)
     return { assetA, assetB, pairKey: makePairKey(assetA, assetB) }
+  })
+}
+
+// ── Pegged assets parsing ───────────────────────────────────────────────────
+
+export function parsePeggedAssets(raw: string): PeggedAssetConfig[] {
+  if (!raw.trim()) return []
+  return raw.split(',').map(entry => {
+    // format: ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]
+    // e.g. "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN=USD:1.0"
+    const [assetStr, targetDef] = entry.trim().split('=')
+    if (!assetStr || !targetDef) {
+      throw new Error(
+        `Invalid pegged asset format: "${entry}". Expected "ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]"`
+      )
+    }
+    const asset = parseAsset(assetStr)
+    const targetParts = targetDef.split(':')
+    const target = targetParts[0]?.trim().toUpperCase()
+    const rawTargetPrice = targetParts[1]?.trim()
+    if (!target || !rawTargetPrice) {
+      throw new Error(
+        `Invalid pegged asset format: "${entry}". Expected "ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]"`
+      )
+    }
+    const targetPrice = Number(rawTargetPrice)
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      throw new Error(`Invalid target price in pegged asset: "${entry}"`)
+    }
+    const windowHours = targetParts[2] ? parseInt(targetParts[2], 10) : undefined
+    return {
+      asset,
+      target,
+      targetPrice,
+      windowHours: windowHours && !isNaN(windowHours) && windowHours > 0 ? windowHours : 24,
+    }
   })
 }
 
@@ -444,6 +493,12 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (network === 'testnet' ? process.env.WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
 
+  // ── Pegged assets ─────────────────────────────────────────────────────────
+  const rawPegged =
+    process.env[`PEGGED_ASSETS_${suffix}`] ??
+    process.env.PEGGED_ASSETS ??
+    ''
+
   // ── Multi-hop Routing ───────────────────────────────────────────────────
   const maxHopsRaw =
     process.env[`ROUTING_MAX_HOPS_${suffix}`] ||
@@ -509,6 +564,7 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
       secretKey: sep40SecretKey,
     },
     pairs: parseWatchedPairs(rawPairs),
+    pegged: parsePeggedAssets(rawPegged),
     routing: { maxHops, intermediates },
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
@@ -682,6 +738,7 @@ export const config = {
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
   get blend()    { return resolveNetwork(activeNetwork).blend },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
+  get pegged()   { return resolveNetwork(activeNetwork).pegged },
   get routing()  { return resolveNetwork(activeNetwork).routing },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 
