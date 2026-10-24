@@ -86,8 +86,8 @@ export async function queryHistory(
   const result = await pgPool.query(
     `SELECT
        to_timestamp(floor(EXTRACT(EPOCH FROM ts) / $1) * $1) AS bucket,
-       (array_agg(price::float ORDER BY ts DESC))[1] AS price,
-       SUM(volume::float) AS volume
+       (array_agg(price::numeric ORDER BY ts DESC))[1] AS price,
+       SUM(volume::numeric) AS volume
      FROM price_snapshots
      WHERE pair = $2 AND network = $5
        AND ts >= $3
