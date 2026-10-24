@@ -3,6 +3,7 @@ import { price_requests_total } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
+import { getSplitRecommendation } from '../aggregator/splitRoute'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
 import { isAdminConfigured } from './auth'
@@ -12,6 +13,7 @@ import {
   statusErrorResponseSchema,
   priceResponseSchema,
   routeResponseSchema,
+  splitResponseSchema,
   historyResponseSchema,
   poolsResponseSchema,
   depthResponseSchema,
@@ -268,6 +270,29 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         }
       }
       return routeInfo
+    }
+  )
+
+  // GET /price/:assetA/:assetB/split?amount=1000
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { amount?: string; network?: NetworkName }
+  }>(
+    '/price/:assetA/:assetB/split',
+    { schema: { response: { 200: splitResponseSchema } } },
+    async (req, reply) => {
+      const { assetA, assetB } = req.params
+      const amount = parseFloat(req.query.amount ?? '1000')
+      const network = req.network ?? activeNetwork
+      const pair = findPair(assetA, assetB, network)
+      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
+
+      const result = await getSplitRecommendation(pair.assetA, pair.assetB, pair.pairKey, amount, network)
+      if (result.error) {
+        return reply.status(404).send({ error: result.error })
+      }
+      return result
     }
   )
 
