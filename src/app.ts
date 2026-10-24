@@ -5,7 +5,7 @@ import compress from '@fastify/compress'
 import { sendInternalError } from './errors'
 import rateLimit from '@fastify/rate-limit'
 import { registerRESTRoutes } from './api/rest'
-import { registerGraphQL } from './api/graphql'
+import { registerGraphQL, type GraphQLUiOptions } from './api/graphql'
 import { registerWebhookRoutes } from './routes/webhooks'
 import { registerCandleRoutes } from './routes/candles'
 import { registerPairsRoutes } from './routes/pairs'
@@ -63,6 +63,7 @@ export interface BuildAppOptions {
    * routes — a duplicated list would drift and defeat the point.
    */
   onRoute?: (routeOptions: RouteOptions) => void
+  graphqlUi?: GraphQLUiOptions
   /**
    * Optional CORS configuration override (useful in testing).
    */
@@ -244,7 +245,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSettleRoute(app)
   await registerHealthRoutes(app)
   await registerTvlRoutes(app)
-  await registerGraphQL(app)
+  await registerGraphQL(app, options.graphqlUi)
   await registerWebSocket(app)
 
   // Global error handler: catches unhandled errors, ensuring database pool exhaustion

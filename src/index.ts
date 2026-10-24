@@ -8,6 +8,7 @@ import { installProcessErrorHandlers } from './processErrorHandlers'
 import { config, getNetworkConfig, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
+import { resolveGraphQLUiOptions } from './api/graphql'
 import { redis } from './redis'
 import { pgPool } from './db'
 import { assertSchemaValid } from './db/schemaVerify'
@@ -89,7 +90,9 @@ async function main() {
 
   await app.listen({ port: config.api.port, host: config.api.host })
   log.info({ url: `http://${config.api.host}:${config.api.port}` }, 'API listening')
-  log.info({ url: `http://localhost:${config.api.port}/graphiql` }, 'GraphiQL available')
+  if (resolveGraphQLUiOptions(process.env).graphiqlEnabled) {
+    log.info({ url: `http://localhost:${config.api.port}/graphiql` }, 'GraphiQL available')
+  }
 
   // ── WebSocket fan-out (non-blocking — requires Redis for multi-instance) ─
   try {
