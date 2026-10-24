@@ -888,6 +888,15 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 
 *(Note: timestamp values above reflect the dynamic hourly anchor at seed execution time and request time).*
 
+## Numeric Precision & Serialization
+
+Lens enforces strict arbitrary-precision numeric aggregation across SQL queries to eliminate floating-point representation artifacts and order-dependent rounding errors:
+
+- **Database Precision**: Declared in `prisma/schema.prisma` as `Decimal(36, 18)` for prices and `Decimal(36, 7)` for volumes (matching Stellar 7-decimal stroop precision).
+- **Exact Aggregations**: All intermediate SQL aggregations (`SUM`, `array_agg`, `MAX`, `MIN`) are computed in PostgreSQL using exact `numeric` arithmetic without `::float` casts inside aggregate expressions.
+- **Edge Serialization**: Values are cast once at the serialization boundary to documented precision:
+  - Prices: up to 18 decimal places (`PRICE_DECIMAL_PLACES = 18`).
+  - Volumes: up to 7 decimal places (`VOLUME_DECIMAL_PLACES = 7`).
 
 ## Rate Limiting & 429 Handling
 
