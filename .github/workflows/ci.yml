@@ -18,6 +18,10 @@ jobs:
           cache: npm
       - run: npm ci || npm install
       - run: node node_modules/prisma/build/index.js generate
+      # Fails when openapi.json or the README's generated endpoint table has
+      # drifted from openapi.yaml. Run `npm run openapi:gen` to fix. Runs after
+      # `prisma generate` because the README renderer loads the venue registry.
+      - run: npm run openapi:check
       - name: Generate TypeScript client from openapi.yaml
         run: npm run client:gen
       - name: Fail if the committed client is out of date

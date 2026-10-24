@@ -133,6 +133,11 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET/POST | `/graphql` | GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md)) |
 <!-- ENDPOINTS:END -->
 
+The REST table above is generated from [`openapi.yaml`](openapi.yaml) by
+`npm run openapi:gen` (or `npm run readme:gen`) — edit the spec, not the table.
+`npm run openapi:check` (run in CI) fails when the committed README or
+`openapi.json` differs from a fresh generation.
+
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
 missing from the spec. Operator-only and non-HTTP routes (`/admin/keys*`,

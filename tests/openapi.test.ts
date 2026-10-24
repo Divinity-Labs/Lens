@@ -10,7 +10,7 @@ import {
   isUndocumentableOperation,
   toOpenApiPath,
 } from '../src/openapi/coverage'
-import { renderOpenApiJson } from '../scripts/generate-openapi'
+import { checkGeneratedArtifacts, renderOpenApiJson } from '../scripts/generate-openapi'
 
 const specPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
 const jsonPath = fileURLToPath(new URL('../openapi.json', import.meta.url))
@@ -112,5 +112,14 @@ describe('generated openapi.json', () => {
 
   it('regenerates deterministically', () => {
     expect(renderOpenApiJson()).toBe(renderOpenApiJson())
+  })
+})
+
+describe('openapi:check', () => {
+  // The README endpoint table itself is rendered and asserted row-by-row in
+  // tests/readme.test.ts; this guards the single command CI runs, so editing
+  // openapi.yaml without regenerating fails here as well as in the pipeline.
+  it('reports no stale generated artifacts', async () => {
+    expect(await checkGeneratedArtifacts()).toEqual([])
   })
 })

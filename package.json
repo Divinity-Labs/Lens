@@ -11,6 +11,8 @@
     "smoke": "node scripts/deployed-smoke.mjs",
     "test:smoke": "node --test scripts/test-deployed-smoke.mjs",
     "openapi:gen": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/generate-openapi.ts --check",
+    "graphql:schema:gen": "tsx scripts/generate-graphql-schema.ts",
     "readme:gen": "tsx scripts/generate-readme.ts",
     "spec:validate-live": "tsx scripts/validate-live-spec.ts",
     "client:gen": "openapi-typescript openapi.yaml -o clients/typescript/src/schema.d.ts",
