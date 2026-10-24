@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { computeTWAP, computeVWAP } from '../pricing/twap'
 import { z } from 'zod'
 import { formatValidationError } from '../validation'
+import { recordPriceAudit, getPriceAudit, reconstructPrice } from '../pricing/audit'
 import '../middleware/network'
 import { activeNetwork, type NetworkName } from '../config'
 import { resolveDecimalFormat } from '../utils/decimals'
@@ -32,6 +33,11 @@ const VwapQuerySchema = z.object({
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
   decimals: z.string().optional(),
   decimalFormat: z.string().optional(),
+  network: z.enum(['testnet', 'mainnet']).optional(),
+})
+
+const AuditQuerySchema = z.object({
+  timestamp: z.coerce.number().int().nonnegative(),
   network: z.enum(['testnet', 'mainnet']).optional(),
 })
 
@@ -78,6 +84,25 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           outlierMethod: method,
           network,
           decimalFormat,
+        })
+
+        // Record an audit trail for this published aggregate so a past price
+        // can be reconstructed and disputed inputs explained. Bounded: one
+        // row per published aggregate, inputs capped by sampleInterval.
+        const MAX_AUDIT_INPUTS = 500
+        const boundedInputs = result.inputs.slice(0, MAX_AUDIT_INPUTS)
+        const boundedRejected = result.rejected.slice(0, MAX_AUDIT_INPUTS)
+        await recordPriceAudit({
+          pairKey,
+          network: result.network,
+          method: 'twap',
+          params: { windowMinutes, sampleIntervalSeconds: sampleInterval, outlierMethod: method },
+          startTime: result.startTime,
+          endTime: result.endTime,
+          price: result.twap,
+          sampleCount: result.sampleCount,
+          inputs: boundedInputs,
+          rejected: boundedRejected,
         })
 
         return {
@@ -141,6 +166,23 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           network,
         })
 
+        // Same audit trail for VWAP aggregates.
+        const MAX_AUDIT_INPUTS = 500
+        const boundedInputs = result.inputs.slice(0, MAX_AUDIT_INPUTS)
+        const boundedRejected = result.rejected.slice(0, MAX_AUDIT_INPUTS)
+        await recordPriceAudit({
+          pairKey,
+          network: result.network,
+          method: 'vwap',
+          params: { windowMinutes, source: source ?? 'all', outlierMethod: method },
+          startTime: result.startTime,
+          endTime: result.endTime,
+          price: result.vwap,
+          sampleCount: result.sampleCount,
+          inputs: boundedInputs,
+          rejected: boundedRejected,
+        })
+
         return {
           assetA,
           assetB,
@@ -160,6 +202,55 @@ export async function registerPriceRoutes(app: FastifyInstance) {
         // Same as TWAP above: the driver message can contain credentials.
         log.error({ err }, 'VWAP computation failed')
         return reply.status(500).send({ error: 'VWAP computation failed' })
+      }
+    }
+  )
+
+  // ─── Audit / reconstruction ─────────────────────────────────────────────────
+  // GET /price/audit/:assetA/:assetB?timestamp=<unixSeconds>&network=testnet
+  // Returns the stored audit record for the aggregate published at or before
+  // the given timestamp, including rejected inputs and their reasons, and a
+  // reconstructed price derived from the recorded inputs.
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { timestamp?: string; network?: string }
+  }>(
+    '/price/audit/:assetA/:assetB',
+    { config: { scope: 'read:prices' } },
+    async (req, reply) => {
+      const log = req.log.child({ component: 'route:price:audit' })
+      const { assetA, assetB } = req.params
+      const parsed = AuditQuerySchema.safeParse(req.query)
+      if (!parsed.success) {
+        return reply.status(400).send(formatValidationError(parsed.error))
+      }
+      const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
+      const pairKey = [assetA, assetB].sort().join('/')
+
+      try {
+        const record = await getPriceAudit(pairKey, network, parsed.data.timestamp)
+        if (!record) {
+          return reply.status(404).send({ error: 'No audit record for timestamp' })
+        }
+        const reconstructed = reconstructPrice(record)
+        return {
+          assetA,
+          assetB,
+          pairKey,
+          network: record.network,
+          method: record.method,
+          params: record.params,
+          startTime: record.startTime,
+          endTime: record.endTime,
+          publishedPrice: record.price,
+          reconstructedPrice: reconstructed,
+          sampleCount: record.sampleCount,
+          inputs: record.inputs,
+          rejected: record.rejected,
+        }
+      } catch (err) {
+        log.error({ err }, 'Price audit lookup failed')
+        return reply.status(500).send({ error: 'Price audit lookup failed' })
       }
     }
   )
