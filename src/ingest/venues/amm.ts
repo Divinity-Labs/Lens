@@ -53,7 +53,7 @@ export async function fetchPools(pair: WatchedPair, network: NetworkName = activ
     // A persistent 429 is raised, not logged and swallowed: the runner counts
     // it and backs the whole cycle off, which is the point of #348.
     if (err instanceof HorizonRateLimitError) throw err
-    log.error({ pair: pair.pairKey, err }, 'failed to fetch pools')
+    log.error({ venue: 'AMM', network, pair: pair.pairKey, err }, 'failed to fetch pools')
     return []
   }
 }
