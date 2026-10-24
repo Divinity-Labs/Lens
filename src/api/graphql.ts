@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total } from '../metrics'
+import { price_requests_total, active_subscriptions } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
 import { GraphQLError, type ExecutionResult } from 'graphql'
 import { randomUUID } from 'node:crypto'
@@ -32,10 +32,25 @@ const WINDOW_SECONDS: Record<string, number> = {
   '24h': 86400,
 }
 
-// Mercurius pubsub topic that carries every new price. A single app-level
-// listener bridges the ingesters' in-process `priceEmitter` onto this topic;
-// each subscriber then filters it down to the pair they asked for.
+// Mercurius pubsub topics are keyed by pair AND network —
+// `PRICE_UPDATED/<pair>/<network>` (mqemitter splits topics on '/'; the pair
+// key itself is 'A/B', also '/'-separated, and both sides of the channel use
+// the pair string verbatim, so the pairing holds up). The pubsub layer then
+// routes each event only to the subscribers that asked for that pair on that
+// chain, collapsing per-event work from "run one filter callback per
+// subscriber" to "wake the subscribers of that pair" (measured in
+// scripts/benchmarkSubscriptions.ts).
 const PRICE_TOPIC = 'PRICE_UPDATED'
+
+// A subscription with no network argument deliberately receives every
+// network: the message carries its own `network` field, and the historical
+// contract (tested in src/__tests__/graphqlSubscription.test.ts) is that
+// omitting the argument is "every chain", not "the active chain". Since #117
+// every enabled network publishes to the one price emitter, so for the
+// network-less subscription the resolver addresses one topic per known
+// network, rather than looking at ENABLED_NETWORKS (which would collapse the
+// stream back to one chain on a single-network deployment).
+const KNOWN_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked. UNSUPPORTED_PARAMETER carries the
@@ -303,6 +318,16 @@ export const schema = `
     priceUpdated(pair: String!, network: String): PriceUpdate!
   }
 `
+
+/**
+ * Topic for one pair on one network. mqemitter matches on '/'-separated
+ * levels; the pair key is 'A/B' (also '/'-separated), so the full topic has
+ * the shape PRICE/A/B/<network> and a topic only matches the exact pair AND
+ * network it names.
+ */
+function priceTopic(pair: string, network: string): string {
+  return `${PRICE_TOPIC}/${pair}/${network}`
+}
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -628,24 +653,54 @@ const resolvers = {
 
   Subscription: {
     priceUpdated: {
-      subscribe: withFilter<
-        { priceUpdated: PricePublishedEvent },
-        unknown,
-        MercuriusContext,
-        { pair: string; network?: string | null }
-      >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
-        (payload, { pair, network }) =>
-          payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
-          (network == null || payload.priceUpdated.network === network)
-      ),
+      // The pubsub layer routes by pair and network: the subscriber's topic
+      // already carries both, so no per-subscriber filter callback runs at
+      // all. Omitting `network` keeps every chain — the resolver then
+      // addresses one topic per known network for the pair, and because the
+      // message carries its own `network` field the subscriber can still tell
+      // them apart.
+      subscribe: (
+        _root: unknown,
+        { pair, network }: { pair: string; network?: string | null },
+        { pubsub }: MercuriusContext,
+      ): Promise<AsyncIterableIterator<{ priceUpdated: PricePublishedEvent }>> => {
+        // Mercurius's subscription queue is a Readable with a `close` list it
+        // runs on disconnect/complete; our release callback rides there so
+        // the gauge follows the real lifetime of the subscription, not the
+        // resolver call.
+        const topics = network == null
+          ? KNOWN_NETWORKS.map(n => priceTopic(pair, n))
+          : [priceTopic(pair, network)]
+        let released = false
+        const release = () => {
+          if (released) return
+          released = true
+          active_subscriptions.dec({ pair })
+        }
+        active_subscriptions.inc({ pair })
+        // Mercurius's runtime SubscriptionContext.subscribe accepts a topic
+        // *array*; its public type only shows the single-topic shape, and a
+        // plain property call keeps its `this` correct.
+        return (pubsub as unknown as {
+          subscribe(topic: string | string[]): Promise<AsyncIterableIterator<{ priceUpdated: PricePublishedEvent }>>
+        })
+          .subscribe(topics)
+          .then((queue) => {
+            if (queue == null) {
+              release()
+              throw new Error('mercurius pubsub returned no subscription queue')
+            }
+            if (!Array.isArray((queue as { close?: unknown[] }).close)) {
+              ;(queue as unknown as { close: unknown[] }).close = []
+            }
+            ;(queue as unknown as { close: unknown[] }).close.push(release)
+            return queue
+          })
+          .catch((err: unknown) => {
+            release()
+            throw err
+          })
+      },
     },
   },
 }
@@ -675,11 +730,11 @@ export async function registerGraphQL(app: FastifyInstance) {
   })
 
   // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
+  // topic for its pair and network. Mercurius wraps the payload under the
+  // subscription field name so resolvers receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
     app.graphql.pubsub.publish({
-      topic: PRICE_TOPIC,
+      topic: priceTopic(event.pair, event.network),
       payload: { priceUpdated: event },
     })
   }
