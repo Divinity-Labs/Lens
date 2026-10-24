@@ -5,17 +5,23 @@ import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
+import { isAdminConfigured } from './auth'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import {
   statusResponseSchema,
+  statusErrorResponseSchema,
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
   poolsResponseSchema,
   depthResponseSchema,
+  impactResponseSchema,
   installResponseValidation,
 } from './schemas'
-import { getDepth } from '../pricing/depth'
+import { getDepth, getImpact } from '../pricing/depth'
+import { listCrashes } from '../ingester/restart'
+import { isBootComplete } from '../health'
+import { resolveDecimalFormat, formatDecimal } from '../utils/decimals'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -71,38 +77,125 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // up the validating serializer.
   installResponseValidation(app)
 
-  // GET /status — public health/monitoring endpoint (no API key required)
-  app.get('/status', { config: { public: true }, schema: { response: { 200: statusResponseSchema } } }, async (req) => {
-    const network = req.network ?? activeNetwork
-    const result = await pgPool.query(
-      `SELECT last_ledger, last_processed_at
-         FROM indexer_state
-        WHERE network = $1
-        ORDER BY updated_at DESC
-        LIMIT 1`,
-      [network]
-    )
-    const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
-    return {
-      ok: true,
-      network,
-      watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
-      lastIndexedLedger: result.rows[0]?.last_ledger ?? null,
-      lastProcessedAt,
-      // Seconds since the last write for this network — a stalled ingester is
-      // visible to `/status` polling without needing Prometheus. Null until the
-      // network has ingested at least once.
-      ingestLagSeconds: lastProcessedAt
+  /**
+   * How long the last ingester write may be stale before `/status` says so.
+   *
+   * Named rather than inlined because it is a published threshold: the README's
+   * Datadog/Prometheus/BetterStack examples and the `degraded` contract in
+   * `openapi.yaml` all quote it, and a monitor tuned to one number while the
+   * service uses another is worse than no monitor.
+   */
+  const INGEST_STALE_AFTER_SECONDS = 300
+
+  // GET /status — public health/monitoring endpoint (no API key required) (#273)
+  app.get(
+    '/status',
+    {
+      config: { public: true },
+      schema: {
+        response: {
+          200: statusResponseSchema,
+          503: statusErrorResponseSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const network = req.network ?? activeNetwork
+      const mem = process.memoryUsage()
+      const uptimeSeconds = Math.round(process.uptime())
+      const memoryUsageMb = Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100
+
+      let result
+      try {
+        result = await pgPool.query(
+          `SELECT last_ledger, last_processed_at
+             FROM indexer_state
+            WHERE network = $1
+            ORDER BY updated_at DESC
+            LIMIT 1`,
+          [network]
+        )
+      } catch (err: unknown) {
+        // The driver's own message is not safe to return here. `/status` is
+        // public and unauthenticated, and a pg connection failure puts the host,
+        // the user and sometimes the whole connection string into
+        // `err.message` — this endpoint is the most-polled surface Lens has.
+        // Lens has already had to rotate a database password over exactly this
+        // shape of leak on another route, so the detail goes to the log, where
+        // buildLogger pipes it through redactSecrets, and the response says only
+        // which dependency is down.
+        req.log.error({ err }, 'status: database query failed')
+        return reply.status(503).send({
+          ok: false,
+          status: 'unhealthy',
+          error: 'Database unavailable',
+          pagingCondition: 'DATABASE_DOWN',
+        })
+      }
+
+      const lastProcessedAt = result.rows[0]?.last_processed_at ?? null
+      const lastIndexedLedger = result.rows[0]?.last_ledger ?? null
+      const ingestLagSeconds = lastProcessedAt
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
-        : null,
+        : null
+      const isStale = ingestLagSeconds !== null && ingestLagSeconds > INGEST_STALE_AFTER_SECONDS
+      // Process health has to be measured, or the split this endpoint exists to
+      // make is cosmetic. Boot is the signal that is actually available and
+      // actually distinct from data freshness: between `listen()` and
+      // `markBootComplete()` the process answers requests while its ingesters
+      // are not all running yet, which is a degraded *process*, not stale data.
+      // It is the same signal `/ready` gates on.
+      const processHealth = isBootComplete() ? ('healthy' as const) : ('degraded' as const)
+      const dataHealth = isStale ? ('stale' as const) : ('healthy' as const)
+      const overallStatus =
+        processHealth === 'degraded' || isStale ? ('degraded' as const) : ('healthy' as const)
+
+      return {
+        ok: true,
+        status: overallStatus,
+        network,
+        health: {
+          process: processHealth,
+          data: dataHealth,
+        },
+        process: {
+          uptimeSeconds,
+          memoryUsageMb,
+          status: processHealth,
+        },
+        data: {
+          lastIndexedLedger,
+          lastProcessedAt,
+          ingestLagSeconds,
+          isStale,
+        },
+        watchedPairs: getNetworkConfig(network).pairs.map(p => p.pairKey),
+        lastIndexedLedger,
+        lastProcessedAt,
+        ingestLagSeconds,
+        // #508: whether the admin surface is usable at all, so an operator
+        // can tell "I sent the wrong token" from "this deployment has no
+        // ADMIN_TOKEN" without guessing from a 401. It reports only that the
+        // token is configured, never any part of its value.
+        adminConfigured: isAdminConfigured(),
+        crashes: listCrashes(network).map(c => ({
+          name: c.name,
+          network: c.network,
+          message: c.message,
+          at: c.at.toISOString(),
+        })),
+      }
     }
-  })
+  )
 
 
   // GET /price/:assetA/:assetB
-  app.get<{ Params: { assetA: string; assetB: string } }>(
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { decimals?: string; decimalFormat?: string }
+  }>(
     '/price/:assetA/:assetB',
-    { schema: { response: { 200: priceResponseSchema } } },
+    { config: { scope: 'read:prices' }, schema: { response: { 200: priceResponseSchema } } },
     async (req, reply) => {
       price_requests_total.inc()
       const { assetA, assetB } = req.params
@@ -110,9 +203,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const pair = findPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
 
-      // Cache key is network-scoped so testnet/mainnet prices for the same
-      // asset codes never collide.
-      const cacheKey = `${network}:${pair.pairKey}`
+      const decimalFormat = resolveDecimalFormat(req)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+      }
+
+      // Cache key is network-scoped and format-isolated so number and string payloads never collide.
+      const cacheKey = decimalFormat === 'string'
+        ? `${network}:${pair.pairKey}:decimals_string`
+        : `${network}:${pair.pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
         try {
@@ -121,7 +220,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pair.pairKey, network)
+      const agg = await getAggregatedPrice(pair.pairKey, network, { decimalFormat })
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
       const result = {
         assetA: pair.assetA.code,
@@ -142,44 +241,62 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // GET /price/:assetA/:assetB/route?amount=1000
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { amount?: string }
+    Querystring: { amount?: string; network?: string }
   }>(
     '/price/:assetA/:assetB/route',
-    { schema: { response: { 200: routeResponseSchema } } },
+    { config: { scope: 'read:prices' }, schema: { response: { 200: routeResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
       const amount = parseFloat(req.query.amount ?? '1000')
+      // Validate amount before the pair check: a malformed request parameter
+      // is a 400 regardless of whether the pair is watched.
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
 
-      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
+      const decimalFormat = resolveDecimalFormat(req)
+      const routeInfo = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+        return {
+          ...routeInfo,
+          sdexPrice: String(routeInfo.sdexPrice),
+          ammPrice: String(routeInfo.ammPrice),
+          estimatedOutput: String(routeInfo.estimatedOutput),
+          slippagePct: String(routeInfo.slippagePct),
+        }
+      }
+      return routeInfo
     }
   )
 
   // GET /price/:assetA/:assetB/history?window=1h&limit=100
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { window?: string; limit?: string }
+    Querystring: { window?: string; limit?: string; decimals?: string; decimalFormat?: string }
   }>(
     '/price/:assetA/:assetB/history',
-    { schema: { response: { 200: historyResponseSchema } } },
+    { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
       const window = req.query.window ?? '1h'
       const limit = Math.min(parseInt(req.query.limit ?? String(HISTORY_DEFAULT_LIMIT), 10), HISTORY_MAX_LIMIT)
       const pairKey = makePairKey(assetA, assetB)
       const network = req.network ?? activeNetwork
+      const decimalFormat = resolveDecimalFormat(req)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+      }
 
       if (!['1m', '5m', '1h', '24h'].includes(window)) {
         return reply.status(400).send({ error: 'window must be one of: 1m, 5m, 1h, 24h' })
       }
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
+        `SELECT bucket, window, vwap::numeric, sdex_vwap::numeric, amm_vwap::numeric,
+                volume::numeric, trade_count, open_price::numeric, close_price::numeric,
+                high_price::numeric, low_price::numeric
          FROM price_aggregates
          WHERE pair_key = $1 AND window = $2 AND network = $3
          ORDER BY bucket DESC
@@ -193,15 +310,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         window,
         buckets: result.rows.map(r => ({
           bucket: r.bucket,
-          vwap: r.vwap,
-          sdexVwap: r.sdex_vwap,
-          ammVwap: r.amm_vwap,
-          volume: r.volume,
-          tradeCount: r.trade_count,
-          open: r.open_price,
-          close: r.close_price,
-          high: r.high_price,
-          low: r.low_price,
+          vwap: formatDecimal(r.vwap, decimalFormat),
+          sdexVwap: formatDecimal(r.sdex_vwap, decimalFormat),
+          ammVwap: formatDecimal(r.amm_vwap, decimalFormat),
+          volume: formatDecimal(r.volume, decimalFormat),
+          tradeCount: r.trade_count !== null && r.trade_count !== undefined ? parseInt(String(r.trade_count), 10) : null,
+          open: formatDecimal(r.open_price, decimalFormat),
+          close: formatDecimal(r.close_price, decimalFormat),
+          high: formatDecimal(r.high_price, decimalFormat),
+          low: formatDecimal(r.low_price, decimalFormat),
         })),
       }
     }
@@ -215,8 +332,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // each step), then one LIMIT 1 index probe per pool fetches its newest row.
   // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
   // network. A quiet pool is kept with its real `timestamp`, never dropped.
-  app.get('/pools', { schema: { response: { 200: poolsResponseSchema } } }, async (req) => {
+  app.get('/pools', { config: { scope: 'read:prices' }, schema: { response: { 200: poolsResponseSchema } } }, async (req, reply) => {
     const network = req.network ?? activeNetwork
+    const decimalFormat = resolveDecimalFormat(req)
+    if (decimalFormat === 'string') {
+      reply.header('x-decimal-format', 'string')
+    }
     const result = await pgPool.query(
       `WITH RECURSIVE ids AS (
          (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
@@ -228,7 +349,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           WHERE ids.pool_id IS NOT NULL
        )
        SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::float, l.reserve_b::float, l.spot_price::float, l.fee_bp, l.timestamp
+              l.reserve_a::numeric, l.reserve_b::numeric, l.spot_price::numeric, l.fee_bp, l.timestamp
          FROM ids
         CROSS JOIN LATERAL (
               SELECT * FROM pool_snapshots s
@@ -237,18 +358,30 @@ export async function registerRESTRoutes(app: FastifyInstance) {
                LIMIT 1
              ) l
         WHERE ids.pool_id IS NOT NULL`,
-      [network]
-    )
-    return { pools: result.rows }
-  })
+        [network]
+      )
+      return {
+        pools: result.rows.map(r => ({
+          pool_id: r.pool_id,
+          asset_a: r.asset_a,
+          asset_b: r.asset_b,
+          reserve_a: formatDecimal(r.reserve_a, decimalFormat),
+          reserve_b: formatDecimal(r.reserve_b, decimalFormat),
+          spot_price: formatDecimal(r.spot_price, decimalFormat),
+          fee_bp: r.fee_bp !== null && r.fee_bp !== undefined ? parseInt(String(r.fee_bp), 10) : null,
+          timestamp: r.timestamp,
+        })),
+      }
+    }
+  )
 
   // GET /price/:assetA/:assetB/depth?amount=1000
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { amount?: string }
+    Querystring: { amount?: string; decimals?: string; decimalFormat?: string }
   }>(
     '/price/:assetA/:assetB/depth',
-    { schema: { response: { 200: depthResponseSchema } } },
+    { config: { scope: 'read:prices' }, schema: { response: { 200: depthResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
       const amount = parseFloat(req.query.amount ?? '1000')
@@ -258,14 +391,50 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
       if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
 
+      // Depth reads are network-scoped on both legs (pool_snapshots and the
+      // price_points subquery that names this pair's pools), so a mainnet pair
+      // is never priced off a testnet pool's reserves.
       const depthResult = await getDepth(pair.pairKey, amount, network)
-      
+
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
         pairKey: pair.pairKey,
-        ...depthResult
+        ...depthResult,
       }
+    }
+  )
+
+  // GET /impact/:assetA/:assetB?thresholds=1,5,10
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { thresholds?: string; liquidityFraction?: string }
+  }>(
+    '/impact/:assetA/:assetB',
+    { schema: { response: { 200: impactResponseSchema } } },
+    async (req, reply) => {
+      const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
+      const pair = findPair(assetA, assetB, network)
+      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+
+      const thresholds = req.query.thresholds
+        ? req.query.thresholds.split(',').map(Number)
+        : [1, 5, 10]
+      const liquidityFraction = req.query.liquidityFraction === undefined
+        ? 0.5
+        : Number(req.query.liquidityFraction)
+      if (
+        thresholds.length === 0 ||
+        thresholds.some(value => !Number.isFinite(value) || value <= 0) ||
+        !Number.isFinite(liquidityFraction) || liquidityFraction <= 0 || liquidityFraction > 1
+      ) {
+        return reply.status(400).send({ error: 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1' })
+      }
+
+      const impact = await getImpact(pair.pairKey, { thresholds, liquidityFraction }, network)
+      if (!impact) return reply.status(404).send({ error: `No AMM liquidity available for ${assetA}/${assetB}` })
+      return { assetA: pair.assetA.code, assetB: pair.assetB.code, pairKey: pair.pairKey, ...impact }
     }
   )
 }

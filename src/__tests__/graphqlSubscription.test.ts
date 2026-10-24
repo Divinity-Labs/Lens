@@ -109,7 +109,8 @@ describe('GraphQL production UI configuration', () => {
         url: '/graphql',
         payload: { query: '{ __schema { queryType { name } } }' },
       })
-      expect(response.statusCode).toBe(200)
+      // A rejected document is a validation failure, which mercurius answers with 400.
+      expect(response.statusCode).toBe(400)
       expect(response.json().errors?.[0]?.message).toMatch(/introspection/i)
     } finally {
       await app.close()
@@ -172,8 +173,8 @@ describe('GraphQL priceUpdated subscription', () => {
     // Since #117 every enabled network runs its own ingester loop and all of
     // them publish to this one emitter. Without the network filter a mainnet
     // print and a testnet print for XLM/USDC arrive on the same stream,
-    // indistinguishable — a chart that looks noisy rather than wrong, which is
-    // the harder kind of bug to notice.
+    // indistinguishable — a chart that looks noisy rather than wrong, which
+    // is the harder kind of bug to notice.
     const ws = await connect(url)
     ws.send(JSON.stringify(SUBSCRIBE('XLM/USDC', 'mainnet')))
     await new Promise(r => setTimeout(r, 100))
