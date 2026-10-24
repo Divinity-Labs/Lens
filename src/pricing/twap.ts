@@ -1,5 +1,6 @@
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
+import type { DecimalFormat } from '../utils/decimals'
 
 // ─── TWAP — Time-Weighted Average Price ───────────────────────────────────────
 // Computed by averaging the midpoints of successive price points weighted by
@@ -7,7 +8,7 @@ import { activeNetwork, type NetworkName } from '../config'
 // for longer, reducing the impact of brief manipulation spikes.
 
 export interface TWAPResult {
-  twap: number
+  twap: number | string
   startTime: Date
   endTime: Date
   sampleCount: number
@@ -17,11 +18,11 @@ export interface TWAPResult {
 }
 
 export interface VWAPResult {
-  vwap: number
+  vwap: number | string
   startTime: Date
   endTime: Date
   sampleCount: number
-  volumeTotal: number
+  volumeTotal: number | string
   outlierRejected: number
   filterMethod: string
   network: NetworkName
@@ -52,11 +53,13 @@ export async function computeTWAP(
     sampleIntervalSeconds?: number
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
+    decimalFormat?: DecimalFormat
   }
 ): Promise<TWAPResult> {
   const sampleIntervalSeconds = options?.sampleIntervalSeconds ?? 60
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
+  const isString = options?.decimalFormat === 'string'
 
   // Fetch price points within the window for the specific network, ordered by timestamp
   const result = await pgPool.query(
@@ -72,7 +75,7 @@ export async function computeTWAP(
   const rows = result.rows
   if (rows.length === 0) {
     return {
-      twap: 0,
+      twap: isString ? '0' : 0,
       startTime: new Date(Date.now() - windowMinutes * 60_000),
       endTime: new Date(),
       sampleCount: 0,
@@ -107,7 +110,7 @@ export async function computeTWAP(
 
   if (validPoints.length === 0) {
     return {
-      twap: 0,
+      twap: isString ? '0' : 0,
       startTime: rows[0].timestamp,
       endTime: rows[rows.length - 1].timestamp,
       sampleCount: rawPrices.length,
@@ -125,7 +128,7 @@ export async function computeTWAP(
   if (totalDurationMs <= 0) {
     // Single data point — use its price
     return {
-      twap: validPoints[0].price,
+      twap: isString ? String(rows[0].price) : validPoints[0].price,
       startTime: rows[0].timestamp,
       endTime: rows[rows.length - 1].timestamp,
       sampleCount: rawPrices.length,
@@ -163,7 +166,7 @@ export async function computeTWAP(
   const twap = interpolatedPrices.reduce((sum, p) => sum + p.price * p.weight, 0)
 
   return {
-    twap,
+    twap: isString ? String(twap) : twap,
     startTime: new Date(startTime),
     endTime: new Date(endTime),
     sampleCount: rawPrices.length,
@@ -191,10 +194,12 @@ export async function computeVWAP(
     source?: 'SDEX' | 'AMM'
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
+    decimalFormat?: DecimalFormat
   }
 ): Promise<VWAPResult> {
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
+  const isString = options?.decimalFormat === 'string'
 
   let query: string
   let params: any[]
@@ -223,11 +228,11 @@ export async function computeVWAP(
 
   if (rows.length === 0) {
     return {
-      vwap: 0,
+      vwap: isString ? '0' : 0,
       startTime: new Date(Date.now() - windowMinutes * 60_000),
       endTime: new Date(),
       sampleCount: 0,
-      volumeTotal: 0,
+      volumeTotal: isString ? '0' : 0,
       outlierRejected: 0,
       filterMethod: outlierMethod,
       network,
@@ -248,11 +253,25 @@ export async function computeVWAP(
 
   if (validRows.length === 0) {
     return {
-      vwap: 0,
+      vwap: isString ? '0' : 0,
       startTime: rows[0].timestamp,
       endTime: rows[rows.length - 1].timestamp,
       sampleCount: rawPrices.length,
-      volumeTotal: 0,
+      volumeTotal: isString ? '0' : 0,
+      outlierRejected: rejectedIndices.size,
+      filterMethod: outlierMethod,
+      network,
+    }
+  }
+
+  if (validRows.length === 1) {
+    const singleVol = parseFloat(validRows[0].volume)
+    return {
+      vwap: isString ? String(validRows[0].price) : parseFloat(validRows[0].price),
+      startTime: rows[0].timestamp,
+      endTime: rows[rows.length - 1].timestamp,
+      sampleCount: rawPrices.length,
+      volumeTotal: isString ? String(validRows[0].volume) : singleVol,
       outlierRejected: rejectedIndices.size,
       filterMethod: outlierMethod,
       network,
@@ -272,11 +291,11 @@ export async function computeVWAP(
   const vwap = totalVolume > 0 ? weightedPriceSum / totalVolume : 0
 
   return {
-    vwap,
+    vwap: isString ? String(vwap) : vwap,
     startTime: rows[0].timestamp,
     endTime: rows[rows.length - 1].timestamp,
     sampleCount: rawPrices.length,
-    volumeTotal: totalVolume,
+    volumeTotal: isString ? String(totalVolume) : totalVolume,
     outlierRejected: rejectedIndices.size,
     filterMethod: outlierMethod,
     network,
@@ -285,8 +304,13 @@ export async function computeVWAP(
 
 // ─── Helper: Outlier rejection returning rejected indices ─────────────────────
 
+export const MIN_OUTLIER_SAMPLES = 4
+export const IQR_MULTIPLIER = 1.5
+export const MODIFIED_Z_SCORE_THRESHOLD = 3.5
+export const MODIFIED_Z_SCORE_FACTOR = 0.6745
+
 function rejectOutliersWithIndices(prices: number[]): { rejectedIndices: Set<number> } {
-  if (prices.length < 4) return { rejectedIndices: new Set() }
+  if (prices.length < MIN_OUTLIER_SAMPLES) return { rejectedIndices: new Set() }
 
   const sorted = [...prices].sort((a, b) => a - b)
   const n = sorted.length
@@ -298,8 +322,8 @@ function rejectOutliersWithIndices(prices: number[]): { rejectedIndices: Set<num
   const q3 = median(upperHalf)
   const iqr = q3 - q1
 
-  const lowerBound = q1 - 1.5 * iqr
-  const upperBound = q3 + 1.5 * iqr
+  const lowerBound = q1 - IQR_MULTIPLIER * iqr
+  const upperBound = q3 + IQR_MULTIPLIER * iqr
 
   const rejectedIndices = new Set<number>()
   prices.forEach((p, i) => {
@@ -310,7 +334,7 @@ function rejectOutliersWithIndices(prices: number[]): { rejectedIndices: Set<num
 }
 
 function rejectOutliersModifiedZScoreWithIndices(prices: number[]): { rejectedIndices: Set<number> } {
-  if (prices.length < 4) return { rejectedIndices: new Set() }
+  if (prices.length < MIN_OUTLIER_SAMPLES) return { rejectedIndices: new Set() }
 
   const sorted = [...prices].sort((a, b) => a - b)
   const med = median(sorted)
@@ -318,10 +342,10 @@ function rejectOutliersModifiedZScoreWithIndices(prices: number[]): { rejectedIn
 
   if (mad === 0) return { rejectedIndices: new Set() }
 
-  const threshold = 3.5
+  const threshold = MODIFIED_Z_SCORE_THRESHOLD
   const rejectedIndices = new Set<number>()
   prices.forEach((p, i) => {
-    const zScore = 0.6745 * (p - med) / mad
+    const zScore = MODIFIED_Z_SCORE_FACTOR * (p - med) / mad
     if (Math.abs(zScore) > threshold) rejectedIndices.add(i)
   })
 

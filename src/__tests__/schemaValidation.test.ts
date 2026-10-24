@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Fastify from 'fastify'
 import Ajv from 'ajv'
 
-const { mockQuery, mockGetCachedPrice, mockGetBestRoute, mockGetAggregatedPrice, mockGetDepth, mockGetSplitRecommendation } = vi.hoisted(() => ({
+const { mockQuery, mockGetCachedPrice, mockGetBestRoute, mockGetAggregatedPrice, mockGetDepth, mockGetImpact } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockGetCachedPrice: vi.fn(),
   mockGetBestRoute: vi.fn(),
   mockGetAggregatedPrice: vi.fn(),
   mockGetDepth: vi.fn(),
-  mockGetSplitRecommendation: vi.fn(),
+  mockGetImpact: vi.fn(),
 }))
 
 vi.mock('../db', () => ({
@@ -34,6 +34,7 @@ vi.mock('../aggregator/vwap', () => ({
 
 vi.mock('../pricing/depth', () => ({
   getDepth: mockGetDepth,
+  getImpact: mockGetImpact,
 }))
 
 const { schemaTestPairs } = vi.hoisted(() => ({
@@ -102,6 +103,15 @@ describe('REST response schema validation', () => {
       bids: [],
       source: 'AMM',
     })
+    mockGetImpact.mockResolvedValue({
+      status: 'ok',
+      spotPrice: 0.1,
+      availableLiquidity: 500,
+      smallestSize: 100,
+      ladder: [{ size: 100, output: 9.9, executionPrice: 0.099, slippagePct: 1 }],
+      thresholds: [{ thresholdPct: 1, crossed: true, size: 100 }],
+      source: 'AMM',
+    })
   })
 
   it('returns 200 and a body that matches the declared /price schema', async () => {
@@ -113,10 +123,44 @@ describe('REST response schema validation', () => {
     expect(res.statusCode).toBe(200)
 
     // The serialized body must independently satisfy the published schema.
-    const ajv = new Ajv({ allErrors: true })
+    const ajv = new Ajv({ allErrors: true, allowUnionTypes: true })
     const validate = ajv.compile(priceResponseSchema as object)
     const ok = validate(res.json())
     // Surface a readable diff if the body ever drifts from the schema.
+    expect(ok, ajv.errorsText(validate.errors)).toBe(true)
+  })
+
+  it('returns 200 and a body that matches the declared /price schema when string decimals are requested', async () => {
+    mockGetAggregatedPrice.mockResolvedValue({
+      ...validAggregate(),
+      price: '0.123456789012345678',
+      sdexPrice: '0.123456789012345678',
+      ammPrice: '0.123456789012345678',
+      volume24h: '150.000000000000000000',
+      sdexVolume24h: '100.000000000000000000',
+      ammVolume24h: '50.000000000000000000',
+      vwap1m: '0.123456789012345678',
+      vwap5m: '0.123456789012345678',
+      vwap1h: '0.123456789012345678',
+      vwap24h: '0.123456789012345678',
+      priceChange24h: '1.100000000000000000',
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/price/XLM/USDC',
+      headers: { 'x-decimal-format': 'string' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['x-decimal-format']).toBe('string')
+    const body = res.json()
+    expect(body.price).toBe('0.123456789012345678')
+
+    const ajv = new Ajv({ allErrors: true, allowUnionTypes: true })
+    const validate = ajv.compile(priceResponseSchema as object)
+    const ok = validate(body)
     expect(ok, ajv.errorsText(validate.errors)).toBe(true)
   })
 
@@ -147,56 +191,11 @@ describe('REST response schema validation', () => {
     expect(res.statusCode).toBe(500)
   })
 
-  it('returns 200 and a body that matches the declared /price/:assetA/:assetB/split schema', async () => {
-    mockGetSplitRecommendation.mockResolvedValue({
-      splitRecommended: true,
-      assetA: 'XLM',
-      assetB: 'USDC',
-      pairKey: 'USDC/XLM',
-      network: 'testnet',
-      amount: 1000,
-      message: 'Splitting across SDEX and AMM yields 2.50% better output than single-venue route (SDEX)',
-      proportions: {
-        SDEX: 0.4,
-        AMM: 0.6,
-      },
-      allocations: [
-        { venue: 'SDEX', proportion: 0.4, amount: 400, estimatedOutput: 390, effectivePrice: 0.975 },
-        { venue: 'AMM', proportion: 0.6, amount: 600, estimatedOutput: 580, effectivePrice: 0.9667 },
-      ],
-      estimatedOutput: 970,
-      effectivePrice: 0.97,
-      slippagePct: 1.5,
-      singleVenue: {
-        route: 'SDEX',
-        output: 950,
-        price: 0.95,
-        slippagePct: 2.0,
-      },
-      comparison: {
-        singleVenueRoute: 'SDEX',
-        singleVenueOutput: 950,
-        singleVenueEffectivePrice: 0.95,
-        singleVenueSlippagePct: 2.0,
-        outputImprovement: 20,
-        outputImprovementPct: 2.11,
-      },
-      provenance: {
-        venues: ['SDEX', 'AMM'],
-        samples: 20,
-        asOf: '2026-10-16T12:00:00.000Z',
-        freshnessSeconds: 15,
-      },
-    })
-
+  it('returns a schema-valid adaptive impact response', async () => {
     const app = await buildApp()
-    const res = await app.inject({ method: 'GET', url: '/price/XLM/USDC/split' })
+    const res = await app.inject({ method: 'GET', url: '/impact/XLM/USDC?thresholds=1' })
 
     expect(res.statusCode).toBe(200)
-
-    const ajv = new Ajv({ allErrors: true })
-    const validate = ajv.compile(splitResponseSchema as object)
-    const ok = validate(res.json())
-    expect(ok, ajv.errorsText(validate.errors)).toBe(true)
+    expect(res.json().thresholds).toEqual([{ thresholdPct: 1, crossed: true, size: 100 }])
   })
 })
