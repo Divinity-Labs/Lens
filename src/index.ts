@@ -16,7 +16,7 @@ import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
 import { venueAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
-import { startSnapshotIngester } from './ingesters/snapshot'
+import { startSnapshotIngester } from './ingest/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'

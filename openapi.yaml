@@ -1974,6 +1974,17 @@ components:
         default: testnet
 
   responses:
+    BadRequest:
+      description: Bad request — a parameter failed validation.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: string
     PaymentRequired:
       description: Payment Required
       content:

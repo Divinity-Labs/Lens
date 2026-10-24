@@ -705,10 +705,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query latest lending and borrow rates across pools
+         * @description Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.
+         */
+        get: operations["getLendingRates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        LendingRateEntry: {
+            id: string;
+            /** @example blend */
+            venue: string;
+            /** @example blend */
+            source: string;
+            /** @example mainnet */
+            network: string;
+            poolId: string;
+            poolName?: string | null;
+            /** @example USDC */
+            asset: string;
+            assetAddress?: string | null;
+            supplyApy: number;
+            borrowApy: number;
+            supplyApr?: number | null;
+            borrowApr?: number | null;
+            /** @description Borrowed / supplied as a fraction. Null for venues that publish rates only. */
+            utilization?: number | null;
+            totalSupply?: number | null;
+            totalBorrowed?: number | null;
+            reserves?: number | null;
+            ledger?: number;
+            /** Format: date-time */
+            timestamp: string;
+        };
+        LendingRatesResponse: {
+            network: string;
+            rates: components["schemas"]["LendingRateEntry"][];
+        };
         InternalErrorResponse: {
             /**
              * @example internal_error
@@ -1456,6 +1506,18 @@ export interface components {
         };
     };
     responses: {
+        /** @description Bad request — a parameter failed validation. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    error?: string;
+                    code?: string;
+                };
+            };
+        };
         /** @description Payment Required */
         PaymentRequired: {
             headers: {
@@ -3116,6 +3178,37 @@ export interface operations {
                 };
             };
             402: components["responses"]["PaymentRequired"];
+        };
+    };
+    getLendingRates: {
+        parameters: {
+            query?: {
+                /** @description Filter by asset symbol (e.g. USDC, XLM) */
+                asset?: string;
+                /** @description Filter by pool contract ID */
+                poolId?: string;
+                /** @description Stellar network to query (testnet or mainnet) */
+                network?: "testnet" | "mainnet";
+                /** @description Maximum number of rate records to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest lending rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LendingRatesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
 }

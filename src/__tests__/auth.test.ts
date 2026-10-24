@@ -82,6 +82,13 @@ beforeEach(() => {
   mockFindMany.mockReset()
   mockCreate.mockReset()
   mockUpdate.mockReset()
+  // webhookDeliveryFailure mocks are shared across the admin-endpoint tests;
+  // reset them too, or a prior test's call count / mockResolvedValue leaks into
+  // the next one under shuffled order (the "recent webhook failure endpoint"
+  // test then sees findMany already called and fails).
+  vi.mocked(prisma.webhookDeliveryFailure.findMany).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.create).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.deleteMany).mockReset()
   // The lookup cache is module-global; a stale entry from a previous test
   // would otherwise mask a different mock for the same key.
   clearApiKeyCache()

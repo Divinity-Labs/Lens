@@ -268,7 +268,7 @@ export function synthesizeEventId(
 /**
  * The cursor and the ledger it reached, read in one round trip. Ingesters need
  * both: the cursor resumes pagination, and the ledger is the fallback when a
- * trade's TOID can't be parsed (see ingesters/toid.ts).
+ * trade's TOID can't be parsed (see ingest/toid.ts).
  */
 export interface IndexerState {
   cursor: string | null
