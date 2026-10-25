@@ -105,6 +105,64 @@
         }
       }
     },
+    "/venues": {
+      "get": {
+        "operationId": "getVenueVolumeShare",
+        "summary": "Venue Share of Volume",
+        "description": "Per-venue traded volume, market share (percentage of total), and period-over-period percentage change comparing the requested window against the immediately preceding window of identical duration.\nMarket shares sum to 100% within floating-point tolerance. Stale or excluded venues are explicitly listed in `excludedVenues`.\nAll queries are filtered by `network` via the `x-network` header — testnet and mainnet data are never merged into a single series.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "description": "Time window for the aggregation",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "default": "24h"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Venue volume share and market share data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid window parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/live": {
       "get": {
         "operationId": "getLive",
@@ -113,7 +171,45 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Process is alive.",
+            "description": "Process is alive."
+          }
+        }
+      }
+    },
+    "/tvl": {
+      "get": {
+        "operationId": "getTvl",
+        "summary": "Total Value Locked across Stellar DeFi venues",
+        "description": "Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, and Aquarius. Reports totals, breakdown by venue, breakdown by asset with valuation sources named, and marks pools with unpriceable assets as unpriced rather than zero. Querying `?history=true` returns historical hourly TVL samples.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "history",
+            "in": "query",
+            "required": false,
+            "description": "Return historical time series of TVL when true",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "description": "Historical lookback window in hours (default 24)",
+            "schema": {
+              "type": "string",
+              "default": 24
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Total Value Locked breakdown or historical series",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/CacheControl"
@@ -167,12 +263,49 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid parameters"
+          },
           "503": {
             "description": "Not ready. `ok` is false and `checks` says which dependency (or the boot sequence) is responsible. `/live` remains healthy.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadinessReport"
+                  "$ref": "#/components/schemas/ReadinessReport",
+                  "properties": {
+                    "network": {
+                      "type": "string",
+                      "enum": [
+                        "testnet",
+                        "mainnet"
+                      ]
+                    },
+                    "totalTvlUsd": {
+                      "type": "number"
+                    },
+                    "unpricedPoolsCount": {
+                      "type": "integer"
+                    },
+                    "pricedPoolsCount": {
+                      "type": "integer"
+                    },
+                    "venues": {
+                      "type": "object"
+                    },
+                    "byAsset": {
+                      "type": "object"
+                    },
+                    "pools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "computedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
                 }
               }
             }
@@ -192,7 +325,7 @@
         ],
         "responses": {
           "200": {
-            "description": "API status",
+            "description": "API status and health diagnostics",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/CacheControl"
@@ -206,12 +339,66 @@
                     "ok": {
                       "type": "boolean"
                     },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "healthy",
+                        "degraded",
+                        "unhealthy"
+                      ]
+                    },
                     "network": {
                       "type": "string",
                       "enum": [
                         "testnet",
                         "mainnet"
                       ]
+                    },
+                    "health": {
+                      "type": "object",
+                      "properties": {
+                        "process": {
+                          "type": "string"
+                        },
+                        "data": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "process": {
+                      "type": "object",
+                      "properties": {
+                        "uptimeSeconds": {
+                          "type": "number"
+                        },
+                        "memoryUsageMb": {
+                          "type": "number"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "lastIndexedLedger": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "lastProcessedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "ingestLagSeconds": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "isStale": {
+                          "type": "boolean"
+                        }
+                      }
                     },
                     "watchedPairs": {
                       "type": "array",
@@ -231,6 +418,10 @@
                     "ingestLagSeconds": {
                       "type": "integer",
                       "nullable": true
+                    },
+                    "adminConfigured": {
+                      "type": "boolean",
+                      "description": "Whether this deployment has an ADMIN_TOKEN configured, so an operator can tell a rejected token from a disabled admin surface. Reports only that a token is set, never any part of its value. Admin routes answer 503 admin_not_configured when this is false."
                     }
                   }
                 }
@@ -239,6 +430,33 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "description": "Service unhealthy or database unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A fixed phrase, never the database driver's message. This route is public and unauthenticated, and a connection failure carries the host, the user and sometimes the whole connection string; the detail is logged server-side instead.",
+                      "example": "Database unavailable"
+                    },
+                    "pagingCondition": {
+                      "type": "string",
+                      "example": "DATABASE_DOWN"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -468,7 +686,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "description": "Invalid parameters"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -721,6 +939,7 @@
             "name": "from",
             "in": "query",
             "required": false,
+            "description": "Start of the time window (inclusive). Together with `to` this defines a half-open interval [from, to): samples whose timestamp is exactly `from` are included, samples whose timestamp is exactly `to` are excluded. This means two adjacent windows [T0, T1) and [T1, T2) share no boundary — a sample landing exactly on T1 appears in exactly one of the two windows.",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -730,6 +949,7 @@
             "name": "to",
             "in": "query",
             "required": false,
+            "description": "End of the time window (exclusive). Together with `from` this defines a half-open interval [from, to): samples whose timestamp is exactly `to` are excluded, samples whose timestamp is exactly `from` are included. This means two adjacent windows [T0, T1) and [T1, T2) share no boundary — a sample landing exactly on T1 appears in exactly one of the two windows.",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -843,6 +1063,7 @@
             "name": "from",
             "in": "query",
             "required": false,
+            "description": "Start of the time window (inclusive). Together with `to` this defines a half-open interval [from, to): samples whose timestamp is exactly `from` are included, samples whose timestamp is exactly `to` are excluded. This means two adjacent windows [T0, T1) and [T1, T2) share no boundary — a sample landing exactly on T1 appears in exactly one of the two windows.",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -852,6 +1073,7 @@
             "name": "to",
             "in": "query",
             "required": false,
+            "description": "End of the time window (exclusive). Together with `from` this defines a half-open interval [from, to): samples whose timestamp is exactly `to` are excluded, samples whose timestamp is exactly `from` are included. This means two adjacent windows [T0, T1) and [T1, T2) share no boundary — a sample landing exactly on T1 appears in exactly one of the two windows.",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -1468,6 +1690,9 @@
           },
           {
             "$ref": "#/components/parameters/DecimalFormatHeader"
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
           }
         ],
         "responses": {
@@ -1505,7 +1730,7 @@
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
-        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`.",
+        "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`. Venues are classified as primary markets or aggregators in the registry. `totals.net` / `netVolume` sum primary markets only, while `totals.gross` / `grossVolume` include aggregator venues (e.g. Aquarius) that re-report trades settled elsewhere. `totalVolume` and `tradeCount` report the net figures; the trade-size statistics and provenance cover every venue (gross).",
         "security": [],
         "parameters": [
           {
@@ -1775,6 +2000,7 @@
             "name": "liquidity",
             "in": "query",
             "required": false,
+            "description": "Filter for pairs with total AMM pool liquidity greater than or equal to this value. Liquidity is defined as the sum across all active AMM pools for the pair of (reserve_a * spot_price + reserve_b), valued in the quote asset (asset_b) at the latest snapshot spot price.",
             "schema": {
               "type": "number"
             }
@@ -2615,6 +2841,75 @@
           }
         }
       }
+    },
+    "/rates": {
+      "get": {
+        "operationId": "getLendingRates",
+        "summary": "Query latest lending and borrow rates across pools",
+        "description": "Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "required": false,
+            "description": "Filter by asset symbol (e.g. USDC, XLM)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "poolId",
+            "in": "query",
+            "required": false,
+            "description": "Filter by pool contract ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "network",
+            "in": "query",
+            "required": false,
+            "description": "Stellar network to query (testnet or mainnet)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "testnet",
+                "mainnet"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of rate records to return",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest lending rates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LendingRatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2755,6 +3050,24 @@
             }
           }
         }
+      },
+      "BadRequest": {
+        "description": "Invalid request parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "headers": {
@@ -2767,6 +3080,108 @@
       }
     },
     "schemas": {
+      "LendingRateEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "venue",
+          "source",
+          "network",
+          "poolId",
+          "asset",
+          "supplyApy",
+          "borrowApy",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string",
+            "example": "blend"
+          },
+          "source": {
+            "type": "string",
+            "example": "blend"
+          },
+          "network": {
+            "type": "string",
+            "example": "mainnet"
+          },
+          "poolId": {
+            "type": "string"
+          },
+          "poolName": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset": {
+            "type": "string",
+            "example": "USDC"
+          },
+          "assetAddress": {
+            "type": "string",
+            "nullable": true
+          },
+          "supplyApy": {
+            "type": "number"
+          },
+          "borrowApy": {
+            "type": "number"
+          },
+          "supplyApr": {
+            "type": "number",
+            "nullable": true
+          },
+          "borrowApr": {
+            "type": "number",
+            "nullable": true
+          },
+          "utilization": {
+            "type": "number",
+            "nullable": true,
+            "description": "Borrowed / supplied as a fraction. Null for venues that publish rates only."
+          },
+          "totalSupply": {
+            "type": "number",
+            "nullable": true
+          },
+          "totalBorrowed": {
+            "type": "number",
+            "nullable": true
+          },
+          "reserves": {
+            "type": "number",
+            "nullable": true
+          },
+          "ledger": {
+            "type": "integer"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LendingRatesResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "rates"
+        ],
+        "properties": {
+          "network": {
+            "type": "string"
+          },
+          "rates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LendingRateEntry"
+            }
+          }
+        }
+      },
       "InternalErrorResponse": {
         "type": "object",
         "required": [
@@ -2817,6 +3232,139 @@
             "type": "string",
             "nullable": true,
             "example": "unreachable or not migrated"
+          }
+        }
+      },
+      "VenuesResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "window",
+          "excludedVenues",
+          "venues",
+          "totalVolume",
+          "marketShares",
+          "periodOverPeriodPctChange"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "24h",
+              "7d",
+              "30d"
+            ]
+          },
+          "excludedVenues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "venue",
+                "baseVolume",
+                "counterVolume",
+                "samples",
+                "pairs",
+                "marketShare",
+                "periodOverPeriodPctChange",
+                "lastUpdated",
+                "ageSeconds"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "venue": {
+                  "type": "string"
+                },
+                "baseVolume": {
+                  "type": "number"
+                },
+                "counterVolume": {
+                  "type": "number"
+                },
+                "samples": {
+                  "type": "integer"
+                },
+                "pairs": {
+                  "type": "integer"
+                },
+                "marketShare": {
+                  "type": "number"
+                },
+                "periodOverPeriodPctChange": {
+                  "type": "number"
+                },
+                "lastUpdated": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ageSeconds": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "totalVolume": {
+            "type": "object",
+            "required": [
+              "value",
+              "unit",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "marketShares": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "variance": {
+                "type": "number"
+              }
+            }
+          },
+          "periodOverPeriodPctChange": {
+            "type": "number"
           }
         }
       },
@@ -4303,6 +4851,7 @@
           "assetA",
           "assetB",
           "pairKey",
+          "network",
           "vwap",
           "windowMinutes",
           "source",
@@ -4323,6 +4872,13 @@
           },
           "pairKey": {
             "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
           },
           "vwap": {
             "oneOf": [
@@ -4373,6 +4929,24 @@
           }
         }
       },
+      "VolumeTotals": {
+        "type": "object",
+        "required": [
+          "net",
+          "gross"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "net": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "gross": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          }
+        }
+      },
       "VolumeResponse": {
         "type": "object",
         "required": [
@@ -4382,9 +4956,14 @@
           "startTime",
           "endTime",
           "totalVolume",
+          "netVolume",
+          "grossVolume",
+          "totals",
           "byVenue",
           "venues",
           "tradeCount",
+          "netTradeCount",
+          "grossTradeCount",
           "medianTradeSize",
           "topTradeVolumeShare",
           "volumeConcentration",
@@ -4420,8 +4999,20 @@
             "type": "string",
             "format": "date-time"
           },
+          "totals": {
+            "$ref": "#/components/schemas/VolumeTotals"
+          },
+          "netVolume": {
+            "type": "number",
+            "description": "Volume summed across primary markets only (excluding aggregator double-counts)"
+          },
+          "grossVolume": {
+            "type": "number",
+            "description": "Gross volume summed across all venues including aggregators"
+          },
           "totalVolume": {
-            "type": "number"
+            "type": "number",
+            "description": "Primary volume total (alias for netVolume for backward compatibility)"
           },
           "byVenue": {
             "type": "object",
@@ -4437,7 +5028,15 @@
           },
           "tradeCount": {
             "type": "integer",
-            "description": "Number of positive-volume price point samples in the selected window."
+            "description": "Number of positive-volume samples from primary markets (equals netTradeCount)."
+          },
+          "netTradeCount": {
+            "type": "integer",
+            "description": "Number of positive-volume samples from primary markets."
+          },
+          "grossTradeCount": {
+            "type": "integer",
+            "description": "Number of positive-volume samples across all venues, including aggregators."
           },
           "medianTradeSize": {
             "type": "number",
@@ -4814,7 +5413,12 @@
             "type": "number"
           },
           "liquidity": {
-            "type": "number"
+            "type": "number",
+            "description": "Total liquidity across all active AMM pools for this pair on the network, computed as sum(reserve_a * spot_price + reserve_b), valued in the quote asset (asset_b) at each pool's latest snapshot spot price."
+          },
+          "liquidity_unit": {
+            "type": "string",
+            "description": "The asset symbol/identifier that liquidity is denominated in, corresponding to the counter/quote asset (asset_b) of the pair (the asset after the slash in pair_key)."
           }
         }
       },
@@ -4828,6 +5432,14 @@
         ],
         "additionalProperties": false,
         "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ],
+            "description": "The network answered for."
+          },
           "data": {
             "type": "array",
             "items": {
