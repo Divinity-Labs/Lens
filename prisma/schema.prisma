@@ -26,24 +26,27 @@ datasource db {
 /// scripts/migrations/2026-10-17-price-point-identity.sql, which removes rows
 /// already duplicated on this identity before the index is created.
 model PricePoint {
-  id            String   @default(uuid())
-  network       String   @default("testnet")
-  assetA        String   @map("asset_a")
-  assetB        String   @map("asset_b")
-  pairKey       String   @map("pair_key")
+  id            String    @default(uuid())
+  network       String    @default("testnet")
+  assetA        String    @map("asset_a")
+  assetB        String    @map("asset_b")
+  pairKey       String    @map("pair_key")
   source        String
-  poolId        String?  @map("pool_id")
-  price         Decimal  @db.Decimal(36, 18)
-  baseVolume    Decimal  @map("base_volume") @db.Decimal(36, 7)
-  counterVolume Decimal  @map("counter_volume") @db.Decimal(36, 7)
+  poolId        String?   @map("pool_id")
+  price         Decimal   @db.Decimal(36, 18)
+  baseVolume    Decimal   @map("base_volume") @db.Decimal(36, 7)
+  counterVolume Decimal   @map("counter_volume") @db.Decimal(36, 7)
   ledger        Int
-  timestamp     DateTime
-  eventId       String?  @map("event_id")
+  timestamp     DateTime  // Legacy timestamp column / TimescaleDB hypertable partition key
+  observedAt    DateTime  @default(now()) @map("observed_at")
+  sourceTime    DateTime? @map("source_time")
+  eventId       String?   @map("event_id")
 
   @@id([id, timestamp])
+  @@index([network, pairKey, observedAt(sort: Desc)])
   @@unique([network, source, eventId], map: "price_point_identity")
   @@index([network, pairKey, timestamp(sort: Desc)])
-  @@index([network, pairKey, source, timestamp(sort: Desc)])
+  @@index([network, pairKey, source, observedAt(sort: Desc)])
   @@map("price_points")
 }
 
@@ -355,6 +358,29 @@ model ApiKey {
   scopes           String[]  @default([])
 
   @@map("api_keys")
+}
+
+model VenueDispersion {
+  id               String   @id @default(uuid())
+  network          String   @default("testnet")
+  pairKey          String   @map("pair_key")
+  timestamp        DateTime @default(now())
+  venueCount       Int      @map("venue_count")
+  median           Decimal? @db.Decimal(36, 18)
+  dispersionPct    Decimal? @map("dispersion_pct") @db.Decimal(10, 4)
+  spreadBps        Decimal? @map("spread_bps") @db.Decimal(10, 2)
+  minPrice         Decimal? @map("min_price") @db.Decimal(36, 18)
+  maxPrice         Decimal? @map("max_price") @db.Decimal(36, 18)
+  outlierVenue     String?  @map("outlier_venue")
+  outlierDeviation Decimal? @map("outlier_deviation") @db.Decimal(10, 4)
+  status           String   @default("ok")
+  isAmbiguous      Boolean  @default(false) @map("is_ambiguous")
+  freshVenues      String[] @default([]) @map("fresh_venues")
+  staleVenues      String[] @default([]) @map("stale_venues")
+  venues           Json?
+
+  @@index([network, pairKey, timestamp(sort: Desc)])
+  @@map("venue_dispersions")
 }
 
 /// One value Lens put on chain through its SEP-40 feed (#222).

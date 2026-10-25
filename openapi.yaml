@@ -4,6 +4,12 @@ info:
   description: >-
     Unified Stellar price API aggregating SDEX + AMM prices.
 
+    Every route is served under the `/v1` version segment; the versioned path is
+    the canonical one documented here. The same routes also answer at their
+    unversioned paths as deprecated aliases so pre-`/v1` integrations keep
+    working — those responses carry `Deprecation` and `Link` headers pointing at
+    the successor. See `docs/api-versioning.md` for the retirement policy.
+
     Cache policy: every route sends a deliberate `Cache-Control` response
     header. Live prices (`/price/*`) are `public, max-age=30`; aggregates
     (`/price/*/history`, `/price/twap/*`, `/price/vwap/*`, `/prices/history`,
@@ -38,7 +44,7 @@ servers:
     description: Local development server
 
 paths:
-  /venues/registry:
+  /v1/venues/registry:
     get:
       operationId: getVenueRegistry
       summary: List registered venues and their network liveness
@@ -82,7 +88,50 @@ paths:
                           format: date-time
                           nullable: true
 
-  /live:
+  /v1/venues:
+    get:
+      operationId: getVenueVolumeShare
+      summary: Venue Share of Volume
+      description: >-
+        Per-venue traded volume, market share (percentage of total), and
+        period-over-period percentage change comparing the requested window
+        against the immediately preceding window of identical duration.
+
+        Market shares sum to 100% within floating-point tolerance. Stale or
+        excluded venues are explicitly listed in `excludedVenues`.
+
+        All queries are filtered by `network` via the `x-network` header —
+        testnet and mainnet data are never merged into a single series.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: window
+          in: query
+          description: Time window for the aggregation
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: '24h'
+      responses:
+        '200':
+          description: Venue volume share and market share data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VenuesResponse'
+        '400':
+          description: Invalid window parameter
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+
+  /v1/live:
     get:
       operationId: getLive
       summary: Liveness probe
@@ -96,7 +145,7 @@ paths:
       responses:
         '200':
           description: Process is alive.
-  /tvl:
+  /v1/tvl:
     get:
       operationId: getTvl
       summary: Total Value Locked across Stellar DeFi venues
@@ -143,7 +192,7 @@ paths:
                     description: Seconds since the process started.
                     example: 3600
 
-  /ready:
+  /v1/ready:
     get:
       operationId: getReady
       summary: Readiness probe
@@ -201,7 +250,7 @@ paths:
         '400':
           description: Invalid parameters
 
-  /status:
+  /v1/status:
     get:
       operationId: getStatus
       summary: Get API status and indexer state
@@ -306,7 +355,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /snapshot:
+  /v1/snapshot:
     get:
       operationId: getSnapshot
       summary: Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)
@@ -348,7 +397,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /price/{assetA}/{assetB}:
+  /v1/price/{assetA}/{assetB}:
     get:
       operationId: getPrice
       summary: Get aggregated price for a pair
@@ -386,7 +435,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/route:
+  /v1/price/{assetA}/{assetB}/route:
     get:
       operationId: getBestRoute
       summary: Get best swap route for a pair and amount
@@ -398,11 +447,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: amount
           in: query
           required: false
@@ -426,7 +477,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{asset}/fiat:
+  /v1/price/{asset}/fiat:
     get:
       operationId: getFiatPrice
       summary: Convert asset price to fiat currency with NGN support (#290)
@@ -437,6 +488,7 @@ paths:
           required: true
           schema:
             type: string
+            example: XLM
         - name: currency
           in: query
           required: false
@@ -456,10 +508,13 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/history:
+  /v1/price/{assetA}/{assetB}/history:
     get:
       operationId: getPriceHistory
       summary: Get price history buckets
+      description: >-
+        Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18
+        decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
       security: []
       parameters:
         - name: assetA
@@ -467,11 +522,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
@@ -515,15 +572,28 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pools:
+  /v1/pools:
     get:
       operationId: getPools
       summary: Get AMM liquidity pool reserves and spot prices
+      description: >-
+        Latest snapshot per pool for one network. Paginated with the shared
+        keyset convention: ordered by pool_id ascending, default limit 50,
+        maximum 200.
       security:
         - x402: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
-        - $ref: '#/components/parameters/DecimalFormatHeader'
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Out-of-range values are clamped into [1, 200].
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
       responses:
         '200':
           description: List of pools
@@ -534,6 +604,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pools, nextCursor, hasMore]
                 properties:
                   pools:
                     type: array
@@ -563,15 +634,28 @@ paths:
                         timestamp:
                           type: string
                           format: date-time
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  hasMore:
+                    type: boolean
+        '400':
+          description: Invalid limit or cursor
         '402':
           $ref: '#/components/responses/PaymentRequired'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /candles/{assetA}/{assetB}:
+  /v1/candles/{assetA}/{assetB}:
     get:
       operationId: getCandles
       summary: Get OHLCV candle data
+      description: >-
+        OHLCV candles for a pair. Buckets are aggregated with exact numeric
+        arithmetic in the database, so a sum does not depend on the order rows
+        were summed in; values are narrowed to JSON numbers at the edge.
+        Paginated with the shared keyset convention: ordered by bucket start
+        time ascending, default limit 500, maximum 5000.
       security:
         - x402: []
       parameters:
@@ -580,11 +664,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: interval
           in: query
           required: false
@@ -618,6 +704,16 @@ paths:
           schema:
             type: string
             format: date-time
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Out-of-range values are clamped into [1, 5000].
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 500
       responses:
         '200':
           description: Candle data
@@ -628,6 +724,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pairKey, interval, from, to, candles, nextCursor, hasMore]
                 properties:
                   pairKey:
                     type: string
@@ -635,8 +732,10 @@ paths:
                     type: string
                   from:
                     type: string
+                    format: date-time
                   to:
                     type: string
+                    format: date-time
                   candles:
                     type: array
                     items:
@@ -655,6 +754,11 @@ paths:
                           type: number
                         volume:
                           type: number
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  hasMore:
+                    type: boolean
         '400':
           description: Invalid parameters
         '402':
@@ -662,14 +766,20 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /prices/history:
+  /v1/prices/history:
     get:
       operationId: getPriceSnapshots
       summary: Get historical 1-minute price snapshots
       description: >-
         Returns minute-resolution price snapshots for a pair over [from, to],
-        optionally aggregated into 5m or 1h buckets. Snapshots are retained for
-        ~30 days. Gated by x402 (matches the /price prefix).
+        optionally aggregated into 5m or 1h buckets, with exact numeric
+        arithmetic in the database so a sum does not depend on row order.
+        Snapshots are retained for
+        ~30 days. Paginated with the shared keyset convention: ordered by
+        bucket start time ascending, default limit 1000, maximum 10000 points.
+        With format=csv the pagination envelope travels in the X-Next-Cursor
+        and X-Has-More response headers; with format=json it is in the body.
+        Gated by x402 (matches the /price prefix).
       security:
         - x402: []
       parameters:
@@ -723,13 +833,35 @@ paths:
             type: string
             enum: [json, csv]
             default: json
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Page size (number of buckets). Out-of-range values are clamped
+            into [1, 10000].
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1000
         - $ref: '#/components/parameters/NetworkQuery'
       responses:
         '200':
-          description: Historical price snapshots
+          description: >-
+            Historical price snapshots. When more buckets exist beyond this
+            page, the response carries X-Next-Cursor (pass it back as
+            ?cursor=) and X-Has-More: true.
           headers:
-            Cache-Control:
-              $ref: '#/components/headers/CacheControl'
+            X-Next-Cursor:
+              description: Opaque cursor for the next page; absent on the last page.
+              schema:
+                type: string
+            X-Has-More:
+              description: "'true' when another page exists, 'false' otherwise."
+              schema:
+                type: string
+                enum: ['true', 'false']
           content:
             text/csv:
               schema:
@@ -738,6 +870,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pair, network, interval, from, to, count, points, nextCursor, hasMore]
                 properties:
                   pair:
                     type: string
@@ -754,6 +887,7 @@ paths:
                     format: date-time
                   count:
                     type: integer
+                    description: Number of points in this page (not the total across pages).
                   points:
                     type: array
                     items:
@@ -766,6 +900,11 @@ paths:
                           type: number
                         volume:
                           type: number
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  hasMore:
+                    type: boolean
         '400':
           description: Invalid parameters
         '402':
@@ -773,13 +912,27 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /pairs:
+  /v1/pairs:
     get:
       operationId: listPairs
       summary: List all active trading pairs
+      description: >-
+        Active trading pairs with their latest price metadata. Paginated with
+        the shared keyset convention: ordered by pairKey ascending, default
+        limit 50, maximum 200.
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Out-of-range values are clamped into [1, 200].
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
       responses:
         '200':
           description: List of pairs
@@ -790,6 +943,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pairs, nextCursor, hasMore]
                 properties:
                   pairs:
                     type: array
@@ -809,6 +963,13 @@ paths:
                           type: string
                           format: date-time
                           nullable: true
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  hasMore:
+                    type: boolean
+        '400':
+          description: Invalid limit or cursor
         '429':
           $ref: '#/components/responses/TooManyRequests'
     post:
@@ -828,7 +989,7 @@ paths:
                   example: XLM
                 assetB:
                   type: string
-                  example: USDC:GBBD47...
+                  example: USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
       responses:
         '201':
           description: Pair added
@@ -841,7 +1002,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/{assetA}/{assetB}/depth:
+  /v1/price/{assetA}/{assetB}/depth:
     get:
       operationId: getDepth
       summary: Get order-book depth and execution slippage for a pair
@@ -890,7 +1051,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /book/{assetA}/{assetB}:
+  /v1/book/{assetA}/{assetB}:
     get:
       operationId: getBook
       summary: Get the aggregated SDEX and AMM price ladder for a pair
@@ -954,7 +1115,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /impact/{assetA}/{assetB}:
+  /v1/impact/{assetA}/{assetB}:
     get:
       operationId: getImpact
       summary: Get an adaptive slippage impact curve for a pair
@@ -1009,7 +1170,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /price/twap/{assetA}/{assetB}:
+  /v1/price/twap/{assetA}/{assetB}:
     get:
       operationId: getTwap
       summary: Get a manipulation-resistant time-weighted average price
@@ -1021,11 +1182,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
@@ -1072,7 +1235,7 @@ paths:
         '500':
           description: TWAP computation failed
 
-  /price/vwap/{assetA}/{assetB}:
+  /v1/price/vwap/{assetA}/{assetB}:
     get:
       operationId: getVwap
       summary: Get a volume-weighted average price
@@ -1084,11 +1247,13 @@ paths:
           required: true
           schema:
             type: string
+          example: XLM
         - name: assetB
           in: path
           required: true
           schema:
             type: string
+          example: USDC
         - name: window
           in: query
           required: false
@@ -1133,7 +1298,7 @@ paths:
         '500':
           description: VWAP computation failed
 
-  /volumes/{asset}:
+  /v1/volumes/{asset}:
     get:
       operationId: getVolumes
       summary: Get cross-venue traded volume for an asset
@@ -1190,7 +1355,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /spreads/{asset}:
+  /v1/spreads/{asset}:
     get:
       operationId: getSpreads
       summary: Get the tightest per-venue bid/ask spread for an asset
@@ -1236,7 +1401,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /rates/{asset}:
+  /v1/rates/{asset}:
     get:
       operationId: getLendingRates
       summary: Get supply and borrow rates for an asset across lending venues
@@ -1272,7 +1437,144 @@ paths:
         '500':
           description: Rate lookup failed
 
-  /compare/{asset}:
+  /v1/dispersion/{assetA}/{assetB}:
+    get:
+      operationId: getPairDispersion
+      summary: Get venue price dispersion and outlier attribution for a pair
+      description: >-
+        Returns cross-venue price dispersion history and outlier attribution
+        for a pair over time, including median, max absolute percentage deviation,
+        spread in basis points, and outlying venue.
+      security: []
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Base asset code or CODE:ISSUER
+          example: XLM
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Quote asset code or CODE:ISSUER
+          example: USDC
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start timestamp (ISO-8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End timestamp (ISO-8601)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+          description: Max number of history records to return
+      responses:
+        '200':
+          description: Dispersion history and latest outlier attribution
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pairKey:
+                    type: string
+                  network:
+                    type: string
+                  latest:
+                    type: object
+                    nullable: true
+                  count:
+                    type: integer
+                  history:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid request parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Dispersion query failed
+
+  /v1/dispersion:
+    get:
+      operationId: listDispersion
+      summary: List cross-venue dispersion across watched pairs
+      description: >-
+        Queries recent cross-venue dispersion reconciliation records across all pairs
+        or filtered by a specific pair.
+      security: []
+      parameters:
+        - name: pair
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional pair key filter (e.g. XLM/USDC)
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of dispersion reconciliation records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network:
+                    type: string
+                  pair:
+                    type: string
+                    nullable: true
+                  count:
+                    type: integer
+                  history:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: Invalid request parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Dispersion query failed
+
+  /v1/compare/{asset}:
+
     get:
       operationId: compareAsset
       summary: Compare Lens prices with every configured external oracle
@@ -1304,7 +1606,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /screener:
+  /v1/screener:
     get:
       operationId: screenPairs
       summary: Screen pairs by volume, change, liquidity and price
@@ -1359,15 +1661,11 @@ paths:
             type: string
             enum: [asc, desc]
             default: desc
-        - name: cursor
-          in: query
-          required: false
-          description: Opaque cursor returned as `nextCursor` by the previous page.
-          schema:
-            type: string
+        - $ref: '#/components/parameters/CursorQuery'
         - name: limit
           in: query
           required: false
+          description: Page size. Out-of-range values are clamped into [1, 100].
           schema:
             type: integer
             minimum: 1
@@ -1391,7 +1689,7 @@ paths:
         '500':
           description: Internal server error
 
-  /movers:
+  /v1/movers:
     get:
       operationId: getMovers
       summary: Get biggest gainers, biggest losers, and volume movers
@@ -1422,7 +1720,7 @@ paths:
         '500':
           description: Internal server error
 
-  /benchmark/{asset}:
+  /v1/benchmark/{asset}:
     get:
       operationId: getBenchmark
       summary: Get peg-deviation statistics for an asset against a target
@@ -1461,7 +1759,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
-  /basket:
+  /v1/basket:
     get:
       operationId: getBasket
       summary: Compute the weighted price of a basket of assets
@@ -1509,7 +1807,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /correlation:
+  /v1/correlation:
     get:
       operationId: getCorrelation
       summary: Compute price correlation matrix across a basket of assets over a window
@@ -1549,7 +1847,7 @@ paths:
         '500':
           description: Correlation computation failed
 
-  /discovery/resources:
+  /v1/discovery/resources:
     get:
       operationId: listDiscoveryResources
       summary: Browse the x402 Bazaar catalog of discoverable resources
@@ -1609,7 +1907,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /discovery/search:
+  /v1/discovery/search:
     get:
       operationId: searchDiscoveryResources
       summary: Natural language search with ranking and quality evaluation for discoverable resources
@@ -1619,6 +1917,7 @@ paths:
           required: true
           schema:
             type: string
+            example: USDC
         - name: limit
           in: query
           required: false
@@ -1640,7 +1939,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /webhooks:
+  /v1/webhooks:
     post:
       operationId: createWebhook
       summary: Subscribe to a price-threshold webhook
@@ -1684,7 +1983,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /webhooks/{id}:
+  /v1/webhooks/{id}:
     delete:
       operationId: deleteWebhook
       summary: Delete a webhook subscription
@@ -1701,7 +2000,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /usage/me:
+  /v1/usage/me:
     get:
       operationId: getMyUsage
       summary: Get usage and quota for the calling API key
@@ -1722,7 +2021,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /usage:
+  /v1/usage:
     get:
       operationId: getCallerUsage
       summary: Get usage and quota for the calling API key (alias for /usage/me)
@@ -1743,7 +2042,7 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /supported:
+  /v1/supported:
     get:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
@@ -1759,7 +2058,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SupportedResponse'
 
-  /verify:
+  /v1/verify:
     post:
       operationId: verifyPayment
       summary: Verify an x402 payment payload
@@ -1790,7 +2089,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/VerifyResponse'
 
-  /settle:
+  /v1/settle:
     post:
       operationId: settlePayment
       summary: Settle an x402 payment (idempotent)
@@ -1819,7 +2118,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SettleResponse'
 
-  /graphql:
+  /v1/graphql:
     get:
       operationId: graphqlGet
       summary: Execute a GraphQL query over HTTP GET
@@ -1880,7 +2179,7 @@ paths:
         '402':
           $ref: '#/components/responses/PaymentRequired'
 
-  /rates:
+  /v1/rates:
     get:
       operationId: getLendingRates
       summary: Query latest lending and borrow rates across pools
@@ -1921,7 +2220,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/LendingRatesResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Invalid parameters
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -1972,6 +2271,17 @@ components:
         type: string
         enum: [testnet, mainnet]
         default: testnet
+    CursorQuery:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque cursor returned as `nextCursor` by the previous page. Every list
+        route uses the same keyset-cursor convention: pass it unchanged to
+        fetch the next page; rows inserted while paging never shift a page
+        boundary. An invalid cursor is rejected with 400.
+      schema:
+        type: string
 
   responses:
     PaymentRequired:
@@ -2030,6 +2340,16 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/InternalErrorResponse'
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: string
 
   headers:
     CacheControl:
@@ -2144,6 +2464,68 @@ components:
           type: string
           nullable: true
           example: unreachable or not migrated
+
+    VenuesResponse:
+      type: object
+      required: [network, window, excludedVenues, venues, totalVolume, marketShares, periodOverPeriodPctChange]
+      additionalProperties: false
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          enum: [24h, 7d, 30d]
+        excludedVenues:
+          type: array
+          items:
+            type: string
+        venues:
+          type: array
+          items:
+            type: object
+            required: [venue, baseVolume, counterVolume, samples, pairs, marketShare, periodOverPeriodPctChange, lastUpdated, ageSeconds]
+            additionalProperties: false
+            properties:
+              venue:
+                type: string
+              baseVolume:
+                type: number
+              counterVolume:
+                type: number
+              samples:
+                type: integer
+              pairs:
+                type: integer
+              marketShare:
+                type: number
+              periodOverPeriodPctChange:
+                type: number
+              lastUpdated:
+                type: [string, 'null']
+              ageSeconds:
+                type: [integer, 'null']
+        totalVolume:
+          type: object
+          required: [value, unit, reason]
+          additionalProperties: false
+          properties:
+            value:
+              type: [number, 'null']
+            unit:
+              type: [object, 'null']
+            reason:
+              type: [string, 'null']
+        marketShares:
+          type: object
+          additionalProperties: false
+          properties:
+            total:
+              type: number
+            variance:
+              type: number
+        periodOverPeriodPctChange:
+          type: number
 
     ReadinessReport:
       type: object

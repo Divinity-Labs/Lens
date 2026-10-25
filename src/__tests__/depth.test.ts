@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { clearPoolFeeCache } from '../pricing/pool-fee'
 
 const mockQuery = vi.fn()
 vi.mock('../db', () => ({
@@ -176,26 +177,79 @@ describe('Depth and slippage calculations (#84)', () => {
   })
 
   describe('getDepth endpoint service', () => {
-    it('returns empty depth response when no pools exist for pair', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [] })
-      const depth = await getDepth('UNKNOWN/XLM', 100, 'testnet')
-      expect(depth.spotPrice).toBe(0)
-      expect(depth.executionPrice).toBe(0)
-      expect(depth.slippagePct).toBe(0)
-      expect(depth.asks).toEqual([])
-      expect(depth.bids).toEqual([])
+    // Fees now come from the venue per pool, so these drive getDepth with an
+    // injected fetch (PoolFeeOptions.fetchImpl) rather than reading fee_bp off
+    // the snapshot row.
+    const feeOpts = (feeBp: number | null) => ({
+      horizonUrl: 'https://horizon.example.test',
+      fetchImpl: (async () =>
+        feeBp === null
+          ? new Response('not found', { status: 404 })
+          : new Response(JSON.stringify({ fee_bp: feeBp }), { status: 200 })) as unknown as typeof fetch,
     })
 
-    it('returns real depth and slippage when pool exists', async () => {
+    it('reports unavailable, not zeros, when no pool exists for the pair', async () => {
+      clearPoolFeeCache()
+      mockQuery.mockResolvedValueOnce({ rows: [] })
+      const depth = await getDepth('testnet', 'UNKNOWN/XLM', 100, feeOpts(30))
+
+      // The old contract answered 0/0/0 with empty books, which a caller cannot
+      // tell apart from a genuine price of zero. #219/#230's point is that an
+      // absent pool is a different answer, not a zero one.
+      expect(depth.status).toBe('unavailable')
+      expect(depth).not.toHaveProperty('spotPrice')
+      if (depth.status === 'unavailable') {
+        expect(depth.reason).toMatch(/no AMM pool/i)
+        expect(depth.excludedPools).toEqual([])
+      }
+    })
+
+    it('returns real depth and slippage when a pool exists and its fee is readable', async () => {
+      clearPoolFeeCache()
       mockQuery.mockResolvedValueOnce({
-        rows: [{ reserve_a: '10000', reserve_b: '5000', fee_bp: '30' }],
+        rows: [
+          {
+            pool_id: 'pool-1',
+            timestamp: new Date('2026-10-25T00:00:00.000Z'),
+            reserve_a: '10000',
+            reserve_b: '5000',
+            fee_bp: '30',
+          },
+        ],
       })
-      const depth = await getDepth('XLM/USDC', 100, 'testnet')
-      expect(depth.spotPrice).toBe(0.5)
-      expect(depth.executionPrice).toBeGreaterThan(0)
-      expect(depth.slippagePct).toBeGreaterThan(0)
-      expect(depth.asks.length).toBe(10)
-      expect(depth.bids.length).toBe(10)
+      const depth = await getDepth('testnet', 'XLM/USDC', 100, feeOpts(30))
+
+      expect(depth.status).toBe('ok')
+      if (depth.status === 'ok') {
+        expect(depth.spotPrice).toBe(0.5)
+        expect(depth.executionPrice).toBeGreaterThan(0)
+        expect(depth.slippagePct).toBeGreaterThan(0)
+        expect(depth.asks.length).toBe(10)
+        expect(depth.bids.length).toBe(10)
+        expect(depth.pool.poolId).toBe('pool-1')
+        expect(depth.pool.feeBp).toBe(30)
+      }
+    })
+
+    it('excludes a pool whose fee cannot be read, rather than assuming one', async () => {
+      clearPoolFeeCache()
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            pool_id: 'pool-1',
+            timestamp: new Date('2026-10-25T00:00:00.000Z'),
+            reserve_a: '10000',
+            reserve_b: '5000',
+            fee_bp: '30',
+          },
+        ],
+      })
+      const depth = await getDepth('testnet', 'XLM/USDC', 100, feeOpts(null))
+
+      expect(depth.status).toBe('unavailable')
+      if (depth.status === 'unavailable') {
+        expect(depth.excludedPools.map(p => p.poolId)).toEqual(['pool-1'])
+      }
     })
   })
 })

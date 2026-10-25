@@ -3,13 +3,16 @@ export interface PricePoint {
   assetA: string
   assetB: string
   pairKey: string
-  source: 'SDEX' | 'AMM'
+  source: 'SDEX' | 'AMM' | string
   poolId?: string
   price: number
   baseVolume: number
   counterVolume: number
   ledger: number
-  timestamp: Date
+  observedAt: Date
+  sourceTime: Date | null
+  /** @deprecated use observedAt (wall clock) or sourceTime (venue native clock) */
+  timestamp?: Date
   eventId?: string
 }
 

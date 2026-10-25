@@ -1,6 +1,12 @@
 import type { NetworkName } from '../../config'
 import type { WatchedPair } from '../../types'
 
+export type SourceTimeSemantic = 'ledger_close' | 'exchange_timestamp' | 'contract_timestamp'
+
+export type SourceTimeCapability =
+  | { readonly status: 'provided'; readonly semantic: SourceTimeSemantic }
+  | { readonly status: 'unavailable'; readonly semantic?: never }
+
 export interface VenuePricePoint {
   assetA: string
   assetB: string
@@ -11,7 +17,10 @@ export interface VenuePricePoint {
   baseVolume: number
   counterVolume: number
   ledger: number
-  timestamp: Date
+  observedAt: Date
+  sourceTime: Date | null
+  /** @deprecated use observedAt or sourceTime */
+  timestamp?: Date
   eventId?: string
 }
 
@@ -31,6 +40,7 @@ export type VenueKind = 'orderbook' | 'amm' | 'oracle' | 'unknown'
 export interface VenueAdapter<TTarget = any, TRaw = any> {
   readonly name: string
   readonly source: string
+  readonly sourceTimeCapability: SourceTimeCapability
   readonly classification: VenueClassification
   /** Kind is descriptive metadata used by API projections, not the runner. */
   readonly kind?: VenueKind

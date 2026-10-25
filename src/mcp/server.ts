@@ -93,7 +93,7 @@ export const VALID_TOOL_NAMES = ['bazaar_search', 'paid_call'] as const;
 export type ValidToolName = (typeof VALID_TOOL_NAMES)[number];
 
 export interface McpServerConfig {
-  fetchWithPayment: typeof fetch;
+  fetchWithPayment?: typeof fetch;
   /**
    * Cumulative ceiling over paid calls. Optional so a server can still run with
    * per-call limits only, but leaving it out means nothing bounds a day: the
@@ -269,7 +269,7 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 export class BazaarMcpServer {
   private server: Server;
-  private fetchWithPayment: typeof fetch;
+  private fetchWithPayment?: typeof fetch;
   private paidCallRules: PaidCallAllowRule[];
   private bazaarFetchOptions: SsrfFetchOptions;
   private priceQueries?: LensPriceQueries;
@@ -579,6 +579,13 @@ export class BazaarMcpServer {
       }
 
       if (request.params.name === 'paid_call') {
+        if (!this.fetchWithPayment) {
+          return this.createErrorResponse(
+            'ERR_PAYMENT_REJECTED',
+            'paid_call is disabled: no payment keys configured on this server.'
+          );
+        }
+
         const parsed = PAID_CALL_ARGUMENTS_SCHEMA.safeParse(request.params.arguments ?? {});
         if (!parsed.success) {
           return this.createErrorResponse('ERR_BAD_REQUEST', formatZodError(parsed.error));
@@ -775,6 +782,10 @@ export class BazaarMcpServer {
   private paymentCouldNotHaveSettled(e: any): boolean {
     const msg = String(e?.message || e).toLowerCase();
     return (
+      msg.includes('no network/scheme registered') ||
+      msg.includes('no scheme registered') ||
+      msg.includes('missing key') ||
+      msg.includes('not configured for network') ||
       msg.includes('failed to parse payment requirements') ||
       msg.includes('failed to create payment payload') ||
       msg.includes('signatureexpirationledger') ||

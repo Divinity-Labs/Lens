@@ -34,6 +34,8 @@ import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerApiVersioning, rewriteVersionedApiUrl } from './api/versioning'
+import { registerDispersionRoutes } from './routes/dispersion'
 import { registerHealthRoutes } from './routes/health'
 import { registerTvlRoutes } from './routes/tvl'
 import { registerCachePolicy } from './middleware/cachePolicy'
@@ -53,6 +55,7 @@ import { createCorsDelegator, type CorsConfig } from './cors'
  * "unhealthy" by the very probe that got throttled.
  */
 const PROBE_PATHS = new Set(['/status', '/live', '/ready'])
+
 
 export interface BuildAppOptions {
   /**
@@ -93,6 +96,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const app = Fastify({
     logger: { ...loggerOptions(), stream: createDestination() },
     genReqId: () => randomUUID(),
+    // Resolves `/v1/<path>` onto the single bare route that is registered, so
+    // every route answers at both `/v1/...` and its unversioned alias without
+    // being mounted twice. See src/api/versioning.ts.
+    rewriteUrl: rewriteVersionedApiUrl,
   })
 
   app.setErrorHandler((error: any, req, reply) => {
@@ -114,6 +121,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, { delegator: createCorsDelegator(options.corsConfig) })
   await app.register(registerETag)
   await app.register(compress)
+
+  // Warn callers who use the deprecated unversioned aliases (Deprecation /
+  // Link headers). Registered before the routes so the hook is in place, and
+  // it only reads what rewriteUrl recorded — it never blocks a request.
+  registerApiVersioning(app)
 
   // HTTP request/latency metrics. Registered FIRST, ahead of the network
   // selector, API-key auth, the rate limiter and x402, so that requests those
@@ -242,9 +254,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerVenueRoutes(app)
   await registerFiatRoutes(app)
   await registerSettleRoute(app)
+  await registerDispersionRoutes(app)
   await registerHealthRoutes(app)
   await registerTvlRoutes(app)
   await registerGraphQL(app)
+
   await registerWebSocket(app)
 
   // Global error handler: catches unhandled errors, ensuring database pool exhaustion
