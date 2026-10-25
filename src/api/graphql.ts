@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total } from '../metrics'
+import { price_requests_total, active_subscriptions } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
 import { GraphQLError, type ExecutionResult } from 'graphql'
 import { randomUUID } from 'node:crypto'
@@ -23,19 +23,38 @@ import {
   SCREENER_DEFAULT_LIMIT,
   SCREENER_MAX_LIMIT,
 } from '../services/screener'
+import { computeVolumes, VolumesInputError } from '../routes/volumes'
+import { isAggregatorVenue } from '../ingest/venues'
+import { computeSpreads, SpreadsInputError } from '../routes/spreads'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
 import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
+import { formatPrice, formatVolume } from '../pricing/precision'
 
 const WINDOW_SECONDS: Record<string, number> = {
   ...HISTORY_INTERVAL_SECONDS,
   '24h': 86400,
 }
 
-// Mercurius pubsub topic that carries every new price. A single app-level
-// listener bridges the ingesters' in-process `priceEmitter` onto this topic;
-// each subscriber then filters it down to the pair they asked for.
+// Mercurius pubsub topics are keyed by pair AND network —
+// `PRICE_UPDATED/<pair>/<network>` (mqemitter splits topics on '/'; the pair
+// key itself is 'A/B', also '/'-separated, and both sides of the channel use
+// the pair string verbatim, so the pairing holds up). The pubsub layer then
+// routes each event only to the subscribers that asked for that pair on that
+// chain, collapsing per-event work from "run one filter callback per
+// subscriber" to "wake the subscribers of that pair" (measured in
+// scripts/benchmarkSubscriptions.ts).
 const PRICE_TOPIC = 'PRICE_UPDATED'
+
+// A subscription with no network argument deliberately receives every
+// network: the message carries its own `network` field, and the historical
+// contract (tested in src/__tests__/graphqlSubscription.test.ts) is that
+// omitting the argument is "every chain", not "the active chain". Since #117
+// every enabled network publishes to the one price emitter, so for the
+// network-less subscription the resolver addresses one topic per known
+// network, rather than looking at ENABLED_NETWORKS (which would collapse the
+// stream back to one chain on a single-network deployment).
+const KNOWN_NETWORKS: readonly NetworkName[] = ['testnet', 'mainnet']
 // Error codes that resolvers raise on purpose; their messages are written for
 // the caller and are safe to return as-is. Anything else is treated as an
 // unexpected internal failure and masked. UNSUPPORTED_PARAMETER carries the
@@ -231,6 +250,101 @@ export const schema = `
     hasMore: Boolean!
   }
 
+  """
+  One venue's figures in a \`volumes\` or \`spreads\` result. Both queries
+  return venues as a list of this type so a caller can select only the fields
+  it wants per venue.
+
+  Which fields are set depends on the query, and mirrors the matching REST
+  route field for field:
+
+  - \`volumes\`: \`venue\`, \`volume\` (the asset's traded volume on that venue,
+    in the asset's own units, summed across every pair) and \`aggregator\`.
+    The spread fields are null.
+  - \`spreads\`: one entry per (venue, pair): \`venue\`, \`pairKey\`, \`bid\`,
+    \`ask\`, \`mid\`, \`spreadBps\`, \`spreadPct\`, \`observations\`,
+    \`lastSeen\`. \`volume\` is null.
+  """
+  type VenueQuote {
+    venue: String!
+    """Whether the venue is an aggregator re-reporting primary-market trades (volumes only)."""
+    aggregator: Boolean
+    """Traded volume in the asset's own units over the window (volumes only)."""
+    volume: Float
+    """The pair this quote is for (spreads only): two pairs on one venue are different books."""
+    pairKey: String
+    """Lowest print in the window (spreads only)."""
+    bid: Float
+    """Highest print in the window (spreads only)."""
+    ask: Float
+    mid: Float
+    """(ask - bid) / mid * 10000 (spreads only)."""
+    spreadBps: Float
+    """spreadBps / 100 (spreads only)."""
+    spreadPct: Float
+    observations: Int
+    lastSeen: String
+  }
+
+  """Labelled net (primary markets only) and gross (including aggregators) volume."""
+  type VolumeTotals {
+    net: Float!
+    gross: Float!
+  }
+
+  type VolumeProvenance {
+    venues: [String!]!
+    sampleCount: Int!
+    observedSampleCount: Int!
+    latestTradeAt: String
+    dataAgeSeconds: Int
+  }
+
+  """
+  Cross-venue traded volume for an asset: the same figures as REST
+  GET /volumes/:asset, with the per-venue breakdown (\`byVenue\` on REST) as a
+  typed \`venues\` list.
+  """
+  type VolumeReport {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    totals: VolumeTotals!
+    netVolume: Float!
+    grossVolume: Float!
+    """Alias for netVolume, as on REST."""
+    totalVolume: Float!
+    """Per-venue volume, ordered by venue name like REST's \`venues\`."""
+    venues: [VenueQuote!]!
+    tradeCount: Int!
+    netTradeCount: Int!
+    grossTradeCount: Int!
+    medianTradeSize: Float
+    topTradeVolumeShare: Float
+    volumeConcentration: Float
+    concentrationMeasure: String!
+    """ok, no_trades or no_positive_volume."""
+    status: String!
+    provenance: VolumeProvenance!
+  }
+
+  """
+  Per-(venue, pair) spreads for an asset: the same figures as REST
+  GET /spreads/:asset. \`venues\` is tightest first; \`tightest\` is null when no
+  venue quoted the asset in the window.
+  """
+  type SpreadReport {
+    asset: String!
+    network: String!
+    window: String!
+    startTime: String!
+    endTime: String!
+    venues: [VenueQuote!]!
+    tightest: VenueQuote
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -288,6 +402,20 @@ export const schema = `
       cursor: String
       limit: Int = ${SCREENER_DEFAULT_LIMIT}
     ): ScreenerPage!
+    """
+    Cross-venue traded volume for an asset. Shares its implementation with
+    REST GET /volumes/:asset: same windows (24h, 7d, 30d; default 24h), same
+    figures. \`network\` (testnet or mainnet) defaults to the active network;
+    any other value fails with INVALID_INPUT, as REST answers 400.
+    """
+    volumes(asset: String!, window: String, network: String): VolumeReport!
+    """
+    Per-(venue, pair) bid/ask spreads for an asset. Shares its implementation
+    with REST GET /spreads/:asset: same windows (5m, 15m, 1h, 24h; default 5m),
+    same figures. \`network\` (testnet or mainnet) defaults to the active
+    network; any other value fails with INVALID_INPUT, as REST answers 400.
+    """
+    spreads(asset: String!, window: String, network: String): SpreadReport!
   }
 
   type Subscription {
@@ -303,6 +431,16 @@ export const schema = `
     priceUpdated(pair: String!, network: String): PriceUpdate!
   }
 `
+
+/**
+ * Topic for one pair on one network. mqemitter matches on '/'-separated
+ * levels; the pair key is 'A/B' (also '/'-separated), so the full topic has
+ * the shape PRICE/A/B/<network> and a topic only matches the exact pair AND
+ * network it names.
+ */
+function priceTopic(pair: string, network: string): string {
+  return `${PRICE_TOPIC}/${pair}/${network}`
+}
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -320,6 +458,14 @@ function findPair(assetA: string, assetB: string) {
 }
 
 const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
+
+/** Maps a shared REST/GraphQL validation failure onto the GraphQL INVALID_INPUT error. */
+function asInvalidInput(err: unknown): never {
+  if (err instanceof VolumesInputError || err instanceof SpreadsInputError) {
+    throw new ErrorWithProps(err.message, { code: 'INVALID_INPUT', field: err.field })
+  }
+  throw err
+}
 
 const resolvers = {
   Query: {
@@ -444,9 +590,9 @@ const resolvers = {
       const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
+        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
+                volume, trade_count, open_price, close_price,
+                high_price, low_price
          FROM price_aggregates
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
@@ -456,15 +602,15 @@ const resolvers = {
       return result.rows.map(r => ({
         bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
         window: r.window,
-        vwap: r.vwap,
-        sdexVwap: r.sdex_vwap,
-        ammVwap: r.amm_vwap,
-        volume: r.volume,
-        tradeCount: r.trade_count,
-        open: r.open_price,
-        close: r.close_price,
-        high: r.high_price,
-        low: r.low_price,
+        vwap: formatPrice(r.vwap),
+        sdexVwap: formatPrice(r.sdex_vwap),
+        ammVwap: formatPrice(r.amm_vwap),
+        volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
+        tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
+        open: formatPrice(r.open_price),
+        close: formatPrice(r.close_price),
+        high: formatPrice(r.high_price),
+        low: formatPrice(r.low_price),
       }))
     },
 
@@ -624,28 +770,91 @@ const resolvers = {
         throw error
       }
     },
+
+    async volumes(
+      _: unknown,
+      { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
+    ) {
+      // The REST route's own aggregation (src/routes/volumes.ts); this layer
+      // only reshapes its byVenue map into a typed list of venues.
+      const report = await computeVolumes(asset, window ?? undefined, network ?? undefined)
+        .catch(asInvalidInput)
+      const byVenue = report.byVenue
+      const names: string[] = report.venues
+      return {
+        ...report,
+        venues: names.map(venue => ({
+          venue,
+          volume: Number(byVenue[venue]) || 0,
+          aggregator: isAggregatorVenue(venue),
+        })),
+      }
+    },
+
+    async spreads(
+      _: unknown,
+      { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
+    ) {
+      // Same guard as the REST handler, which answers an empty asset with a 400.
+      if (!asset) {
+        throw new ErrorWithProps('Asset parameter is required', { code: 'INVALID_INPUT', field: 'asset' })
+      }
+      // The REST route's own computation (src/routes/spreads.ts), returned as is.
+      return computeSpreads(asset, window ?? undefined, network ?? undefined)
+        .catch(asInvalidInput)
+    },
   },
 
   Subscription: {
     priceUpdated: {
-      subscribe: withFilter<
-        { priceUpdated: PricePublishedEvent },
-        unknown,
-        MercuriusContext,
-        { pair: string; network?: string | null }
-      >(
-        (_root, _args, { pubsub }) => pubsub.subscribe(PRICE_TOPIC),
-        // Both loops publish to one topic, so the network filter has to happen
-        // here. Omitting `network` keeps every chain — the message carries its
-        // own `network` field, so the subscriber can still tell them apart.
-        (payload, { pair, network }) =>
-          payload.priceUpdated.pair === pair &&
-          // == null, not === undefined: a client that passes the variable
-          // explicitly sends null rather than omitting it, and both mean
-          // "every network". Comparing against undefined alone would filter
-          // out every message for those clients.
-          (network == null || payload.priceUpdated.network === network)
-      ),
+      // The pubsub layer routes by pair and network: the subscriber's topic
+      // already carries both, so no per-subscriber filter callback runs at
+      // all. Omitting `network` keeps every chain — the resolver then
+      // addresses one topic per known network for the pair, and because the
+      // message carries its own `network` field the subscriber can still tell
+      // them apart.
+      subscribe: (
+        _root: unknown,
+        { pair, network }: { pair: string; network?: string | null },
+        { pubsub }: MercuriusContext,
+      ): Promise<AsyncIterableIterator<{ priceUpdated: PricePublishedEvent }>> => {
+        // Mercurius's subscription queue is a Readable with a `close` list it
+        // runs on disconnect/complete; our release callback rides there so
+        // the gauge follows the real lifetime of the subscription, not the
+        // resolver call.
+        const topics = network == null
+          ? KNOWN_NETWORKS.map(n => priceTopic(pair, n))
+          : [priceTopic(pair, network)]
+        let released = false
+        const release = () => {
+          if (released) return
+          released = true
+          active_subscriptions.dec({ pair })
+        }
+        active_subscriptions.inc({ pair })
+        // Mercurius's runtime SubscriptionContext.subscribe accepts a topic
+        // *array*; its public type only shows the single-topic shape, and a
+        // plain property call keeps its `this` correct.
+        return (pubsub as unknown as {
+          subscribe(topic: string | string[]): Promise<AsyncIterableIterator<{ priceUpdated: PricePublishedEvent }>>
+        })
+          .subscribe(topics)
+          .then((queue) => {
+            if (queue == null) {
+              release()
+              throw new Error('mercurius pubsub returned no subscription queue')
+            }
+            if (!Array.isArray((queue as { close?: unknown[] }).close)) {
+              ;(queue as unknown as { close: unknown[] }).close = []
+            }
+            ;(queue as unknown as { close: unknown[] }).close.push(release)
+            return queue
+          })
+          .catch((err: unknown) => {
+            release()
+            throw err
+          })
+      },
     },
   },
 }
@@ -675,11 +884,11 @@ export async function registerGraphQL(app: FastifyInstance) {
   })
 
   // Bridge: forward every price the ingesters emit onto the GraphQL pubsub
-  // topic. Mercurius wraps the payload under the subscription field name so
-  // `withFilter` and the resolver receive `{ priceUpdated: <event> }`.
+  // topic for its pair and network. Mercurius wraps the payload under the
+  // subscription field name so resolvers receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
     app.graphql.pubsub.publish({
-      topic: PRICE_TOPIC,
+      topic: priceTopic(event.pair, event.network),
       payload: { priceUpdated: event },
     })
   }

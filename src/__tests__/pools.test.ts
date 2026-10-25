@@ -46,14 +46,15 @@ describe('GET /pools', () => {
     expect(sql).not.toMatch(/DISTINCT ON/i)
     expect(sql).toMatch(/network = \$1/)
     expect(sql).toMatch(/LIMIT 1/i)
-    expect(params).toEqual([activeNetwork])
+    // Last bind is the limit+1 probe (default 50 + 1).
+    expect(params).toEqual([activeNetwork, 51])
     await app.close()
   })
 
   it('uses the request network when one is resolved', async () => {
     const app = await buildApp('mainnet')
     await app.inject({ method: 'GET', url: '/pools' })
-    expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet'])
+    expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet', 51])
     await app.close()
   })
 
@@ -70,6 +71,8 @@ describe('GET /pools', () => {
     expect(res.json().pools).toEqual([
       { pool_id: 'C1', asset_a: 'XLM', asset_b: 'USDC', reserve_a: 10, reserve_b: 20, spot_price: 2, fee_bp: 30, timestamp: old.toISOString() },
     ])
+    expect(res.json().nextCursor).toBeNull()
+    expect(res.json().hasMore).toBe(false)
     await app.close()
   })
 })

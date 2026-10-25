@@ -3,7 +3,7 @@ import { trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '
 import { config, activeNetwork, type NetworkName } from '../../config'
 import { getHorizonServer } from '../../network/clients'
 import { upsertPricePoints, getIndexerState, setIndexerCursor } from '../../db'
-import { resolvePageLedgers } from '../../ingesters/toid'
+import { resolvePageLedgers } from '../toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
@@ -107,6 +107,9 @@ export function deriveSdexPricePoints(
       ? parseFloat(t.price.n) / parseFloat(t.price.d)
       : parseFloat(t.price.d) / parseFloat(t.price.n)
 
+    const now = new Date()
+    const sourceTime = new Date(t.ledger_close_time)
+
     return {
       assetA: pair.assetA.code,
       assetB: pair.assetB.code,
@@ -116,7 +119,9 @@ export function deriveSdexPricePoints(
       baseVolume: parseFloat(t.base_amount),
       counterVolume: parseFloat(t.counter_amount),
       ledger: ledgers[i],
-      timestamp: new Date(t.ledger_close_time),
+      observedAt: now,
+      sourceTime,
+      timestamp: now,
       eventId: t.id,
     }
   })
@@ -145,9 +150,10 @@ export async function writeSdexPricePoints(
   markIngestSuccess('SDEX', network)
 
   trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
+  const tradeTime = points[points.length - 1].sourceTime ?? points[points.length - 1].observedAt
   last_trade_timestamp.set(
     { pair: pair.pairKey, network },
-    Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
+    Math.floor(tradeTime.getTime() / 1000)
   )
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
@@ -156,7 +162,7 @@ export async function writeSdexPricePoints(
   publishPriceUpdate({
     pair: pair.pairKey,
     price: currentPrice,
-    ts: points[points.length - 1].timestamp.toISOString(),
+    ts: points[points.length - 1].observedAt.toISOString(),
     network,
   })
 
@@ -190,6 +196,7 @@ export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
   name: 'SDEX',
   kind: 'orderbook',
   source: 'SDEX',
+  sourceTimeCapability: { status: 'provided', semantic: 'ledger_close' },
   classification: 'primary',
   type: 'Order Book',
   description: "Stellar's Classic Order Book (SDEX)",

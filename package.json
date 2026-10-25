@@ -10,8 +10,9 @@
     "test": "vitest run",
     "smoke": "node scripts/deployed-smoke.mjs",
     "test:smoke": "node --test scripts/test-deployed-smoke.mjs",
-    "openapi:gen": "tsx scripts/generate-openapi.ts",
+    "openapi:gen": "tsx scripts/generate-openapi.ts && tsx scripts/generate-readme.ts",
     "readme:gen": "tsx scripts/generate-readme.ts",
+    "readme:check": "tsx scripts/generate-readme.ts --check",
     "spec:validate-live": "tsx scripts/validate-live-spec.ts",
     "client:gen": "openapi-typescript openapi.yaml -o clients/typescript/src/schema.d.ts",
     "client:typecheck": "tsc -p clients/typescript/tsconfig.json --noEmit",
@@ -31,7 +32,8 @@
     "db:drift-check": "bash scripts/db-drift-check.sh",
     "db:migration-cycle": "bash scripts/db-migration-cycle.sh",
     "db:migrate:partitioning": "tsx scripts/migrate-price-points-partitioning.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "snippets:gen": "tsx scripts/gen-snippets.ts"
   },
   "dependencies": {
     "@fastify/compress": "^8.3.1",

@@ -24,7 +24,9 @@ vi.mock('../pairsRegistry', () => mocks.pairsRegistry)
 vi.mock('../db', () => ({ upsertPricePoints: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('../webhookDispatcher', () => ({ dispatchPriceUpdate: vi.fn().mockResolvedValue(undefined) }))
 
-import { fetchAquariusPools, startAquariusIngester } from '../ingest/venues/aquarius'
+import { fetchAquariusPools, ingestAquariusPair, startAquariusIngester } from '../ingest/venues/aquarius'
+import { getFailedSources, listSourceFailures, resetSourceFailures } from '../ingest/sourceFailures'
+import { upsertPricePoints } from '../db'
 
 const mockPair = {
   pairKey: 'USDC/XLM',
@@ -66,11 +68,65 @@ describe('fetchAquariusPools', () => {
     )
   })
 
-  it('returns an empty array on a non-ok response', async () => {
-    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false })
+  // #329: a non-ok response used to come back as `[]`, identical to a venue
+  // with no pools. It is now a failure, and only an answer is "empty".
+  it('reports a non-ok response as a failure, not an empty array', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 503 })
 
     const result = await fetchAquariusPools(mockPair as any)
-    expect(result).toEqual([])
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.message).toContain('503')
+  })
+
+  it('reports a thrown fetch as a failure, not an empty array', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'))
+
+    const result = await fetchAquariusPools(mockPair as any)
+    expect(result.ok).toBe(false)
+  })
+
+  it('returns an empty, successful result when Aquarius answers with no pools', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [] }),
+    })
+
+    const result = await fetchAquariusPools(mockPair as any)
+    expect(result).toEqual({ ok: true, data: [] })
+  })
+})
+
+describe('ingestAquariusPair (#329)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetSourceFailures()
+    global.fetch = vi.fn()
+  })
+
+  it('records a failing venue and not an empty one', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 502 })
+    await ingestAquariusPair(mockPair as any, 'mainnet')
+    expect(getFailedSources('mainnet', mockPair.pairKey)).toEqual(['aquarius_amm'])
+
+    // Recovers: an answer with no pools clears the failure and writes nothing.
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [] }),
+    })
+    await ingestAquariusPair(mockPair as any, 'mainnet')
+    expect(getFailedSources('mainnet', mockPair.pairKey)).toEqual([])
+    expect(listSourceFailures()).toEqual([])
+    expect(upsertPricePoints).not.toHaveBeenCalled()
+  })
+
+  it('leaves the record alone for a cycle abandoned before the request', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await ingestAquariusPair(mockPair as any, 'mainnet', controller.signal)
+
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(listSourceFailures()).toEqual([])
   })
 })
 
