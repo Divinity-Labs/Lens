@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Lens API",
-    "description": "Unified Stellar price API aggregating SDEX + AMM prices.\nCache policy: every route sends a deliberate `Cache-Control` response header. Live prices (`/price/*`) are `public, max-age=30`; aggregates (`/price/*/history`, `/price/twap/*`, `/price/vwap/*`, `/prices/history`, `/compare/*`, `/spreads/*`) are `public, max-age=60`; slower-moving views (`/volumes/*`, `/screener`, `/basket`) are `public, max-age=120`; reference data that changes rarely (`/pairs`, `/pools`, `/benchmark/*`) is `public, max-age=300`; the discovery document is `public, max-age=3600`. `/candles` for a closed historical window (its `to` at least one full interval in the past) is *probably* immutable — backfill can rewrite history — so it is `public, max-age=3600, stale-while-revalidate=86400`; the still-forming window is `public, max-age=60`. Every `public` response also sends `Vary: x-network`, because the Stellar network can come from the `x-network` header (not part of the URL cache key). Routes behind the x402 payment gate use `private` instead of `public` when x402 is configured, so a shared cache never serves paid content for free. Per-caller responses (`/usage/me`), operator routes (`/admin/*`), mutations and error responses are `no-store` and must never sit in a shared cache.\nData Quality Guarantees: see `docs/data-quality.md` for explicit SLAs and guarantees on freshness (e.g. 300s staleness bound), completeness, precision (PostgreSQL Decimal(36,18) and negotiated string serialization), and multi-venue coverage across SDEX, Stellar AMM, Soroswap, and Aquarius.",
+    "description": "Unified Stellar price API aggregating SDEX + AMM prices.\nEvery route is served under the `/v1` version segment; the versioned path is the canonical one documented here. The same routes also answer at their unversioned paths as deprecated aliases so pre-`/v1` integrations keep working — those responses carry `Deprecation` and `Link` headers pointing at the successor. See `docs/api-versioning.md` for the retirement policy.\nCache policy: every route sends a deliberate `Cache-Control` response header. Live prices (`/price/*`) are `public, max-age=30`; aggregates (`/price/*/history`, `/price/twap/*`, `/price/vwap/*`, `/prices/history`, `/compare/*`, `/spreads/*`) are `public, max-age=60`; slower-moving views (`/volumes/*`, `/screener`, `/basket`) are `public, max-age=120`; reference data that changes rarely (`/pairs`, `/pools`, `/benchmark/*`) is `public, max-age=300`; the discovery document is `public, max-age=3600`. `/candles` for a closed historical window (its `to` at least one full interval in the past) is *probably* immutable — backfill can rewrite history — so it is `public, max-age=3600, stale-while-revalidate=86400`; the still-forming window is `public, max-age=60`. Every `public` response also sends `Vary: x-network`, because the Stellar network can come from the `x-network` header (not part of the URL cache key). Routes behind the x402 payment gate use `private` instead of `public` when x402 is configured, so a shared cache never serves paid content for free. Per-caller responses (`/usage/me`), operator routes (`/admin/*`), mutations and error responses are `no-store` and must never sit in a shared cache.\nData Quality Guarantees: see `docs/data-quality.md` for explicit SLAs and guarantees on freshness (e.g. 300s staleness bound), completeness, precision (PostgreSQL Decimal(36,18) and negotiated string serialization), and multi-venue coverage across SDEX, Stellar AMM, Soroswap, and Aquarius.",
     "version": "0.1.0",
     "license": {
       "name": "MIT",
@@ -16,7 +16,7 @@
     }
   ],
   "paths": {
-    "/venues/registry": {
+    "/v1/venues/registry": {
       "get": {
         "operationId": "getVenueRegistry",
         "summary": "List registered venues and their network liveness",
@@ -105,7 +105,7 @@
         }
       }
     },
-    "/venues": {
+    "/v1/venues": {
       "get": {
         "operationId": "getVenueVolumeShare",
         "summary": "Venue Share of Volume",
@@ -163,7 +163,7 @@
         }
       }
     },
-    "/live": {
+    "/v1/live": {
       "get": {
         "operationId": "getLive",
         "summary": "Liveness probe",
@@ -176,7 +176,7 @@
         }
       }
     },
-    "/tvl": {
+    "/v1/tvl": {
       "get": {
         "operationId": "getTvl",
         "summary": "Total Value Locked across Stellar DeFi venues",
@@ -241,7 +241,7 @@
         }
       }
     },
-    "/ready": {
+    "/v1/ready": {
       "get": {
         "operationId": "getReady",
         "summary": "Readiness probe",
@@ -313,7 +313,7 @@
         }
       }
     },
-    "/status": {
+    "/v1/status": {
       "get": {
         "operationId": "getStatus",
         "summary": "Get API status and indexer state",
@@ -461,7 +461,7 @@
         }
       }
     },
-    "/snapshot": {
+    "/v1/snapshot": {
       "get": {
         "operationId": "getSnapshot",
         "summary": "Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)",
@@ -517,7 +517,7 @@
         }
       }
     },
-    "/price/{assetA}/{assetB}": {
+    "/v1/price/{assetA}/{assetB}": {
       "get": {
         "operationId": "getPrice",
         "summary": "Get aggregated price for a pair",
@@ -580,7 +580,7 @@
         }
       }
     },
-    "/price/{assetA}/{assetB}/route": {
+    "/v1/price/{assetA}/{assetB}/route": {
       "get": {
         "operationId": "getBestRoute",
         "summary": "Get best swap route for a pair and amount",
@@ -647,7 +647,7 @@
         }
       }
     },
-    "/price/{asset}/fiat": {
+    "/v1/price/{asset}/fiat": {
       "get": {
         "operationId": "getFiatPrice",
         "summary": "Convert asset price to fiat currency with NGN support (#290)",
@@ -694,7 +694,7 @@
         }
       }
     },
-    "/price/{assetA}/{assetB}/history": {
+    "/v1/price/{assetA}/{assetB}/history": {
       "get": {
         "operationId": "getPriceHistory",
         "summary": "Get price history buckets",
@@ -794,7 +794,7 @@
         }
       }
     },
-    "/pools": {
+    "/v1/pools": {
       "get": {
         "operationId": "getPools",
         "summary": "Get AMM liquidity pool reserves and spot prices",
@@ -892,7 +892,7 @@
         }
       }
     },
-    "/candles/{assetA}/{assetB}": {
+    "/v1/candles/{assetA}/{assetB}": {
       "get": {
         "operationId": "getCandles",
         "summary": "Get OHLCV candle data",
@@ -1025,7 +1025,7 @@
         }
       }
     },
-    "/prices/history": {
+    "/v1/prices/history": {
       "get": {
         "operationId": "getPriceSnapshots",
         "summary": "Get historical 1-minute price snapshots",
@@ -1175,7 +1175,7 @@
         }
       }
     },
-    "/pairs": {
+    "/v1/pairs": {
       "get": {
         "operationId": "listPairs",
         "summary": "List all active trading pairs",
@@ -1281,7 +1281,7 @@
         }
       }
     },
-    "/price/{assetA}/{assetB}/depth": {
+    "/v1/price/{assetA}/{assetB}/depth": {
       "get": {
         "operationId": "getDepth",
         "summary": "Get order-book depth and execution slippage for a pair",
@@ -1357,7 +1357,7 @@
         }
       }
     },
-    "/book/{assetA}/{assetB}": {
+    "/v1/book/{assetA}/{assetB}": {
       "get": {
         "operationId": "getBook",
         "summary": "Get the aggregated SDEX and AMM price ladder for a pair",
@@ -1444,7 +1444,7 @@
         }
       }
     },
-    "/impact/{assetA}/{assetB}": {
+    "/v1/impact/{assetA}/{assetB}": {
       "get": {
         "operationId": "getImpact",
         "summary": "Get an adaptive slippage impact curve for a pair",
@@ -1523,7 +1523,7 @@
         }
       }
     },
-    "/price/twap/{assetA}/{assetB}": {
+    "/v1/price/twap/{assetA}/{assetB}": {
       "get": {
         "operationId": "getTwap",
         "summary": "Get a manipulation-resistant time-weighted average price",
@@ -1624,7 +1624,7 @@
         }
       }
     },
-    "/price/vwap/{assetA}/{assetB}": {
+    "/v1/price/vwap/{assetA}/{assetB}": {
       "get": {
         "operationId": "getVwap",
         "summary": "Get a volume-weighted average price",
@@ -1726,7 +1726,7 @@
         }
       }
     },
-    "/volumes/{asset}": {
+    "/v1/volumes/{asset}": {
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
@@ -1795,7 +1795,7 @@
         }
       }
     },
-    "/spreads/{asset}": {
+    "/v1/spreads/{asset}": {
       "get": {
         "operationId": "getSpreads",
         "summary": "Get the tightest per-venue bid/ask spread for an asset",
@@ -1865,7 +1865,7 @@
         }
       }
     },
-    "/rates/{asset}": {
+    "/v1/rates/{asset}": {
       "get": {
         "operationId": "getLendingRates",
         "summary": "Get supply and borrow rates for an asset across lending venues",
@@ -1908,7 +1908,7 @@
         }
       }
     },
-    "/dispersion/{assetA}/{assetB}": {
+    "/v1/dispersion/{assetA}/{assetB}": {
       "get": {
         "operationId": "getPairDispersion",
         "summary": "Get venue price dispersion and outlier attribution for a pair",
@@ -2015,7 +2015,7 @@
         }
       }
     },
-    "/dispersion": {
+    "/v1/dispersion": {
       "get": {
         "operationId": "listDispersion",
         "summary": "List cross-venue dispersion across watched pairs",
@@ -2103,7 +2103,7 @@
         }
       }
     },
-    "/compare/{asset}": {
+    "/v1/compare/{asset}": {
       "get": {
         "operationId": "compareAsset",
         "summary": "Compare Lens prices with every configured external oracle",
@@ -2145,7 +2145,7 @@
         }
       }
     },
-    "/screener": {
+    "/v1/screener": {
       "get": {
         "operationId": "screenPairs",
         "summary": "Screen pairs by volume, change, liquidity and price",
@@ -2280,7 +2280,7 @@
         }
       }
     },
-    "/movers": {
+    "/v1/movers": {
       "get": {
         "operationId": "getMovers",
         "summary": "Get biggest gainers, biggest losers, and volume movers",
@@ -2328,7 +2328,7 @@
         }
       }
     },
-    "/benchmark/{asset}": {
+    "/v1/benchmark/{asset}": {
       "get": {
         "operationId": "getBenchmark",
         "summary": "Get peg-deviation statistics for an asset against a target",
@@ -2388,7 +2388,7 @@
         }
       }
     },
-    "/basket": {
+    "/v1/basket": {
       "get": {
         "operationId": "getBasket",
         "summary": "Compute the weighted price of a basket of assets",
@@ -2457,7 +2457,7 @@
         }
       }
     },
-    "/correlation": {
+    "/v1/correlation": {
       "get": {
         "operationId": "getCorrelation",
         "summary": "Compute price correlation matrix across a basket of assets over a window",
@@ -2528,7 +2528,7 @@
         }
       }
     },
-    "/discovery/resources": {
+    "/v1/discovery/resources": {
       "get": {
         "operationId": "listDiscoveryResources",
         "summary": "Browse the x402 Bazaar catalog of discoverable resources",
@@ -2616,7 +2616,7 @@
         }
       }
     },
-    "/discovery/search": {
+    "/v1/discovery/search": {
       "get": {
         "operationId": "searchDiscoveryResources",
         "summary": "Natural language search with ranking and quality evaluation for discoverable resources",
@@ -2664,7 +2664,7 @@
         }
       }
     },
-    "/webhooks": {
+    "/v1/webhooks": {
       "post": {
         "operationId": "createWebhook",
         "summary": "Subscribe to a price-threshold webhook",
@@ -2732,7 +2732,7 @@
         }
       }
     },
-    "/webhooks/{id}": {
+    "/v1/webhooks/{id}": {
       "delete": {
         "operationId": "deleteWebhook",
         "summary": "Delete a webhook subscription",
@@ -2757,7 +2757,7 @@
         }
       }
     },
-    "/usage/me": {
+    "/v1/usage/me": {
       "get": {
         "operationId": "getMyUsage",
         "summary": "Get usage and quota for the calling API key",
@@ -2791,7 +2791,7 @@
         }
       }
     },
-    "/usage": {
+    "/v1/usage": {
       "get": {
         "operationId": "getCallerUsage",
         "summary": "Get usage and quota for the calling API key (alias for /usage/me)",
@@ -2825,7 +2825,7 @@
         }
       }
     },
-    "/supported": {
+    "/v1/supported": {
       "get": {
         "operationId": "getSupported",
         "summary": "List the payment kinds and extensions this facilitator supports",
@@ -2849,7 +2849,7 @@
         }
       }
     },
-    "/verify": {
+    "/v1/verify": {
       "post": {
         "operationId": "verifyPayment",
         "summary": "Verify an x402 payment payload",
@@ -2898,7 +2898,7 @@
         }
       }
     },
-    "/settle": {
+    "/v1/settle": {
       "post": {
         "operationId": "settlePayment",
         "summary": "Settle an x402 payment (idempotent)",
@@ -2938,7 +2938,7 @@
         }
       }
     },
-    "/graphql": {
+    "/v1/graphql": {
       "get": {
         "operationId": "graphqlGet",
         "summary": "Execute a GraphQL query over HTTP GET",
@@ -3037,7 +3037,7 @@
         }
       }
     },
-    "/rates": {
+    "/v1/rates": {
       "get": {
         "operationId": "getLendingRates",
         "summary": "Query latest lending and borrow rates across pools",
