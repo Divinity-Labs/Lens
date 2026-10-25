@@ -4596,6 +4596,45 @@
               "mainnet"
             ]
           },
+          "intervalSeconds": {
+            "type": "integer"
+          },
+          "retentionDays": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/SnapshotDiffGapSide"
+          },
+          "to": {
+            "$ref": "#/components/schemas/SnapshotDiffGapSide"
+          }
+        }
+      },
+      "SnapshotDiffGapSide": {
+        "type": "object",
+        "properties": {
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "nearestBefore": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "nearestAfter": {
+            "type": "string",
+            "format": "date-time",
           "hops": {
             "type": "array",
             "items": {
@@ -4711,6 +4750,7 @@
           }
         }
       },
+      "Asset": {
       "PriceLevel": {
         "type": "object",
         "required": [

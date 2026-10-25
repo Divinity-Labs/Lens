@@ -159,7 +159,8 @@ ones listed below still read a single instance-wide network.
 Per-request today: `/price/:assetA/:assetB` (its VWAP, OHLCV, AMM and
 best-route reads), `/price/:assetA/:assetB/route`, `/price/:assetA/:assetB/depth`, `/book/:assetA/:assetB`,
 `/prices/history`, `/screener`, `/pools`, `/pairs`, `/spreads/:asset`,
-`/volumes/:asset`, `/status`, and the x402 payment `network`/`payTo`. That list
+`/volumes/:asset`, `/snapshot`, `/snapshot/diff`, `/status`, and the x402 payment
+`network`/`payTo`. That list
 is the same one `openapi.yaml` declares a `network` parameter on — if they ever
 disagree, the spec is the thing to fix.
 

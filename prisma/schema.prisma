@@ -151,6 +151,33 @@ model PriceSnapshot {
   @@map("price_snapshots")
 }
 
+/// A point-in-time snapshot of the entire market Lens can see for one network,
+/// captured by the scheduled job in src/ingesters/marketSnapshot.ts and served
+/// by `GET /snapshot` (live) and `GET /snapshot?at=` (historical).
+///
+/// `payload` is the exact document clients receive — the scalar columns beside
+/// it duplicate the few figures retention and coverage need so those paths never
+/// have to parse the JSON. Rows are keyed by (network, ts) so a re-run inside the
+/// same interval bucket is an upsert, not a duplicate, exactly like
+/// `price_snapshots`. This table has its own retention window
+/// (MARKET_SNAPSHOT_RETENTION_DAYS), independent of the 30-day price_snapshots
+/// window, because it is the long-horizon "what changed since last month" store.
+model MarketSnapshot {
+  network      String
+  ts           DateTime
+  payload      Json
+  venueCount   Int       @map("venue_count")
+  pairCount    Int       @map("pair_count")
+  volume24h    Decimal   @map("volume_24h") @db.Decimal(36, 7)
+  sampleCount  Int       @map("sample_count")
+  newestSample DateTime? @map("newest_sample")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@id([network, ts])
+  @@index([network, ts(sort: Desc)])
+  @@map("market_snapshots")
+}
+
 model IndexerState {
   id              String
   network         String   @default("testnet")
