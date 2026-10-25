@@ -798,6 +798,7 @@
       "get": {
         "operationId": "getPools",
         "summary": "Get AMM liquidity pool reserves and spot prices",
+        "description": "Latest snapshot per pool for one network. Paginated with the shared keyset convention: ordered by pool_id ascending, default limit 50, maximum 200.",
         "security": [
           {
             "x402": []
@@ -808,7 +809,19 @@
             "$ref": "#/components/parameters/NetworkQuery"
           },
           {
-            "$ref": "#/components/parameters/DecimalFormatHeader"
+            "$ref": "#/components/parameters/CursorQuery"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size. Out-of-range values are clamped into [1, 200].",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -823,6 +836,11 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "pools",
+                    "nextCursor",
+                    "hasMore"
+                  ],
                   "properties": {
                     "pools": {
                       "type": "array",
@@ -877,11 +895,21 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid limit or cursor"
           },
           "402": {
             "$ref": "#/components/responses/PaymentRequired"
@@ -896,6 +924,7 @@
       "get": {
         "operationId": "getCandles",
         "summary": "Get OHLCV candle data",
+        "description": "OHLCV candles for a pair. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.",
         "security": [
           {
             "x402": []
@@ -954,6 +983,21 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "$ref": "#/components/parameters/CursorQuery"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size. Out-of-range values are clamped into [1, 5000].",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "default": 500
+            }
           }
         ],
         "responses": {
@@ -968,6 +1012,15 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "pairKey",
+                    "interval",
+                    "from",
+                    "to",
+                    "candles",
+                    "nextCursor",
+                    "hasMore"
+                  ],
                   "properties": {
                     "pairKey": {
                       "type": "string"
@@ -976,10 +1029,12 @@
                       "type": "string"
                     },
                     "from": {
-                      "type": "string"
+                      "type": "string",
+                      "format": "date-time"
                     },
                     "to": {
-                      "type": "string"
+                      "type": "string",
+                      "format": "date-time"
                     },
                     "candles": {
                       "type": "array",
@@ -1007,6 +1062,13 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -1029,7 +1091,7 @@
       "get": {
         "operationId": "getPriceSnapshots",
         "summary": "Get historical 1-minute price snapshots",
-        "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets. Snapshots are retained for ~30 days. Gated by x402 (matches the /price prefix).",
+        "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).",
         "security": [
           {
             "x402": []
@@ -1094,15 +1156,43 @@
             }
           },
           {
+            "$ref": "#/components/parameters/CursorQuery"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size (number of buckets). Out-of-range values are clamped into [1, 10000].",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            }
+          },
+          {
             "$ref": "#/components/parameters/NetworkQuery"
           }
         ],
         "responses": {
           "200": {
-            "description": "Historical price snapshots",
+            "description": "Historical price snapshots. When more buckets exist beyond this page, the response carries X-Next-Cursor (pass it back as ?cursor=) and X-Has-More: true.",
             "headers": {
-              "Cache-Control": {
-                "$ref": "#/components/headers/CacheControl"
+              "X-Next-Cursor": {
+                "description": "Opaque cursor for the next page; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Has-More": {
+                "description": "'true' when another page exists, 'false' otherwise.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
               }
             },
             "content": {
@@ -1115,6 +1205,17 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "pair",
+                    "network",
+                    "interval",
+                    "from",
+                    "to",
+                    "count",
+                    "points",
+                    "nextCursor",
+                    "hasMore"
+                  ],
                   "properties": {
                     "pair": {
                       "type": "string"
@@ -1138,7 +1239,8 @@
                       "format": "date-time"
                     },
                     "count": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Number of points in this page (not the total across pages)."
                     },
                     "points": {
                       "type": "array",
@@ -1157,6 +1259,13 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -1179,10 +1288,26 @@
       "get": {
         "operationId": "listPairs",
         "summary": "List all active trading pairs",
+        "description": "Active trading pairs with their latest price metadata. Paginated with the shared keyset convention: ordered by pairKey ascending, default limit 50, maximum 200.",
         "security": [],
         "parameters": [
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "$ref": "#/components/parameters/CursorQuery"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size. Out-of-range values are clamped into [1, 200].",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -1197,6 +1322,11 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "pairs",
+                    "nextCursor",
+                    "hasMore"
+                  ],
                   "properties": {
                     "pairs": {
                       "type": "array",
@@ -1223,11 +1353,21 @@
                           }
                         }
                       }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
                     }
                   }
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid limit or cursor"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -2229,18 +2369,13 @@
             }
           },
           {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "description": "Opaque cursor returned as `nextCursor` by the previous page.",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/CursorQuery"
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
+            "description": "Page size. Out-of-range values are clamped into [1, 100].",
             "schema": {
               "type": "integer",
               "minimum": 1,
@@ -3153,6 +3288,15 @@
             "mainnet"
           ],
           "default": "testnet"
+        }
+      },
+      "CursorQuery": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400.",
+        "schema": {
+          "type": "string"
         }
       }
     },
