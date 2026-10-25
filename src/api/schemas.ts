@@ -131,6 +131,22 @@ export const statusResponseSchema = {
         },
       },
     },
+    /** #329: sources whose latest fetch failed, per (source, subject). */
+    failedSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'network', 'subject', 'at'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          network: { type: 'string', enum: ['testnet', 'mainnet'] },
+          /** The pair key for a venue, the asset code for an oracle. */
+          subject: { type: 'string' },
+          at: { type: 'string' },
+        },
+      },
+    },
   },
 } as const
 
@@ -371,11 +387,12 @@ export const historyResponseSchema = {
  *
  * Rows come straight from a raw SQL query whose column set may evolve, so the
  * row shape is intentionally permissive (additionalProperties allowed). The
- * envelope, however, is validated.
+ * envelope, however, is validated — including the cursor-pagination fields
+ * every list route carries alongside its own key.
  */
 export const poolsResponseSchema = {
   type: 'object',
-  required: ['pools'],
+  required: ['pools', 'nextCursor', 'hasMore'],
   additionalProperties: false,
   properties: {
     pools: {
@@ -394,12 +411,17 @@ export const poolsResponseSchema = {
         },
       },
     },
+    nextCursor: { type: ['string', 'null'] },
+    hasMore: { type: 'boolean' },
   },
 } as const
 
 export const depthResponseSchema = {
   type: 'object',
-  required: ['assetA', 'assetB', 'pairKey', 'spotPrice', 'executionPrice', 'slippagePct', 'asks', 'bids', 'source'],
+  // `status` discriminates the two arms. The priced fields are not required,
+  // because an unavailable answer deliberately carries no numbers — reporting
+  // a spotPrice of 0 for "no pool could price this" is the bug #219 is about.
+  required: ['assetA', 'assetB', 'pairKey', 'status'],
   additionalProperties: false,
   properties: {
     assetA: { type: 'string' },
@@ -433,6 +455,33 @@ export const depthResponseSchema = {
       },
     },
     source: { type: 'string', enum: ['AMM', 'SDEX', 'BOTH'] },
+    status: { type: 'string', enum: ['ok', 'unavailable'] },
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    reason: { type: 'string' },
+    pool: {
+      type: 'object',
+      required: ['poolId', 'feeBp', 'feeReadAt', 'reservesObservedAt'],
+      additionalProperties: false,
+      properties: {
+        poolId: { type: 'string' },
+        // Read from the venue per pool, never assumed — see src/pricing/pool-fee.ts.
+        feeBp: { type: 'number' },
+        feeReadAt: { type: 'string' },
+        reservesObservedAt: { type: 'string' },
+      },
+    },
+    excludedPools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['poolId', 'reason'],
+        additionalProperties: false,
+        properties: {
+          poolId: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
   },
 } as const
 
@@ -865,6 +914,58 @@ export const snapshotResponseSchema = {
         venuesSilent: { type: 'integer' },
       },
     },
+  },
+} as const
+
+export const venuesResponseSchema = {
+  type: 'object',
+  required: ['network', 'window', 'venues', 'excludedVenues', 'totalVolume', 'marketShares', 'periodOverPeriodPctChange'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    window: { type: 'string', enum: ['24h', '7d', '30d'] },
+    venues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'baseVolume', 'counterVolume', 'samples', 'pairs', 'marketShare', 'periodOverPeriodPctChange', 'lastUpdated', 'ageSeconds'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string' },
+          baseVolume: { type: ['number', 'string'] },
+          counterVolume: { type: ['number', 'string'] },
+          samples: { type: 'integer' },
+          pairs: { type: 'integer' },
+          marketShare: { type: 'number' },
+          periodOverPeriodPctChange: { type: 'number' },
+          lastUpdated: { type: ['string', 'null'] },
+          ageSeconds: { type: ['integer', 'null'] },
+        },
+      },
+    },
+    excludedVenues: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    totalVolume: {
+      type: 'object',
+      required: ['value', 'unit', 'reason'],
+      additionalProperties: false,
+      properties: {
+        value: { type: ['number', 'null'] },
+        unit: { type: ['object', 'null'], properties: { code: { type: 'string' }, issuer: { type: ['string', 'null'] } } },
+        reason: { type: ['string', 'null'] },
+      },
+    },
+    marketShares: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        total: { type: 'number' },
+        variance: { type: 'number' },
+      },
+    },
+    periodOverPeriodPctChange: { type: 'number' },
   },
 } as const
 

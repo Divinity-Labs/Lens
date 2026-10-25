@@ -63,6 +63,8 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
       expect(typeof adapter.derive).toBe('function')
       expect(typeof adapter.write).toBe('function')
       expect(typeof adapter.ingestPair).toBe('function')
+      expect(adapter.sourceTimeCapability).toBeDefined()
+      expect(['provided', 'unavailable']).toContain(adapter.sourceTimeCapability.status)
     }
   })
 
@@ -121,6 +123,7 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     const customAdapter: VenueAdapter = {
       name: 'CustomDEX',
       source: 'custom_dex',
+      sourceTimeCapability: { status: 'unavailable' },
       classification: 'primary',
       isEnabled: () => false,
       getPollIntervalMs: () => 1000,

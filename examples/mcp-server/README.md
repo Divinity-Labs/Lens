@@ -26,25 +26,23 @@ paid call from the mainnet account.
 
 | Variable | Required | Description |
 |---|---|---|
-| `MCP_AGENT_SECRET_KEY_TESTNET` | Yes | Stellar secret key used to sign payments on `stellar:testnet` |
-| `MCP_AGENT_SECRET_KEY_MAINNET` | Yes | Stellar secret key used to sign payments on `stellar:pubnet` (mainnet) — **real money** |
+| `MCP_AGENT_SECRET_KEY_TESTNET` | No | Stellar secret key used to sign payments on `stellar:testnet`. Only this key is needed to try payment tools on testnet. |
+| `MCP_AGENT_SECRET_KEY_MAINNET` | No | Stellar secret key used to sign payments on `stellar:pubnet` (mainnet) — **real money**. Only active when `MCP_ENABLE_MAINNET=true`. |
+| `MCP_ENABLE_MAINNET` | No | Set to `true` to opt in to signing mainnet payments with real funds. |
 | `MCP_MAX_PAYMENT_PRICE` | No | Maximum price the server will pay per request (default: `$1.00`) |
+| `MCP_PAID_CALL_ALLOWED_HOSTS` | No | Comma-separated allowlist of origins `paid_call` may pay. |
 
-Both keys are required: `run.ts` exits with an error if either is unset.
-
-The server talks to two Stellar networks:
-- `stellar:testnet` — safe, friendbot-funded play money
-- `stellar:pubnet` — mainnet, real XLM
+The server starts safely under any configuration:
+- **Testnet only** (recommended): Set `MCP_AGENT_SECRET_KEY_TESTNET`. The server signs only on testnet.
+- **Mainnet opt-in**: Requires both `MCP_AGENT_SECRET_KEY_MAINNET` and `MCP_ENABLE_MAINNET=true`. The server logs an explicit warning at startup that real funds are reachable.
+- **Read-only (no keys)**: The server still starts, allowing read-only tools like `bazaar_search` and `lens_get_price` to function. `paid_call` refuses calls with a structured error.
 
 ## Safe way to try it first
 
-Never test with a funded mainnet key. Instead:
-
 1. Create a fresh testnet account and fund it via [friendbot](https://docs.stellar.org/create-account) so it holds testnet XLM. Set `MCP_AGENT_SECRET_KEY_TESTNET` to that testnet secret.
-2. For `MCP_AGENT_SECRET_KEY_MAINNET`, use a brand-new mainnet account with **zero XLM** (or any account you can afford to lose). A payment attempt against an unfunded account fails deterministically with `ERR_INSUFFICIENT_BALANCE` instead of spending money.
-3. Leave `MCP_MAX_PAYMENT_PRICE` at its default `$1.00`, or lower it.
-
-Only once you have confirmed the flow behaves as expected on testnet should you consider pointing `MCP_AGENT_SECRET_KEY_MAINNET` at a funded mainnet account — and only with an amount you are prepared to spend.
+2. Leave `MCP_AGENT_SECRET_KEY_MAINNET` unset. You do **not** need a mainnet key to run on testnet.
+3. If you ever test on mainnet, ensure you explicitly opt in by setting `MCP_ENABLE_MAINNET=true`.
+4. Leave `MCP_MAX_PAYMENT_PRICE` at its default `$1.00`, or lower it.
 
 Never log, echo, print, or commit a real secret key. This README shows env var names only; it never shows a key value.
 
@@ -54,13 +52,12 @@ Prerequisites:
 
 - Node.js installed
 - Dependencies installed at the repo root (`npm install`)
-- The two secret-key env vars set (see "Safe way to try it first" above)
+- Secret-key env var set for testnet (see "Safe way to try it first" above)
 
 Run the server in one terminal:
 
 ```bash
 export MCP_AGENT_SECRET_KEY_TESTNET=<your-testnet-secret-key>
-export MCP_AGENT_SECRET_KEY_MAINNET=<your-empty-mainnet-secret-key>
 npm run mcp:server
 ```
 

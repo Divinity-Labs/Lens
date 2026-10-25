@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
+import { z } from 'zod'
 import { prisma } from '../db'
 import { admin_auth_failures_total } from '../metrics'
+import { formatValidationError } from '../validation'
 import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
 import { copyUsageHistory } from '../x402/metering'
 
@@ -23,6 +25,95 @@ interface CreateKeyBody {
 
 interface RotateKeyBody {
   overlapHours?: number
+}
+
+/** The only overage policies `src/x402/metering.ts` understands. */
+const OVERAGE_POLICIES = ['block', 'charge_402', 'allow_overage'] as const
+
+// Rates and quota cents are stored in Postgres `Int` columns (32-bit signed), so
+// their value cannot exceed this without overflowing the column anyway.
+const MAX_INT32 = 2_147_483_647
+
+/**
+ * A rate or quota: a positive integer within the `Int` column's range. Rejects
+ * zero, negatives, and fractions rather than coercing them, so a mistake fails
+ * loudly at creation instead of silently minting a key that can never call
+ * anything or one that is never limited.
+ */
+const quotaField = (name: string) =>
+  z
+    .number({ error: `${name} must be a positive integer` })
+    .int({ error: `${name} must be a positive integer` })
+    .min(1, { error: `${name} must be a positive integer` })
+    .max(MAX_INT32, { error: `${name} must be at most ${MAX_INT32}` })
+
+/**
+ * Validates the `POST /admin/keys` body and rejects rather than coerces. Every
+ * field a caller can send is checked here so nothing reaches the database
+ * unvalidated (see issue #506).
+ */
+const CreateKeySchema = z
+  .object({
+    label: z.string({ error: 'label is required' }).trim().min(1, { error: 'label is required' }),
+    expiresAt: z.string({ error: 'expiresAt must be a valid future date' }).optional(),
+    ratePerMin: quotaField('ratePerMin').optional(),
+    ratePerDay: quotaField('ratePerDay').optional(),
+    monthlyQuotaCents: quotaField('monthlyQuotaCents').optional(),
+    dailyQuotaCents: quotaField('dailyQuotaCents').optional(),
+    overagePolicy: z
+      .enum(OVERAGE_POLICIES, {
+        error: `overagePolicy must be one of: ${OVERAGE_POLICIES.join(', ')}`,
+      })
+      .optional(),
+    // Scopes are optional, but an unknown-key strip would silently mint a key
+    // with no scopes at all — so they must be in the schema. The transform does
+    // the same de-dupe/trim/drop-empty normalisation the route used to do by
+    // hand, keeping a single source of truth for what gets stored (issue #506).
+    scopes: z
+      .array(z.string(), { error: 'scopes must be an array of strings' })
+      .optional()
+      .transform((s) =>
+        s === undefined ? undefined : Array.from(new Set(s.map((v) => v.trim()).filter(Boolean))),
+      ),
+  })
+  .superRefine((data, ctx) => {
+    if (data.expiresAt !== undefined) {
+      const t = new Date(data.expiresAt).getTime()
+      if (!Number.isFinite(t) || t <= Date.now()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['expiresAt'],
+          message: 'expiresAt must be a valid future date',
+        })
+      }
+    }
+    // A per-day cap below the per-minute cap can never bind and is always a mistake.
+    if (
+      data.ratePerMin !== undefined &&
+      data.ratePerDay !== undefined &&
+      data.ratePerDay < data.ratePerMin
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ratePerDay'],
+        message: 'ratePerDay must be greater than or equal to ratePerMin',
+      })
+    }
+  })
+
+interface ListKeysQuery {
+  limit?: string
+  offset?: string
+  revoked?: string
+}
+
+const MAX_KEY_PAGE_SIZE = 100
+
+function parsePageValue(value: string | undefined, fallback: number, maximum: number): number | null {
+  if (value === undefined) return fallback
+  if (!/^(0|[1-9]\d*)$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed <= maximum ? parsed : null
 }
 
 /**
@@ -76,39 +167,26 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })
       }
 
-      const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, scopes } = req.body ?? {}
-      if (!label || typeof label !== 'string' || label.trim().length === 0) {
-        return reply.status(400).send({ error: 'label is required' })
+      const parsed = CreateKeySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        return reply.status(400).send(formatValidationError(parsed.error))
       }
-      if (expiresAt !== undefined && typeof expiresAt !== 'string') {
-        return reply.status(400).send({ error: 'expiresAt must be a valid future date' })
-      }
+      const { label, expiresAt, ratePerMin, ratePerDay, monthlyQuotaCents, dailyQuotaCents, overagePolicy, scopes } = parsed.data
       const expiration = expiresAt === undefined ? undefined : new Date(expiresAt)
-      if (expiration && (!Number.isFinite(expiration.getTime()) || expiration <= new Date())) {
-        return reply.status(400).send({ error: 'expiresAt must be a valid future date' })
-      }
-      if (scopes !== undefined) {
-        if (!Array.isArray(scopes) || scopes.some(s => typeof s !== 'string')) {
-          return reply.status(400).send({ error: 'scopes must be an array of strings' })
-        }
-      }
-      const normalizedScopes = scopes !== undefined
-        ? Array.from(new Set(scopes.map(s => s.trim()).filter(Boolean)))
-        : undefined
 
       // Generate the key, store only its hash, and return the plaintext once.
       const plaintext = generateApiKey()
       const record = await prisma.apiKey.create({
         data: {
           hash: hashApiKey(plaintext),
-          label: label.trim(),
+          label,
           ...(expiration ? { expiresAt: expiration } : {}),
           ...(ratePerMin !== undefined ? { ratePerMin } : {}),
           ...(ratePerDay !== undefined ? { ratePerDay } : {}),
           ...(monthlyQuotaCents !== undefined ? { monthlyQuotaCents } : {}),
           ...(dailyQuotaCents !== undefined ? { dailyQuotaCents } : {}),
           ...(overagePolicy !== undefined ? { overagePolicy } : {}),
-          ...(normalizedScopes !== undefined ? { scopes: normalizedScopes } : {}),
+          ...(scopes !== undefined ? { scopes } : {}),
         },
       })
 
@@ -128,10 +206,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     },
   )
 
-  app.get(
+  app.get<{ Querystring: ListKeysQuery }>(
     '/admin/keys',
     { config: { admin: true, auth: 'admin' } },
-    async (req: FastifyRequest, reply: FastifyReply) => {
+    async (req: FastifyRequest<{ Querystring: ListKeysQuery }>, reply: FastifyReply) => {
       if (!isAdminAuthorized(req)) {
         admin_auth_failures_total.inc()
         return reply.status(401).send({
@@ -141,27 +219,59 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })
       }
 
-      const keys = await prisma.apiKey.findMany({
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          label: true,
-          scopes: true,
-          ratePerMin: true,
-          ratePerDay: true,
-          revokedAt: true,
-          expiresAt: true,
-          createdAt: true,
-          // #500: null means "never authenticated since this column existed",
-          // which is what makes an abandoned key visible to an operator.
-          lastUsedAt: true,
-          monthlyQuotaCents: true,
-          dailyQuotaCents: true,
-          overagePolicy: true,
-        },
-      })
+      const limit = parsePageValue(req.query.limit, 50, MAX_KEY_PAGE_SIZE)
+      const offset = parsePageValue(req.query.offset, 0, Number.MAX_SAFE_INTEGER)
+      const revoked = req.query.revoked ?? 'false'
+      if (limit === null || limit < 1 || offset === null || !['true', 'false'].includes(revoked)) {
+        return reply.status(400).send({
+          error: 'Invalid pagination or revoked filter. Use limit (1-100), offset (0 or greater), and revoked=true|false.',
+        })
+      }
 
-      return reply.status(200).send({ keys })
+      const where = revoked === 'true' ? { revokedAt: { not: null } } : { revokedAt: null }
+      const [keys, total] = await Promise.all([
+        prisma.apiKey.findMany({
+          where,
+          skip: offset,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            label: true,
+            scopes: true,
+            ratePerMin: true,
+            ratePerDay: true,
+            revokedAt: true,
+            expiresAt: true,
+            createdAt: true,
+            // #500: null means "never authenticated since this column existed",
+            // which is what makes an abandoned key visible to an operator.
+            lastUsedAt: true,
+            monthlyQuotaCents: true,
+            dailyQuotaCents: true,
+            overagePolicy: true,
+          },
+        }),
+        prisma.apiKey.count({ where }),
+      ])
+
+      return reply.status(200).send({
+        keys: keys.map(record => ({
+          id: record.id,
+          label: record.label,
+          scopes: record.scopes,
+          ratePerMin: record.ratePerMin,
+          ratePerDay: record.ratePerDay,
+          revokedAt: record.revokedAt,
+          expiresAt: record.expiresAt,
+          createdAt: record.createdAt,
+          lastUsedAt: record.lastUsedAt,
+          monthlyQuotaCents: record.monthlyQuotaCents,
+          dailyQuotaCents: record.dailyQuotaCents,
+          overagePolicy: record.overagePolicy,
+        })),
+        pagination: { limit, offset, total },
+      })
     },
   )
 

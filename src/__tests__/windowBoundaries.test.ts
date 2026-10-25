@@ -99,13 +99,14 @@ describe('adjacent candle windows share no boundary', () => {
     mockQuery.mockReset()
   })
 
-  // price_points rows. `timestamp` is the source column the range predicate
-  // filters on; `time` is the bucket the route reports back.
+  // price_points rows. `observed_at` is the column the candle range predicate
+  // filters on (#240); `time` is the bucket the route reports back.
   const table: Row[] = [
     {
       network: 'testnet',
       pair_key: 'XLM/USDC',
       timestamp: new Date(T0.getTime() + 60_000),
+      observed_at: new Date(T0.getTime() + 60_000),
       time: new Date(T0.getTime() + 60_000),
       open: '1.0', high: '1.0', low: '1.0', close: '1.0', volume: '10',
     },
@@ -114,6 +115,7 @@ describe('adjacent candle windows share no boundary', () => {
       network: 'testnet',
       pair_key: 'XLM/USDC',
       timestamp: T1,
+      observed_at: T1,
       time: T1,
       open: '2.0', high: '2.0', low: '2.0', close: '2.0', volume: '20',
     },
@@ -121,6 +123,7 @@ describe('adjacent candle windows share no boundary', () => {
       network: 'testnet',
       pair_key: 'XLM/USDC',
       timestamp: new Date(T1.getTime() + 60_000),
+      observed_at: new Date(T1.getTime() + 60_000),
       time: new Date(T1.getTime() + 60_000),
       open: '3.0', high: '3.0', low: '3.0', close: '3.0', volume: '30',
     },

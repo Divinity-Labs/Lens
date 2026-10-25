@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { BazaarMcpServer } from '../../src/mcp/server';
+import { setupMcpPayment } from '../../src/mcp/paymentConfig';
 import {
   DEFAULT_MCP_METRICS_PATH,
   DEFAULT_MCP_METRIC_NETWORKS,
@@ -9,9 +10,6 @@ import {
 } from '../../src/mcp/config';
 import { SpendBudget, defaultSpendStateFile } from '../../src/mcp/budget';
 import { PaymentLedger, defaultPaymentLedgerFile } from '../../src/mcp/ledger';
-import { wrapFetchWithPaymentFromConfig } from '@x402/fetch';
-import { ExactStellarScheme } from '@x402/stellar/exact/client';
-import { createEd25519Signer } from '@x402/stellar';
 
 function formatHttpUrl(host: string, port: number, path: string): string {
   const hostPart = host.includes(':') ? `[${host}]` : host;
@@ -50,17 +48,10 @@ async function main() {
 
   const testnetKey = process.env.MCP_AGENT_SECRET_KEY_TESTNET;
   const mainnetKey = process.env.MCP_AGENT_SECRET_KEY_MAINNET;
-  
-  if (!testnetKey || !mainnetKey) {
-    console.error('[mcp-server] Error: MCP_AGENT_SECRET_KEY_TESTNET and MCP_AGENT_SECRET_KEY_MAINNET must be set');
-    process.exit(1);
-  }
-
-  const testnetSigner = createEd25519Signer(testnetKey, 'stellar:testnet');
-  const pubnetSigner = createEd25519Signer(mainnetKey, 'stellar:pubnet');
-  
-  const testnetClient = new ExactStellarScheme(testnetSigner);
-  const pubnetClient = new ExactStellarScheme(pubnetSigner);
+  const enableMainnet =
+    process.env.MCP_ENABLE_MAINNET === 'true' ||
+    process.env.MCP_ALLOW_MAINNET === 'true' ||
+    process.argv.includes('--allow-mainnet');
 
   // A single payment is capped by spendControls.maxAmountPerPayment. The value is
   // passed through to the budget so the cumulative ceiling can reserve each call at
@@ -81,20 +72,12 @@ async function main() {
     metricNetworks: labelNetworks,
   });
 
-  const fetchWithPayment = wrapFetchWithPaymentFromConfig(paymentLedger.instrumentFetch(globalThis.fetch), {
-    spendControls: {
-      maxAmountPerPayment: maxPrice,
-    },
-    schemes: [
-      {
-        network: 'stellar:testnet',
-        client: testnetClient,
-      },
-      {
-        network: 'stellar:pubnet',
-        client: pubnetClient,
-      }
-    ]
+  const { fetchWithPayment, activeNetworks, warnings, info } = setupMcpPayment({
+    testnetKey,
+    mainnetKey,
+    enableMainnet,
+    maxPrice,
+    fetchImpl: paymentLedger.instrumentFetch(globalThis.fetch),
   });
 
   // The running total outlives the process: this server signs with a real key, and a
@@ -106,13 +89,32 @@ async function main() {
     stateFilePath: process.env.MCP_SPEND_STATE_FILE || defaultSpendStateFile(),
   });
 
+  const paidCallAllowlist = (process.env.MCP_PAID_CALL_ALLOWED_HOSTS || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+
   const server = new BazaarMcpServer({
     fetchWithPayment,
     budget,
-    paymentLedger
+    paymentLedger,
+    paidCallAllowlist,
   });
 
-  console.error('[mcp-server] Agent configured for stellar:testnet and stellar:pubnet');
+  for (const item of info) {
+    console.error(`[mcp-server] ${item}`);
+  }
+
+  for (const warning of warnings) {
+    console.error(`[mcp-server] ${warning}`);
+  }
+
+  if (activeNetworks.length > 0) {
+    console.error(`[mcp-server] Agent configured for: ${activeNetworks.join(', ')}`);
+  } else {
+    console.error('[mcp-server] Running without payment keys. Only read-only operations are permitted.');
+  }
+
   console.error(`[mcp-server] Spend limits: ${budget.describeLimits()}`);
   // The audit file records where money went, never the key that signed it.
   console.error(`[mcp-server] Payment audit trail: ${ledgerFile}`);
@@ -124,6 +126,11 @@ async function main() {
       '[mcp-server] MCP_METRIC_HOSTS is empty, so every spend series is labelled host="unknown". Set it to the nodes this agent pays to get per-host spend.'
     );
   }
+  console.error(
+    paidCallAllowlist.length > 0
+      ? `[mcp-server] paid_call may pay these allow-listed origins: ${paidCallAllowlist.join(', ')}`
+      : '[mcp-server] paid_call allow-list is empty: every paid call will be refused. Set MCP_PAID_CALL_ALLOWED_HOSTS to allow hosts.'
+  );
 
   if (transportConfig.transport === 'http') {
     console.error('[mcp-server] Starting Bazaar MCP server on streamable HTTP...');

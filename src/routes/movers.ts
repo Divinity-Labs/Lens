@@ -79,7 +79,7 @@ export async function registerMoversRoutes(app: FastifyInstance) {
             (array_agg(asset_b))[1] AS asset_b,
             (array_agg(price::float ORDER BY timestamp ASC))[1] AS start_price,
             (array_agg(price::float ORDER BY timestamp DESC))[1] AS end_price,
-            SUM(base_volume::float) AS current_volume,
+            SUM(base_volume)::float AS current_volume,
             array_agg(DISTINCT source) AS venues,
             COUNT(*)::int AS sample_count,
             MAX(timestamp) AS last_updated
@@ -92,7 +92,7 @@ export async function registerMoversRoutes(app: FastifyInstance) {
         prev_window AS (
           SELECT
             pair_key,
-            SUM(base_volume::float) AS prev_volume
+            SUM(base_volume)::float AS prev_volume
           FROM price_points
           WHERE network = $1
             AND timestamp >= $4

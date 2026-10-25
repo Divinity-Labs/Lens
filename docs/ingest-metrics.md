@@ -37,7 +37,7 @@ queryable at all.
 
 `last_trade_timestamp` was worse. It is a `Gauge.set()`, not an increment, so
 whichever loop ticked last won. The testnet loop at
-[`src/ingesters/sdex.ts`](../src/ingesters/sdex.ts) overwrote mainnet's value
+[`src/ingest/venues/sdex.ts`](../src/ingest/venues/sdex.ts) overwrote mainnet's value
 for the same pair every poll interval, and the series reported a timestamp
 belonging to exactly one network while looking network-agnostic. That is the
 only staleness signal Lens exports, and on a dual-network deployment it was

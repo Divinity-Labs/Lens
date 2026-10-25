@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/venues/registry": {
+    "/v1/venues/registry": {
         parameters: {
             query?: never;
             header?: never;
@@ -24,7 +24,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/live": {
+    "/v1/venues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Venue Share of Volume
+         * @description Per-venue traded volume, market share (percentage of total), and period-over-period percentage change comparing the requested window against the immediately preceding window of identical duration.
+         *     Market shares sum to 100% within floating-point tolerance. Stale or excluded venues are explicitly listed in `excludedVenues`.
+         *     All queries are filtered by `network` via the `x-network` header — testnet and mainnet data are never merged into a single series.
+         */
+        get: operations["getVenueVolumeShare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live": {
         parameters: {
             query?: never;
             header?: never;
@@ -44,7 +66,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tvl": {
+    "/v1/tvl": {
         parameters: {
             query?: never;
             header?: never;
@@ -64,7 +86,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/ready": {
+    "/v1/ready": {
         parameters: {
             query?: never;
             header?: never;
@@ -85,7 +107,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/status": {
+    "/v1/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -102,7 +124,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/snapshot": {
+    "/v1/snapshot": {
         parameters: {
             query?: never;
             header?: never;
@@ -122,7 +144,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/{assetA}/{assetB}": {
+    "/v1/price/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
@@ -139,7 +161,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/{assetA}/{assetB}/route": {
+    "/v1/price/{assetA}/{assetB}/route": {
         parameters: {
             query?: never;
             header?: never;
@@ -156,7 +178,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/{asset}/fiat": {
+    "/v1/price/{asset}/fiat": {
         parameters: {
             query?: never;
             header?: never;
@@ -173,14 +195,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/{assetA}/{assetB}/history": {
+    "/v1/price/{assetA}/{assetB}/history": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get price history buckets */
+        /**
+         * Get price history buckets
+         * @description Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18 decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
+         */
         get: operations["getPriceHistory"];
         put?: never;
         post?: never;
@@ -190,14 +215,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/pools": {
+    "/v1/pools": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get AMM liquidity pool reserves and spot prices */
+        /**
+         * Get AMM liquidity pool reserves and spot prices
+         * @description Latest snapshot per pool for one network. Paginated with the shared keyset convention: ordered by pool_id ascending, default limit 50, maximum 200.
+         */
         get: operations["getPools"];
         put?: never;
         post?: never;
@@ -207,14 +235,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/candles/{assetA}/{assetB}": {
+    "/v1/candles/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get OHLCV candle data */
+        /**
+         * Get OHLCV candle data
+         * @description OHLCV candles for a pair. Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.
+         */
         get: operations["getCandles"];
         put?: never;
         post?: never;
@@ -224,7 +255,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/prices/history": {
+    "/v1/prices/history": {
         parameters: {
             query?: never;
             header?: never;
@@ -233,7 +264,7 @@ export interface paths {
         };
         /**
          * Get historical 1-minute price snapshots
-         * @description Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets. Snapshots are retained for ~30 days. Gated by x402 (matches the /price prefix).
+         * @description Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets, with exact numeric arithmetic in the database so a sum does not depend on row order. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).
          */
         get: operations["getPriceSnapshots"];
         put?: never;
@@ -244,14 +275,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/pairs": {
+    "/v1/pairs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List all active trading pairs */
+        /**
+         * List all active trading pairs
+         * @description Active trading pairs with their latest price metadata. Paginated with the shared keyset convention: ordered by pairKey ascending, default limit 50, maximum 200.
+         */
         get: operations["listPairs"];
         put?: never;
         /** Add a new trading pair (Admin only) */
@@ -262,7 +296,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/{assetA}/{assetB}/depth": {
+    "/v1/price/{assetA}/{assetB}/depth": {
         parameters: {
             query?: never;
             header?: never;
@@ -282,7 +316,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/book/{assetA}/{assetB}": {
+    "/v1/book/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
@@ -302,7 +336,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/impact/{assetA}/{assetB}": {
+    "/v1/impact/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
@@ -322,7 +356,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/twap/{assetA}/{assetB}": {
+    "/v1/price/twap/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
@@ -339,7 +373,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/price/vwap/{assetA}/{assetB}": {
+    "/v1/price/vwap/{assetA}/{assetB}": {
         parameters: {
             query?: never;
             header?: never;
@@ -356,7 +390,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/volumes/{asset}": {
+    "/v1/volumes/{asset}": {
         parameters: {
             query?: never;
             header?: never;
@@ -376,7 +410,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/spreads/{asset}": {
+    "/v1/spreads/{asset}": {
         parameters: {
             query?: never;
             header?: never;
@@ -396,7 +430,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/rates/{asset}": {
+    "/v1/rates/{asset}": {
         parameters: {
             query?: never;
             header?: never;
@@ -417,7 +451,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/compare/{asset}": {
+    "/v1/dispersion/{assetA}/{assetB}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get venue price dispersion and outlier attribution for a pair
+         * @description Returns cross-venue price dispersion history and outlier attribution for a pair over time, including median, max absolute percentage deviation, spread in basis points, and outlying venue.
+         */
+        get: operations["getPairDispersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dispersion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List cross-venue dispersion across watched pairs
+         * @description Queries recent cross-venue dispersion reconciliation records across all pairs or filtered by a specific pair.
+         */
+        get: operations["listDispersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compare/{asset}": {
         parameters: {
             query?: never;
             header?: never;
@@ -437,7 +511,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/screener": {
+    "/v1/screener": {
         parameters: {
             query?: never;
             header?: never;
@@ -454,7 +528,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/movers": {
+    "/v1/movers": {
         parameters: {
             query?: never;
             header?: never;
@@ -474,7 +548,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/benchmark/{asset}": {
+    "/v1/benchmark/{asset}": {
         parameters: {
             query?: never;
             header?: never;
@@ -491,7 +565,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/basket": {
+    "/v1/basket": {
         parameters: {
             query?: never;
             header?: never;
@@ -511,7 +585,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/correlation": {
+    "/v1/correlation": {
         parameters: {
             query?: never;
             header?: never;
@@ -528,7 +602,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/discovery/resources": {
+    "/v1/discovery/resources": {
         parameters: {
             query?: never;
             header?: never;
@@ -545,7 +619,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/discovery/search": {
+    "/v1/discovery/search": {
         parameters: {
             query?: never;
             header?: never;
@@ -562,7 +636,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/webhooks": {
+    "/v1/webhooks": {
         parameters: {
             query?: never;
             header?: never;
@@ -582,7 +656,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/webhooks/{id}": {
+    "/v1/webhooks/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -599,7 +673,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage/me": {
+    "/v1/usage/me": {
         parameters: {
             query?: never;
             header?: never;
@@ -616,7 +690,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage": {
+    "/v1/usage": {
         parameters: {
             query?: never;
             header?: never;
@@ -633,7 +707,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/supported": {
+    "/v1/supported": {
         parameters: {
             query?: never;
             header?: never;
@@ -650,7 +724,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/verify": {
+    "/v1/verify": {
         parameters: {
             query?: never;
             header?: never;
@@ -667,7 +741,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/settle": {
+    "/v1/settle": {
         parameters: {
             query?: never;
             header?: never;
@@ -687,7 +761,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/graphql": {
+    "/v1/graphql": {
         parameters: {
             query?: never;
             header?: never;
@@ -705,10 +779,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query latest lending and borrow rates across pools
+         * @description Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.
+         */
+        get: operations["getLendingRates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        LendingRateEntry: {
+            id: string;
+            /** @example blend */
+            venue: string;
+            /** @example blend */
+            source: string;
+            /** @example mainnet */
+            network: string;
+            poolId: string;
+            poolName?: string | null;
+            /** @example USDC */
+            asset: string;
+            assetAddress?: string | null;
+            supplyApy: number;
+            borrowApy: number;
+            supplyApr?: number | null;
+            borrowApr?: number | null;
+            /** @description Borrowed / supplied as a fraction. Null for venues that publish rates only. */
+            utilization?: number | null;
+            totalSupply?: number | null;
+            totalBorrowed?: number | null;
+            reserves?: number | null;
+            ledger?: number;
+            /** Format: date-time */
+            timestamp: string;
+        };
+        LendingRatesResponse: {
+            network: string;
+            rates: components["schemas"]["LendingRateEntry"][];
+        };
         InternalErrorResponse: {
             /**
              * @example internal_error
@@ -728,6 +852,34 @@ export interface components {
             latencyMs: number;
             /** @example unreachable or not migrated */
             reason: string | null;
+        };
+        VenuesResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            /** @enum {string} */
+            window: "24h" | "7d" | "30d";
+            excludedVenues: string[];
+            venues: {
+                venue: string;
+                baseVolume: number;
+                counterVolume: number;
+                samples: number;
+                pairs: number;
+                marketShare: number;
+                periodOverPeriodPctChange: number;
+                lastUpdated: string | null;
+                ageSeconds: number | null;
+            }[];
+            totalVolume: {
+                value: number | null;
+                unit: Record<string, never> | null;
+                reason: string | null;
+            };
+            marketShares: {
+                total?: number;
+                variance?: number;
+            };
+            periodOverPeriodPctChange: number;
         };
         /** @description Readiness of one instance. Identical on 200 and 503; `ok` and the HTTP status together say whether traffic should be routed here. */
         ReadinessReport: {
@@ -1502,12 +1654,25 @@ export interface components {
                 "application/json": components["schemas"]["InternalErrorResponse"];
             };
         };
+        /** @description Invalid request parameters */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    error: string;
+                };
+            };
+        };
     };
     parameters: {
         /** @description Formatting for decimal quantities (prices, volumes, reserves). Set to `string` to serialize high-precision `Decimal(36,18)` quantities as exact strings, preventing IEEE-754 floating-point precision loss. Defaults to `number`. Can also be negotiated via `Accept: application/json; decimals=strings` or query parameter `?decimals=strings`. */
         DecimalFormatHeader: "number" | "string";
         /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
         NetworkQuery: "testnet" | "mainnet";
+        /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+        CursorQuery: string;
     };
     requestBodies: never;
     headers: {
@@ -1551,6 +1716,42 @@ export interface operations {
                             /** Format: date-time */
                             lastSeenAt: string | null;
                         }[];
+                    };
+                };
+            };
+        };
+    };
+    getVenueVolumeShare: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                /** @description Time window for the aggregation */
+                window?: "24h" | "7d" | "30d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Venue volume share and market share data */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VenuesResponse"];
+                };
+            };
+            /** @description Invalid window parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
                     };
                 };
             };
@@ -1810,7 +2011,9 @@ export interface operations {
                 "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
             };
             path: {
+                /** @example XLM */
                 assetA: string;
+                /** @example USDC */
                 assetB: string;
             };
             cookie?: never;
@@ -1878,7 +2081,9 @@ export interface operations {
                 "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
             };
             path: {
+                /** @example XLM */
                 assetA: string;
+                /** @example USDC */
                 assetB: string;
             };
             cookie?: never;
@@ -1916,11 +2121,12 @@ export interface operations {
             query?: {
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
+                /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+                cursor?: components["parameters"]["CursorQuery"];
+                /** @description Page size. Out-of-range values are clamped into [1, 200]. */
+                limit?: number;
             };
-            header?: {
-                /** @description Formatting for decimal quantities (prices, volumes, reserves). Set to `string` to serialize high-precision `Decimal(36,18)` quantities as exact strings, preventing IEEE-754 floating-point precision loss. Defaults to `number`. Can also be negotiated via `Accept: application/json; decimals=strings` or query parameter `?decimals=strings`. */
-                "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1934,7 +2140,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        pools?: {
+                        pools: {
                             pool_id?: string;
                             asset_a?: string;
                             asset_b?: string;
@@ -1945,8 +2151,17 @@ export interface operations {
                             /** Format: date-time */
                             timestamp?: string;
                         }[];
+                        nextCursor: string | null;
+                        hasMore: boolean;
                     };
                 };
+            };
+            /** @description Invalid limit or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             402: components["responses"]["PaymentRequired"];
             429: components["responses"]["TooManyRequests"];
@@ -1960,10 +2175,16 @@ export interface operations {
                 from?: string;
                 /** @description End of the time window (exclusive). Together with `from` this defines a half-open interval [from, to): samples whose timestamp is exactly `to` are excluded, samples whose timestamp is exactly `from` are included. This means two adjacent windows [T0, T1) and [T1, T2) share no boundary — a sample landing exactly on T1 appears in exactly one of the two windows. */
                 to?: string;
+                /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+                cursor?: components["parameters"]["CursorQuery"];
+                /** @description Page size. Out-of-range values are clamped into [1, 5000]. */
+                limit?: number;
             };
             header?: never;
             path: {
+                /** @example XLM */
                 assetA: string;
+                /** @example USDC */
                 assetB: string;
             };
             cookie?: never;
@@ -1978,11 +2199,13 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        pairKey?: string;
-                        interval?: string;
-                        from?: string;
-                        to?: string;
-                        candles?: {
+                        pairKey: string;
+                        interval: string;
+                        /** Format: date-time */
+                        from: string;
+                        /** Format: date-time */
+                        to: string;
+                        candles: {
                             /** Format: date-time */
                             time?: string;
                             open?: number;
@@ -1991,6 +2214,8 @@ export interface operations {
                             close?: number;
                             volume?: number;
                         }[];
+                        nextCursor: string | null;
+                        hasMore: boolean;
                     };
                 };
             };
@@ -2017,6 +2242,10 @@ export interface operations {
                 to?: string;
                 /** @description Response encoding. `csv` returns a text/csv body holding a `ts,price,volume` table (RFC 4180 quoting, LF line endings, one trailing newline); `json` is the default. */
                 format?: "json" | "csv";
+                /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+                cursor?: components["parameters"]["CursorQuery"];
+                /** @description Page size (number of buckets). Out-of-range values are clamped into [1, 10000]. */
+                limit?: number;
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
             };
@@ -2026,30 +2255,36 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Historical price snapshots */
+            /** @description Historical price snapshots. When more buckets exist beyond this page, the response carries X-Next-Cursor (pass it back as ?cursor=) and X-Has-More: true. */
             200: {
                 headers: {
-                    "Cache-Control": components["headers"]["CacheControl"];
+                    /** @description Opaque cursor for the next page; absent on the last page. */
+                    "X-Next-Cursor"?: string;
+                    /** @description 'true' when another page exists, 'false' otherwise. */
+                    "X-Has-More"?: "true" | "false";
                     [name: string]: unknown;
                 };
                 content: {
                     "text/csv": string;
                     "application/json": {
-                        pair?: string;
+                        pair: string;
                         /** @enum {string} */
-                        network?: "testnet" | "mainnet";
-                        interval?: string;
+                        network: "testnet" | "mainnet";
+                        interval: string;
                         /** Format: date-time */
-                        from?: string;
+                        from: string;
                         /** Format: date-time */
-                        to?: string;
-                        count?: number;
-                        points?: {
+                        to: string;
+                        /** @description Number of points in this page (not the total across pages). */
+                        count: number;
+                        points: {
                             /** Format: date-time */
                             ts?: string;
                             price?: number;
                             volume?: number;
                         }[];
+                        nextCursor: string | null;
+                        hasMore: boolean;
                     };
                 };
             };
@@ -2069,6 +2304,10 @@ export interface operations {
             query?: {
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
+                /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+                cursor?: components["parameters"]["CursorQuery"];
+                /** @description Page size. Out-of-range values are clamped into [1, 200]. */
+                limit?: number;
             };
             header?: never;
             path?: never;
@@ -2084,7 +2323,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        pairs?: {
+                        pairs: {
                             pairKey?: string;
                             assetA?: components["schemas"]["Asset"];
                             assetB?: components["schemas"]["Asset"];
@@ -2092,8 +2331,17 @@ export interface operations {
                             /** Format: date-time */
                             lastUpdated?: string | null;
                         }[];
+                        nextCursor: string | null;
+                        hasMore: boolean;
                     };
                 };
+            };
+            /** @description Invalid limit or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             429: components["responses"]["TooManyRequests"];
         };
@@ -2110,7 +2358,7 @@ export interface operations {
                 "application/json": {
                     /** @example XLM */
                     assetA?: string;
-                    /** @example USDC:GBBD47... */
+                    /** @example USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 */
                     assetB?: string;
                 };
             };
@@ -2318,7 +2566,9 @@ export interface operations {
                 "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
             };
             path: {
+                /** @example XLM */
                 assetA: string;
+                /** @example USDC */
                 assetB: string;
             };
             cookie?: never;
@@ -2369,7 +2619,9 @@ export interface operations {
                 "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
             };
             path: {
+                /** @example XLM */
                 assetA: string;
+                /** @example USDC */
                 assetB: string;
             };
             cookie?: never;
@@ -2535,6 +2787,115 @@ export interface operations {
             };
         };
     };
+    getPairDispersion: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                /** @description Start timestamp (ISO-8601) */
+                from?: string;
+                /** @description End timestamp (ISO-8601) */
+                to?: string;
+                /** @description Max number of history records to return */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Base asset code or CODE:ISSUER
+                 * @example XLM
+                 */
+                assetA: string;
+                /**
+                 * @description Quote asset code or CODE:ISSUER
+                 * @example USDC
+                 */
+                assetB: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dispersion history and latest outlier attribution */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        pairKey?: string;
+                        network?: string;
+                        latest?: Record<string, never> | null;
+                        count?: number;
+                        history?: Record<string, never>[];
+                    };
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            /** @description Dispersion query failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listDispersion: {
+        parameters: {
+            query?: {
+                /** @description Optional pair key filter (e.g. XLM/USDC) */
+                pair?: string;
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of dispersion reconciliation records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        network?: string;
+                        pair?: string | null;
+                        count?: number;
+                        history?: Record<string, never>[];
+                    };
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            /** @description Dispersion query failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     compareAsset: {
         parameters: {
             query?: {
@@ -2575,8 +2936,9 @@ export interface operations {
                 liquidity?: number;
                 sortBy?: "volume" | "change_24h" | "price" | "liquidity";
                 order?: "asc" | "desc";
-                /** @description Opaque cursor returned as `nextCursor` by the previous page. */
-                cursor?: string;
+                /** @description Opaque cursor returned as `nextCursor` by the previous page. Every list route uses the same keyset-cursor convention: pass it unchanged to fetch the next page; rows inserted while paging never shift a page boundary. An invalid cursor is rejected with 400. */
+                cursor?: components["parameters"]["CursorQuery"];
+                /** @description Page size. Out-of-range values are clamped into [1, 100]. */
                 limit?: number;
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
@@ -3116,6 +3478,43 @@ export interface operations {
                 };
             };
             402: components["responses"]["PaymentRequired"];
+        };
+    };
+    getLendingRates: {
+        parameters: {
+            query?: {
+                /** @description Filter by asset symbol (e.g. USDC, XLM) */
+                asset?: string;
+                /** @description Filter by pool contract ID */
+                poolId?: string;
+                /** @description Stellar network to query (testnet or mainnet) */
+                network?: "testnet" | "mainnet";
+                /** @description Maximum number of rate records to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest lending rates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LendingRatesResponse"];
+                };
+            };
+            /** @description Invalid parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
         };
     };
 }

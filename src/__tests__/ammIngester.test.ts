@@ -15,7 +15,7 @@ vi.mock('../webhookDispatcher', () => ({
 }))
 
 // ── Imports ──────────────────────────────────────────────────────────────────
-import { snapshotPool, ingestPoolTrades } from '../ingesters/amm'
+import { snapshotPool, ingestPoolTrades } from '../ingest/venues/amm'
 import { prisma, upsertPricePoints, getIndexerState, setIndexerCursor } from '../db'
 import { dispatchPriceUpdate } from '../webhookDispatcher'
 
@@ -66,7 +66,7 @@ describe('AMM Ingester', () => {
         getIndexerCursor: vi.fn(),
         setIndexerCursor: vi.fn(),
       }))
-      const { snapshotPool: snapshotOnMainnet } = await import('../ingesters/amm')
+      const { snapshotPool: snapshotOnMainnet } = await import('../ingest/venues/amm')
 
       await snapshotOnMainnet({
         id: 'pool-mainnet',

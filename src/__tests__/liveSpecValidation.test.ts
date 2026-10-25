@@ -23,26 +23,26 @@ describe('Live Spec Validator', () => {
     })
 
     it('resolves parameterized path templates into valid test URLs', () => {
-      const priceReq = resolveTestRequest('/price/{assetA}/{assetB}', 'get')
-      expect(priceReq.urlPath).toBe('/price/XLM/USDC')
+      const priceReq = resolveTestRequest('/v1/price/{assetA}/{assetB}', 'get')
+      expect(priceReq.urlPath).toBe('/v1/price/XLM/USDC')
       expect(priceReq.method).toBe('GET')
 
-      const routeReq = resolveTestRequest('/price/{assetA}/{assetB}/route', 'get')
-      expect(routeReq.urlPath).toBe('/price/XLM/USDC/route?amount=100')
+      const routeReq = resolveTestRequest('/v1/price/{assetA}/{assetB}/route', 'get')
+      expect(routeReq.urlPath).toBe('/v1/price/XLM/USDC/route?amount=100')
 
-      const benchmarkReq = resolveTestRequest('/benchmark/{asset}', 'get')
-      expect(benchmarkReq.urlPath).toBe('/benchmark/XLM?target=USD')
+      const benchmarkReq = resolveTestRequest('/v1/benchmark/{asset}', 'get')
+      expect(benchmarkReq.urlPath).toBe('/v1/benchmark/XLM?target=USD')
 
-      const basketReq = resolveTestRequest('/basket', 'get')
-      expect(basketReq.urlPath).toBe('/basket?asset=XLM&weight=1')
+      const basketReq = resolveTestRequest('/v1/basket', 'get')
+      expect(basketReq.urlPath).toBe('/v1/basket?asset=XLM&weight=1')
     })
 
     it('supplies appropriate request bodies for POST operations', () => {
-      const gqlReq = resolveTestRequest('/graphql', 'post')
+      const gqlReq = resolveTestRequest('/v1/graphql', 'post')
       expect(gqlReq.method).toBe('POST')
       expect(gqlReq.body).toContain('__typename')
 
-      const webhookReq = resolveTestRequest('/webhooks', 'post')
+      const webhookReq = resolveTestRequest('/v1/webhooks', 'post')
       expect(webhookReq.method).toBe('POST')
       expect(JSON.parse(webhookReq.body!)).toMatchObject({
         url: 'https://example.com/webhook',
@@ -52,7 +52,7 @@ describe('Live Spec Validator', () => {
     })
 
     it('resolves response schemas from operations', () => {
-      const statusOp = spec.paths['/status'].get
+      const statusOp = spec.paths['/v1/status'].get
       const statusSchema = getResponseSchema(statusOp, 200)
       expect(statusSchema).toBeDefined()
       expect(statusSchema.properties?.ok).toBeDefined()
@@ -70,7 +70,7 @@ describe('Live Spec Validator', () => {
         ingestLagSeconds: 2,
       }
 
-      const result = checkResponseAgainstSpec(ajv, spec, '/status', 'get', 200, validStatus)
+      const result = checkResponseAgainstSpec(ajv, spec, '/v1/status', 'get', 200, validStatus)
       expect(result.valid).toBe(true)
       expect(result.errors).toBeUndefined()
     })
@@ -101,7 +101,7 @@ describe('Live Spec Validator', () => {
       const result = checkResponseAgainstSpec(
         ajv,
         spec,
-        '/price/{assetA}/{assetB}',
+        '/v1/price/{assetA}/{assetB}',
         'get',
         200,
         mismatchedPrice
@@ -142,7 +142,7 @@ describe('Live Spec Validator', () => {
       const result = checkResponseAgainstSpec(
         ajv,
         spec,
-        '/price/{assetA}/{assetB}',
+        '/v1/price/{assetA}/{assetB}',
         'get',
         200,
         invalidEnumPrice
@@ -166,7 +166,7 @@ describe('Live Spec Validator', () => {
       const result = checkResponseAgainstSpec(
         ajv,
         spec,
-        '/spreads/{asset}',
+        '/v1/spreads/{asset}',
         'get',
         200,
         missingRequired

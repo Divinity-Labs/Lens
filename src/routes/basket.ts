@@ -14,7 +14,7 @@ async function fetchAssetVWAP(asset: string, network: NetworkName): Promise<numb
      FROM price_points
      WHERE (asset_a = $1 OR asset_b = $1)
        AND network = $2
-       AND timestamp > NOW() - INTERVAL '5 minutes'`,
+       AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '5 minutes'`,
     [asset.toUpperCase(), network]
   )
   const vwap = result.rows[0]?.vwap

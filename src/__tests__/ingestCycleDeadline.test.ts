@@ -113,6 +113,7 @@ describe('slow upstream (#351 acceptance)', () => {
     const slowAdapter: VenueAdapter = {
       name: 'SlowDEX',
       source: 'slow_dex',
+      sourceTimeCapability: { status: 'unavailable' },
       isEnabled: () => true,
       getPollIntervalMs: () => 10,
       discover: async () => [],

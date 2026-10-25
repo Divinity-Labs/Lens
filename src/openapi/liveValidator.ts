@@ -1,4 +1,5 @@
 import { createLogger } from '../logger'
+import { toBarePath } from './coverage'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 // @ts-expect-error js-yaml types
@@ -108,6 +109,13 @@ export function resolveTestRequest(
   pathTemplate: string,
   method: string
 ): { urlPath: string; method: string; body?: string } {
+  // Spec paths are documented under the `/v1` prefix (see src/openapi/coverage.ts),
+  // but the query-parameter and request-body tables below are keyed on the
+  // canonical bare route. Strip the prefix once so a versioned or a bare
+  // template both resolve; the URL itself keeps whichever form was asked for,
+  // because that is the URL the live validator should actually request.
+  const bare = toBarePath(pathTemplate)
+
   let url = pathTemplate
     .replace('{assetA}', 'XLM')
     .replace('{assetB}', 'USDC')
@@ -124,9 +132,9 @@ export function resolveTestRequest(
     url += '?window=1h'
   } else if (pathTemplate.includes('/benchmark')) {
     url += '?target=USD'
-  } else if (pathTemplate === '/basket') {
+  } else if (bare === '/basket') {
     url += '?asset=XLM&weight=1'
-  } else if (pathTemplate === '/screener') {
+  } else if (bare === '/screener') {
     url += '?limit=5'
   }
 
@@ -134,19 +142,19 @@ export function resolveTestRequest(
   let body: string | undefined
 
   if (httpMethod === 'POST') {
-    if (pathTemplate === '/graphql') {
+    if (bare === '/graphql') {
       body = JSON.stringify({ query: '{ __typename }' })
-    } else if (pathTemplate === '/verify') {
+    } else if (bare === '/verify') {
       body = JSON.stringify({
         paymentPayload: { scheme: 'exact' },
         paymentRequirements: { payTo: 'GDTEST' },
       })
-    } else if (pathTemplate === '/settle') {
+    } else if (bare === '/settle') {
       body = JSON.stringify({
         paymentPayload: { scheme: 'exact' },
         paymentRequirements: { payTo: 'GDTEST' },
       })
-    } else if (pathTemplate === '/webhooks') {
+    } else if (bare === '/webhooks') {
       body = JSON.stringify({
         url: 'https://example.com/webhook',
         assetA: 'XLM',

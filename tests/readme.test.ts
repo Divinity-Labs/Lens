@@ -9,6 +9,7 @@ import {
   renderVenuesTable,
   renderEndpointsTable,
   renderReadme,
+  readmeIsCurrent,
   VENUES_START_TAG,
   VENUES_END_TAG,
   ENDPOINTS_START_TAG,
@@ -123,6 +124,18 @@ describe('README venue list and endpoint table generators', () => {
 
     // If an unregistered fake route is expected, it must diverge
     expect(currentEndpoints).not.toContain('/fake/nonexistent/endpoint')
+  })
+
+  it('readme:check passes on the committed README and fails once the endpoint table is edited by hand', () => {
+    const committed = readFileSync(readmePath, 'utf8')
+    expect(readmeIsCurrent(committed)).toBe(true)
+
+    // The documented paths carry the /v1 prefix since 97c50bf. The assertion
+    // below is what keeps this honest: a replace that matched nothing would
+    // leave `edited` identical and the drift check would pass vacuously.
+    const edited = committed.replace('| GET | `/v1/tvl` |', '| GET | `/v1/tvl-renamed` |')
+    expect(edited).not.toBe(committed)
+    expect(readmeIsCurrent(edited)).toBe(false)
   })
 
   it('renders README deterministically in-place', () => {

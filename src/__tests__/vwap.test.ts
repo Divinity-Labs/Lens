@@ -47,7 +47,7 @@ describe('aggregator/vwap.ts', () => {
       const [sql, params] = mockQuery.mock.calls[0]
       expect(sql).toContain('WHERE pair_key = $1')
       expect(sql).toContain('AND network = $2')
-      expect(sql).toContain("AND timestamp > NOW() - ($3 || ' minutes')::interval")
+      expect(sql).toContain("AND COALESCE(observed_at, timestamp) > NOW() - ($3 || ' minutes')::interval")
       expect(sql).not.toContain('AND source = $4')
       expect(params).toEqual([PAIR, NETWORK, 60])
     })
