@@ -277,8 +277,30 @@ export function generateReadme(): void {
   writeFileSync(readmePath, renderReadme())
 }
 
-// CLI entry point
+/**
+ * Compares the committed README.md with a fresh render and reports whether it
+ * has drifted. Line endings are normalised first, as in `tests/readme.test.ts`,
+ * so a CRLF checkout of an identical table is not reported as drift.
+ */
+export function readmeIsCurrent(content?: string): boolean {
+  const committed = (content ?? readFileSync(readmePath, 'utf8')).replace(/\r\n/g, '\n')
+  return renderReadme(committed) === committed
+}
+
+// CLI entry point. `--check` (`npm run readme:check`, run in CI) writes
+// nothing and exits non-zero when README.md differs from a fresh generation.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  generateReadme()
-  console.log('Successfully generated README.md venues and endpoints sections')
+  if (process.argv.includes('--check')) {
+    if (!readmeIsCurrent()) {
+      console.error(
+        'README.md is out of date: its generated tables (endpoints from openapi.yaml, venues from src/ingest/venues) differ from a fresh generation.\n' +
+          'Run `npm run openapi:gen` and commit the result.',
+      )
+      process.exit(1)
+    }
+    console.log('README.md venue and endpoint tables are up to date')
+  } else {
+    generateReadme()
+    console.log('Successfully generated README.md venues and endpoints sections')
+  }
 }
