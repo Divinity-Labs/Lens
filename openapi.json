@@ -698,6 +698,7 @@
       "get": {
         "operationId": "getPriceHistory",
         "summary": "Get price history buckets",
+        "description": "Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18 decimal places and volumes up to 7 decimal places matching Stellar stroop precision.",
         "security": [],
         "parameters": [
           {
@@ -924,7 +925,7 @@
       "get": {
         "operationId": "getCandles",
         "summary": "Get OHLCV candle data",
-        "description": "OHLCV candles for a pair. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.",
+        "description": "OHLCV candles for a pair. Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.",
         "security": [
           {
             "x402": []
@@ -1091,7 +1092,7 @@
       "get": {
         "operationId": "getPriceSnapshots",
         "summary": "Get historical 1-minute price snapshots",
-        "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).",
+        "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets, with exact numeric arithmetic in the database so a sum does not depend on row order. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).",
         "security": [
           {
             "x402": []
@@ -3233,7 +3234,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "description": "Invalid parameters"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
