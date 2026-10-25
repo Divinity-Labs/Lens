@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import { BazaarMcpServer } from '../../src/mcp/server';
+import { PaymentLedger, defaultPaymentLedgerFile, metricHostsFromPaidCallAllowlist } from '../../src/mcp/ledger';
+import { createLensPriceQueries } from '../../src/mcp/priceQueries';
+import { activeNetwork } from '../../src/config';
 import {
   DEFAULT_MCP_METRICS_PATH,
   DEFAULT_MCP_METRIC_NETWORKS,
@@ -61,6 +64,24 @@ async function main() {
   
   const testnetClient = new ExactStellarScheme(testnetSigner);
   const pubnetClient = new ExactStellarScheme(pubnetSigner);
+  
+  // paid_call spends from the keys above, so the hosts it may pay for are the
+  // operator's decision. Unset means no host is payable at all (#404).
+  const paidCallAllowlist = (process.env.MCP_PAID_CALL_ALLOWED_HOSTS || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+
+  // The audit trail is built before the transport so it can observe the payment
+  // the transport makes: a wrapped x402 fetch hands back a plain Response and the
+  // price only appears on the request, so the offer has to be read at the boundary.
+  // Its `host` metric label takes the same allow-list that gates spending, so an
+  // agent cannot mint time series with the URLs it tries.
+  const ledgerFile = process.env.MCP_PAYMENT_LEDGER_FILE || defaultPaymentLedgerFile();
+  const paymentLedger = new PaymentLedger({
+    filePath: ledgerFile,
+    metricHosts: metricHostsFromPaidCallAllowlist(paidCallAllowlist),
+  });
 
   // A single payment is capped by spendControls.maxAmountPerPayment. The value is
   // passed through to the budget so the cumulative ceiling can reserve each call at
@@ -109,10 +130,17 @@ async function main() {
   const server = new BazaarMcpServer({
     fetchWithPayment,
     budget,
+    paidCallAllowlist,
+    // Lens's own aggregated prices, read from the same Postgres the API serves.
+    priceQueries: createLensPriceQueries(),
     paymentLedger
   });
 
   console.error('[mcp-server] Agent configured for stellar:testnet and stellar:pubnet');
+  // The audit file records where money went, never the key that signed it.
+  console.error(`[mcp-server] Payment audit trail: ${ledgerFile}`);
+  console.error(`[mcp-server] lens_get_price serves aggregated prices on ${activeNetwork}`);
+  // Limits and file paths only: the signing key is never logged.
   console.error(`[mcp-server] Spend limits: ${budget.describeLimits()}`);
   // The audit file records where money went, never the key that signed it.
   console.error(`[mcp-server] Payment audit trail: ${ledgerFile}`);

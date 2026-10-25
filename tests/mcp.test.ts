@@ -1,3 +1,6 @@
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { BazaarMcpServer, SERVER_VERSION, SERVER_NAME, type McpServerConfig } from '../src/mcp/server';
+import { CallToolRequestSchema, ListToolsRequestSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { BazaarMcpServer, SERVER_VERSION, SERVER_NAME } from '../src/mcp/server';
 import {
@@ -8,7 +11,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { PAID_CALL_HTTP_METHODS } from '../src/mcp/toolSchemas';
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { PaymentLedger, metricHostsFromPaidCallAllowlist } from '../src/mcp/ledger';
+import { register } from '../src/metrics';
 
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
 
@@ -1368,6 +1373,17 @@ function settledResponse(body: unknown, settle: unknown = SETTLEMENT) {
   });
 }
 
+describe('payment audit ledger (#406)', () => {
+  const PAID_URL = 'https://ledger-audit.test/api/v1/price';
+  // Every host this block pays, so the paid_call gate lets all of them through.
+  const ALLOW_HOSTS = ['ledger-audit.test', 'ledger-offer.test', 'ledger-sum.test', 'ledger-metrics.test', 'other-metrics.test'];
+
+  let ledgerDir: string | undefined;
+
+  afterEach(() => {
+    if (ledgerDir) {
+      rmSync(ledgerDir, { recursive: true, force: true });
+      ledgerDir = undefined;
 describe('payment audit ledger', () => {
   const PAID_URL = 'https://ledger-audit.test/api/v1/price';
 
@@ -1389,6 +1405,31 @@ describe('payment audit ledger', () => {
   }
 
   /**
+   * Same capture-the-handler seam the rest of this file uses, with a ledger handed
+   * to the server the way run.ts hands it.
+   */
+  function createHarness(
+    fetchWithPayment: any,
+    ledger = new PaymentLedger(),
+    extra: Partial<McpServerConfig> = {}
+  ) {
+    const server = new BazaarMcpServer({
+      fetchWithPayment,
+      paidCallAllowlist: ALLOW_HOSTS,
+      paymentLedger: ledger,
+      ...extra,
+    });
+
+    let handler: any = null;
+    (server as any).server.setRequestHandler = (schema: any, fn: any) => {
+      if (schema === CallToolRequestSchema) {
+        handler = fn;
+      }
+    };
+    (server as any).setupHandlers();
+
+    const callTool = (name: string, args: Record<string, unknown> = {}) => handler({ params: { name, arguments: args } });
+    return { server, ledger, callTool };
    * Discovery goes through the SSRF-safe fetch, so it needs a lookup and a
    * transport of its own to stay off DNS and sockets.
    */
@@ -1406,11 +1447,15 @@ describe('payment audit ledger', () => {
    * scheme builds. The price is only observable there — the wrapped fetch hands
    * back a plain Response with no amount on it.
    */
+  function createPaidTransport(ledger: PaymentLedger, respond: () => Response, offer = PAYMENT_OFFER) {
   function createPaidTransport(ledger: PaymentLedger, respond: () => Response) {
     const instrumented = ledger.instrumentFetch(
       vi.fn().mockImplementation(async () => respond()) as unknown as typeof fetch
     );
     const transport = vi.fn(async (url: string, init?: RequestInit) =>
+      instrumented(url, { ...init, headers: { 'payment-signature': base64Json(offer) } })
+    );
+    return createHarness(transport as unknown as any, ledger);
       instrumented(url, { ...init, headers: { 'payment-signature': base64Json(PAYMENT_OFFER) } })
     );
     return createHarness(transport as unknown as Mock, undefined, ledger);
@@ -1418,11 +1463,14 @@ describe('payment audit ledger', () => {
 
   it('records a failed payment as an attempt', async () => {
     const fetchWithPayment = vi.fn().mockResolvedValue(new Response('Payment Required', { status: 402 }));
+    const { ledger, callTool } = createHarness(fetchWithPayment);
     const { callTool, ledger } = createHarness(fetchWithPayment);
 
     const response = await callTool('paid_call', { url: PAID_URL });
 
     expect(response.isError).toBe(true);
+    expect(ledger.records()).toHaveLength(1);
+    const [record] = ledger.records();
     const [record] = ledger.records();
     expect(ledger.records()).toHaveLength(1);
     expect(record).toMatchObject({
@@ -1444,18 +1492,35 @@ describe('payment audit ledger', () => {
       .mockResolvedValueOnce(settledResponse({ price: '1.00' }))
       .mockResolvedValueOnce(new Response('Payment Required', { status: 402 }))
       .mockResolvedValueOnce(new Response('Internal Server Error', { status: 500 }))
+      // Node's connection-level failure. The shared classifier reads the errno in
+      // the message; a bare "fetch failed" carries no signal and is unclassified.
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED 203.0.113.10:443'), { code: 'ECONNREFUSED' }));
+    const { ledger, callTool } = createHarness(transport);
       .mockRejectedValueOnce(transportFailure());
     const { callTool } = createHarness(transport, undefined, ledger);
 
     await callTool('paid_call', { url: PAID_URL, method: 'POST' });
     await callTool('paid_call', { url: PAID_URL });
     await callTool('paid_call', { url: 'https://ledger-audit.test/api/v1/other' });
+    await callTool('paid_call', { url: 'https://ledger-audit.test/api/v1/throws' });
     await callTool('paid_call', { url: PAID_URL });
 
     expect(ledger.records().map((record) => [record.outcome, record.errorCode])).toEqual([
       ['success', null],
       ['failure', MCP_ERROR_CODES.ERR_PAYMENT_REJECTED],
       ['failure', MCP_ERROR_CODES.ERR_BAD_REQUEST],
+      ['failure', MCP_ERROR_CODES.ERR_SERVICE_UNREACHABLE],
+    ]);
+    expect(ledger.records()[0].method).toBe('POST');
+    // A 500 after the payment loop ran, and a transport that threw mid-flight,
+    // are both failures that cannot be proved unspent. Only the refused 402 —
+    // where the seller said no before taking anything — is recorded as none.
+    expect(ledger.records().map((record) => record.spend)).toEqual(['settled', 'none', 'possible', 'possible']);
+    expect(ledger.totalSpend().attempts).toBe(4);
+  });
+
+  it('records the transaction hash the seller echoes on settlement', async () => {
+    const { ledger, callTool } = createHarness(vi.fn().mockResolvedValue(settledResponse({ price: '1.00' })));
       ['failure', MCP_ERROR_CODES.ERR_INTERNAL_FAILURE],
     ]);
     // The method the agent asked for, carried through to the record.
@@ -1502,12 +1567,15 @@ describe('payment audit ledger', () => {
   });
 
   it('records no secret material from the payment header', async () => {
+    const filePath = tempLedgerFile('payments.jsonl');
+    const ledger = new PaymentLedger({ filePath });
     const ledger = new PaymentLedger({ filePath: tempLedgerFile('payments.jsonl') });
     const { callTool } = createPaidTransport(ledger, () => settledResponse({ price: '1.00' }));
 
     await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
 
     const record = JSON.stringify(ledger.records()[0]);
+    const file = readFileSync(filePath, 'utf8');
     const file = readFileSync(ledgerDir + '/payments.jsonl', 'utf8');
     for (const stored of [record, file]) {
       expect(stored).not.toContain(ENVELOPE_MARKER);
@@ -1525,6 +1593,10 @@ describe('payment audit ledger', () => {
       .fn()
       .mockResolvedValueOnce(settledResponse({ price: '1.00' }))
       .mockResolvedValueOnce(new Response('Payment Required', { status: 402 }));
+    const { callTool } = createHarness(fetchWithPayment, ledger);
+
+    await callTool('paid_call', { url: PAID_URL });
+    await callTool('paid_call', { url: PAID_URL });
     const { callTool } = createHarness(fetchWithPayment, undefined, ledger, discoveryStub());
 
     await callTool('paid_call', { url: PAID_URL });
@@ -1537,6 +1609,17 @@ describe('payment audit ledger', () => {
     expect(lines[0]).toMatchObject({ transactionHash: SETTLEMENT.transaction, spend: 'settled' });
   });
 
+  it('refuses every paid call when the audit file cannot be created', async () => {
+    // A regular file where the ledger's parent directory should be: mkdirSync
+    // fails for real rather than a flag we set to make the test pass.
+    const insideTrackedDir = tempLedgerFile('ignored.jsonl');
+    const blocker = join(dirname(insideTrackedDir), 'not-a-directory');
+    writeFileSync(blocker, '');
+    const ledger = new PaymentLedger({ filePath: join(blocker, 'payments.jsonl') });
+    const fetchWithPayment = vi.fn().mockResolvedValue(settledResponse({ price: '1.00' }));
+    const { callTool } = createHarness(fetchWithPayment, ledger);
+
+    expect(ledger.durable).toBe(false);
   it('refuses to spend once the audit trail cannot be written', async () => {
     const ledger = new PaymentLedger({ filePath: tempLedgerFile('payments.jsonl') });
     const fetchWithPayment = vi.fn().mockResolvedValue(settledResponse({ price: '1.00' }));
@@ -1549,6 +1632,34 @@ describe('payment audit ledger', () => {
 
     expect(refusal.isError).toBe(true);
     expect(JSON.parse(refusal.content[0].text).code).toBe(MCP_ERROR_CODES.ERR_INTERNAL_FAILURE);
+    // Refused before the request: this server will not spend money it cannot record.
+    expect(fetchWithPayment).not.toHaveBeenCalled();
+    expect(ledger.records()).toEqual([]);
+  });
+
+  it('stops spending once a record fails to reach the audit file', async () => {
+    const filePath = tempLedgerFile('payments.jsonl');
+    const ledger = new PaymentLedger({ filePath });
+    const fetchWithPayment = vi.fn().mockResolvedValue(settledResponse({ price: '1.00' }));
+    const { callTool } = createHarness(fetchWithPayment, ledger);
+
+    await callTool('paid_call', { url: PAID_URL });
+    expect(readFileSync(filePath, 'utf8')).toContain(PAID_URL);
+
+    // The trail disappears between calls, so the next append cannot land.
+    rmSync(dirname(filePath), { recursive: true, force: true });
+    ledgerDir = undefined;
+
+    await callTool('paid_call', { url: PAID_URL });
+    // That second call is the gap itself: it spent, then found nowhere to record
+    // it. Nothing can be written about a write that failed, which is why every
+    // call after it is refused rather than spent.
+    expect(ledger.durable).toBe(false);
+    expect(fetchWithPayment).toHaveBeenCalledTimes(2);
+
+    const refusal = await callTool('paid_call', { url: PAID_URL });
+    expect(JSON.parse(refusal.content[0].text).code).toBe(MCP_ERROR_CODES.ERR_INTERNAL_FAILURE);
+    expect(fetchWithPayment).toHaveBeenCalledTimes(2);
     expect(fetchWithPayment).not.toHaveBeenCalled();
   });
 
@@ -1565,6 +1676,7 @@ describe('payment audit ledger', () => {
       const offer = { ...PAYMENT_OFFER, accepted: { ...PAYMENT_OFFER.accepted, amount } };
       return instrumented(url, { ...init, headers: { 'payment-signature': base64Json(offer) } });
     });
+    const { callTool } = createHarness(transport as unknown as any, ledger);
     const { callTool } = createHarness(transport as unknown as Mock, undefined, ledger);
 
     await callTool('paid_call', { url: 'https://ledger-sum.test/api/v1/price' });
@@ -1590,6 +1702,7 @@ describe('payment audit ledger', () => {
     const { callTool } = createPaidTransport(ledger, () => settledResponse({ price: '1.00' }));
 
     await callTool('paid_call', { url: 'https://ledger-metrics.test/api/v1/price' });
+    await callTool('paid_call', { url: 'https://other-metrics.test/api/v1/price' });
     await callTool('paid_call', { url: 'https://not-allow-listed.test/api/v1/price' });
 
     const attempts = await register.getSingleMetricAsString('mcp_payment_attempts_total');
@@ -1597,6 +1710,41 @@ describe('payment audit ledger', () => {
     expect(attempts).toMatch(/host="unknown"/);
     // A host outside the allow-list never becomes a series of its own: an agent
     // that loops over URLs must not be able to mint unbounded time series.
+    expect(attempts).not.toContain('other-metrics.test');
+
+    const settled = await register.getSingleMetricAsString('mcp_payment_amount_usd_total');
+    expect(settled).toMatch(/mcp_payment_amount_usd_total\{[^}]*host="ledger-metrics\.test"[^}]*network="stellar:testnet"[^}]*\} 0\.1/);
+    expect(settled).not.toContain('other-metrics.test');
+  });
+
+  it('records nothing for a host the allow-list refused, or for discovery', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(settledResponse({ price: '1.00' }));
+    // Discovery is stubbed all the way down: the SSRF guard would otherwise do a
+    // real DNS lookup for this host, and a spend test has no business reaching
+    // for the network.
+    const discovery = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ resources: [{ name: 'x' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const { ledger, callTool } = createHarness(fetchWithPayment, new PaymentLedger(), {
+      bazaarFetch: {
+        allowedHosts: ['ledger-audit.test'],
+        lookup: async () => ['93.184.216.34'],
+        fetchImpl: discovery,
+      },
+    });
+
+    const refusal = await callTool('paid_call', { url: 'https://never-allow-listed.test/api/v1/price' });
+
+    expect(JSON.parse(refusal.content[0].text).code).toBe(MCP_ERROR_CODES.ERR_HOST_NOT_ALLOWED);
+    expect(fetchWithPayment).not.toHaveBeenCalled();
+
+    // Discovery reads a catalog and never pays, so it has no place in a spend trail.
+    const search = await callTool('bazaar_search', { url: 'https://ledger-audit.test' });
+    expect(search.isError).toBeFalsy();
     expect(attempts).not.toContain('not-allow-listed.test');
 
     const settled = await register.getSingleMetricAsString('mcp_payment_amount_usd_total');
@@ -1640,5 +1788,19 @@ describe('payment audit ledger', () => {
 
     expect(ledger.records()).toEqual([]);
     expect(ledger.totalSpend().attempts).toBe(0);
+  });
+
+  it('takes its host label domain from the paid_call allow-list', () => {
+    // Same set that gates spending, deduplicated, with entries the gate itself
+    // rejects left out rather than allowed to label a series.
+    expect(
+      metricHostsFromPaidCallAllowlist([
+        'https://api.lens.example',
+        'api.lens.example',
+        'localhost:3000',
+        'https://api.lens.example/v1/price',
+        'not a url',
+      ])
+    ).toEqual(['api.lens.example', 'localhost:3000']);
   });
 });

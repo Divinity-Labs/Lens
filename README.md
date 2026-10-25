@@ -403,6 +403,12 @@ When multiple venues quote the same pair, their prices naturally diverge due to 
 
 `payment_budget` appears whenever a spend budget is configured, which the example always sets, and `lens_get_price` only where the server can reach Lens's own price data. Every one of them is served over **either** transport, and the tool list, schemas and error codes are identical whichever you pick. Which transport runs is selected by configuration; **stdio is the default**, so an existing setup needs no changes.
 
+Every paid call — failed ones included — is appended to a durable audit trail and
+counted in spend metrics whose labels are bounded to the operator's allow-list, so
+an operator can always answer what the agent spent and where. The trail never
+holds the signing key or a signed payment, and a spend that cannot be recorded is
+refused rather than made silently.
+
 **⚠️ Warning:** the mainnet key signs with real XLM. Read the configuration,
 spending warning, and worked example before running.
 
