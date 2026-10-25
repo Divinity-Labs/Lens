@@ -53,6 +53,7 @@ vi.mock('../config', () => ({
 import { registerRESTRoutes } from '../api/rest'
 import { registerNetworkSelector } from '../middleware/network'
 import { recordCrash, resetIngesterState } from '../ingester/restart'
+import { ingest_last_success_timestamp } from '../metrics'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
@@ -72,6 +73,7 @@ describe('GET /status', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     resetIngesterState()
+    ingest_last_success_timestamp.reset()
     // Return a row only for the network the query actually filtered on; an
     // unfiltered SELECT would therefore hand a network the other one's row.
     mockQuery.mockImplementation(async (_sql: string, params: unknown[]) => ({
@@ -139,6 +141,42 @@ describe('GET /status', () => {
 
     expect(res.statusCode).toBe(400)
     expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it('reports per-venue last-write age and marks a stale venue as degraded (#333)', async () => {
+    ingest_last_success_timestamp.set({ venue: 'sdex', network: 'mainnet' }, Math.floor(Date.now() / 1000))
+    ingest_last_success_timestamp.set({ venue: 'soroswap', network: 'mainnet' }, Math.floor(Date.now() / 1000) - 900)
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
+    const body = res.json()
+
+    expect(res.statusCode).toBe(200)
+    expect(body.network).toBe('mainnet')
+    expect(body.lastIndexedLedger).toBe(222222)
+    expect(body.venues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ venue: 'sdex', stale: false }),
+        expect.objectContaining({ venue: 'soroswap', stale: true }),
+      ]),
+    )
+    expect(body.staleVenues).toHaveLength(1)
+    expect(body.staleVenues[0].venue).toBe('soroswap')
+    expect(body.status).toBe('degraded')
+    expect(body.health.data).toBe('stale')
+  })
+
+  it('reports healthy when every venue has written recently (#333)', async () => {
+    ingest_last_success_timestamp.set({ venue: 'sdex', network: 'mainnet' }, Math.floor(Date.now() / 1000))
+    ingest_last_success_timestamp.set({ venue: 'soroswap', network: 'mainnet' }, Math.floor(Date.now() / 1000))
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/status?network=mainnet' })
+    const body = res.json()
+
+    expect(body.staleVenues).toHaveLength(0)
+    expect(body.status).toBe('healthy')
+    expect(body.health.data).toBe('healthy')
   })
 
   it('surfaces the last crash per ingester and network', async () => {

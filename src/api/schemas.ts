@@ -113,6 +113,34 @@ export const statusResponseSchema = {
       },
     },
     watchedPairs: { type: 'array', items: { type: 'string' } },
+    venues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'lastWriteAt', 'ageSeconds', 'stale'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string' },
+          lastWriteAt: { type: 'string' },
+          ageSeconds: { type: 'number' },
+          stale: { type: 'boolean' },
+        },
+      },
+    },
+    staleVenues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'lastWriteAt', 'ageSeconds', 'stale'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string' },
+          lastWriteAt: { type: 'string' },
+          ageSeconds: { type: 'number' },
+          stale: { type: 'boolean' },
+        },
+      },
+    },
     lastIndexedLedger: { type: ['integer', 'null'] },
     lastProcessedAt: {},
     ingestLagSeconds: { type: ['integer', 'null'] },

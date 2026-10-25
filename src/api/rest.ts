@@ -1,5 +1,5 @@
-import type { FastifyInstance } from 'fastify'
-import { price_requests_total } from '../metrics'
+﻿import type { FastifyInstance } from 'fastify'
+import { price_requests_total, ingest_last_success_timestamp } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
@@ -34,13 +34,13 @@ export const HISTORY_MAX_LIMIT = 1000
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
- * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
+ * outright â€” `a.split(':')[0]` â€” so every asset called USDC was the same asset,
  * and a request for Circle's mainnet USDC was answered with testnet USDC's
  * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
  *
  * That is the worst failure mode an oracle has: not a refusal, but a confident
- * wrong number. Asset codes are not unique on Stellar — anyone can issue
- * "USDC", and Horizon lists many — so the issuer is the only thing that
+ * wrong number. Asset codes are not unique on Stellar â€” anyone can issue
+ * "USDC", and Horizon lists many â€” so the issuer is the only thing that
  * identifies an asset. A bare code still matches on code alone, since callers
  * quoting XLM or a single-issuer asset rely on that.
  */
@@ -87,7 +87,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
    */
   const INGEST_STALE_AFTER_SECONDS = 300
 
-  // GET /status — public health/monitoring endpoint (no API key required) (#273)
+  // GET /status â€” public health/monitoring endpoint (no API key required) (#273)
   app.get(
     '/status',
     {
@@ -119,7 +119,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         // The driver's own message is not safe to return here. `/status` is
         // public and unauthenticated, and a pg connection failure puts the host,
         // the user and sometimes the whole connection string into
-        // `err.message` — this endpoint is the most-polled surface Lens has.
+        // `err.message` â€” this endpoint is the most-polled surface Lens has.
         // Lens has already had to rotate a database password over exactly this
         // shape of leak on another route, so the detail goes to the log, where
         // buildLogger pipes it through redactSecrets, and the response says only
@@ -147,8 +147,37 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       // It is the same signal `/ready` gates on.
       const processHealth = isBootComplete() ? ('healthy' as const) : ('degraded' as const)
       const dataHealth = isStale ? ('stale' as const) : ('healthy' as const)
+
+      // Per-venue, per-network ingestion health (#333). The gauge is written
+      // by markIngestSuccess on every successful venue write, so this is
+      // in-process state â€” no DB query, no Horizon round-trip, and bounded to
+      // venues x networks (the gauge's own label contract).
+      const now = Date.now()
+      const venueHealth = ingest_last_success_timestamp
+        .get()
+        .values.filter(sample => sample.labels.network === network)
+        .map(sample => {
+          const lastWriteAt = new Date(sample.value * 1000)
+          const ageSeconds = Math.max(0, Math.round((now - lastWriteAt.getTime()) / 1000))
+          return {
+            venue: (sample.labels.venue ?? '') as string,
+            lastWriteAt: lastWriteAt.toISOString(),
+            ageSeconds,
+            stale: ageSeconds > INGEST_STALE_AFTER_SECONDS,
+          }
+        })
+        .sort((a, b) => a.venue.localeCompare(b.venue))
+
+      const staleVenues = venueHealth.filter(v => v.stale)
+      const venuesHealth = staleVenues.length > 0 ? ('stale' as const) : dataHealth
+
+      // A stale venue is data health, not process health, but it must still
+      // flip the overall verdict or the split between /status and /ready
+      // would let a monitor see green with every ingester dead.
       const overallStatus =
-        processHealth === 'degraded' || isStale ? ('degraded' as const) : ('healthy' as const)
+        processHealth === 'degraded' || isStale || staleVenues.length > 0
+          ? ('degraded' as const)
+          : ('healthy' as const)
 
       return {
         ok: true,
@@ -156,7 +185,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         network,
         health: {
           process: processHealth,
-          data: dataHealth,
+          data: venuesHealth,
         },
         process: {
           uptimeSeconds,
@@ -178,6 +207,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         // ADMIN_TOKEN" without guessing from a 401. It reports only that the
         // token is configured, never any part of its value.
         adminConfigured: isAdminConfigured(),
+        venues: venueHealth,
+        staleVenues,
         crashes: listCrashes(network).map(c => ({
           name: c.name,
           network: c.network,
@@ -438,3 +469,4 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   )
 }
+
