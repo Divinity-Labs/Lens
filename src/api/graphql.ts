@@ -28,7 +28,7 @@ import { isAggregatorVenue } from '../ingest/venues'
 import { computeSpreads, SpreadsInputError } from '../routes/spreads'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
-import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
+import { getAllowArbitraryGraphQLDocuments, getMaxGraphQLQueryDepth, getPersistedGraphQLQueries, queryDepthValidationRules } from './queryDepth'
 import { formatPrice, formatVolume } from '../pricing/precision'
 
 const WINDOW_SECONDS: Record<string, number> = {
@@ -861,11 +861,15 @@ const resolvers = {
 
 export async function registerGraphQL(app: FastifyInstance) {
   const maxQueryDepth = getMaxGraphQLQueryDepth()
+  const allowArbitraryDocuments = getAllowArbitraryGraphQLDocuments()
+  const persistedQueries = getPersistedGraphQLQueries()
 
   await app.register(mercurius, {
     schema,
     resolvers,
-    graphiql: true,
+    graphiql: allowArbitraryDocuments,
+    persistedQueries,
+    onlyPersisted: !allowArbitraryDocuments,
     // Mercurius 16.9.0 supplies the selected operation name to this callback.
     // Its built-in queryDepth option neither expands fragments nor distinguishes
     // an unselected operation in a multi-operation document. A callback cannot

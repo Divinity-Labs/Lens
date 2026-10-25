@@ -56,6 +56,39 @@ mixed operation still has every application-field path measured, so adding an
 introspection field cannot bypass the limit. Revisit the default when adding a
 legitimate application relationship deeper than three fields.
 
+## Persisted queries and document allow-lists
+
+The public `/graphql` endpoint now supports persisted queries. Clients may send a
+known `sha256` hash instead of the full query text, and the server resolves the
+document from its allow-list. This makes the set of executable documents explicit
+and trains the server toward predictable caching and safer cost modeling.
+
+By default, Lens disallows arbitrary document strings in production and requires
+persisted queries. Development keeps full-document requests enabled unless you
+set `GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS=false` explicitly. The config is read at
+startup from `GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS` and `GRAPHQL_PERSISTED_QUERIES`.
+
+A persisted query is registered by its hash in a JSON map, for example:
+
+```bash
+export GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS=false
+export GRAPHQL_PERSISTED_QUERIES='{"<sha256hash>": "query GetPrice { getPrice(assetA: \"XLM\", assetB: \"USDC\") { price } }"}'
+```
+
+The client then sends the hash and marks it as a persisted query:
+
+```json
+{
+  "persisted": true,
+  "query": "<sha256hash>"
+}
+```
+
+This workflow intentionally keeps the server-side document registry authoritative:
+unknown hashes are rejected rather than executed, and the allow-list can be
+reviewed and versioned alongside the application. Response caching becomes much
+more tractable because the query text is known ahead of time.
+
 ---
 
 ## Schema & Types
