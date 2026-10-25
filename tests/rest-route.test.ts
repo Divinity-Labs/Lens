@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app'
+import { rewriteVersionedApiUrl } from '../src/api/versioning'
 import type { FastifyInstance, RouteOptions } from 'fastify'
 import fs from 'fs'
 import path from 'path'
@@ -50,9 +51,15 @@ describe('REST route regression: documented curl route exists', () => {
     await app?.close()
   })
 
-  documentedRoutes.forEach(({ method, path }, i) => {
-    it(`should have ${method} ${path} registered (matches documented curl route)`, () => {
-      expect(registeredPaths.has(`${method} ${path}`)).toBe(true)
+  documentedRoutes.forEach(({ method, path }) => {
+    it(`should resolve ${method} ${path} onto a registered route (matches documented curl route)`, () => {
+      // README documents the canonical `/v1` form, but routes are registered
+      // once at their bare path and `/v1` is resolved by rewriteUrl at request
+      // time (see src/api/versioning.ts). Asking the route table for the
+      // documented path directly would therefore always miss. Resolving it the
+      // way a real request is resolved checks the rewrite as well as the route.
+      const resolved = rewriteVersionedApiUrl({ url: path })
+      expect(registeredPaths.has(`${method} ${resolved}`)).toBe(true)
     })
   })
 })

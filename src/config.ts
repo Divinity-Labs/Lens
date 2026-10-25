@@ -516,6 +516,23 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
 
 // ── Global (non-network-specific) config ──────────────────────────────────────
 
+function parsePairThresholds(raw: string | undefined): Record<string, number> {
+  if (!raw || !raw.trim()) return {}
+  const overrides: Record<string, number> = {}
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim()
+    const lastColon = trimmed.lastIndexOf(':')
+    if (lastColon > 0) {
+      const pair = trimmed.slice(0, lastColon).trim().toUpperCase()
+      const val = parseFloat(trimmed.slice(lastColon + 1).trim())
+      if (pair && Number.isFinite(val) && val > 0) {
+        overrides[pair] = val
+      }
+    }
+  }
+  return overrides
+}
+
 const globalConfig = {
   db: {
     url: process.env.DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
@@ -585,6 +602,13 @@ const globalConfig = {
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
+  reconciliation: {
+    intervalMs: parseInt(process.env.RECONCILIATION_INTERVAL_MS ?? '60000', 10),
+    freshnessWindowSeconds: parseInt(process.env.RECONCILIATION_FRESHNESS_SECONDS ?? '300', 10),
+    thresholdPct: parseFloat(process.env.RECONCILIATION_THRESHOLD_PCT ?? '2.0'),
+    cooldownSeconds: parseInt(process.env.RECONCILIATION_ALERT_COOLDOWN_SECONDS ?? '300', 10),
+    pairThresholds: parsePairThresholds(process.env.RECONCILIATION_PAIR_THRESHOLDS),
+  },
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
     maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
@@ -609,6 +633,7 @@ const globalConfig = {
     maxPageLimit: clampInt(process.env.MCP_MAX_PAGE_LIMIT, 200, 1, 1000),
   },
 } as const
+
 
 // ── Per-network map ───────────────────────────────────────────────────────────
 
@@ -698,7 +723,14 @@ export const config = {
   cache:   globalConfig.cache,
   plausibility: globalConfig.plausibility,
   http:    globalConfig.http,
+  reconciliation: globalConfig.reconciliation,
   ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,
 }
+
+export function getPairReconciliationThreshold(pairKey: string): number {
+  const norm = pairKey.toUpperCase()
+  return config.reconciliation.pairThresholds[norm] ?? config.reconciliation.thresholdPct
+}
+

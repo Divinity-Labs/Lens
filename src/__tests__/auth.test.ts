@@ -82,6 +82,13 @@ beforeEach(() => {
   mockFindMany.mockReset()
   mockCreate.mockReset()
   mockUpdate.mockReset()
+  // webhookDeliveryFailure mocks are shared across the admin-endpoint tests;
+  // reset them too, or a prior test's call count / mockResolvedValue leaks into
+  // the next one under shuffled order (the "recent webhook failure endpoint"
+  // test then sees findMany already called and fails).
+  vi.mocked(prisma.webhookDeliveryFailure.findMany).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.create).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.deleteMany).mockReset()
   // The lookup cache is module-global; a stale entry from a previous test
   // would otherwise mask a different mock for the same key.
   clearApiKeyCache()
@@ -645,6 +652,75 @@ describe('admin endpoints', () => {
     })
     expect(res.statusCode).toBe(401)
     expect(mockFindMany).not.toHaveBeenCalled()
+  })
+
+  // ── Body validation (issue #506): reject bad quotas/policies, don't coerce ──
+  async function postKey(payload: unknown) {
+    const app = await buildAdminApp()
+    return app.inject({
+      method: 'POST',
+      url: '/admin/keys',
+      headers: { 'x-admin-token': 'admin-secret' },
+      payload: payload as object,
+    })
+  }
+
+  it('rejects a negative rate and names the field, without touching the database', async () => {
+    const res = await postKey({ label: 'acme', ratePerMin: -5 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerMin/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a fractional quota', async () => {
+    const res = await postKey({ label: 'acme', monthlyQuotaCents: 10.5 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/monthlyQuotaCents/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a zero rate (a key that can never call anything)', async () => {
+    const res = await postKey({ label: 'acme', ratePerDay: 0 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerDay/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an out-of-range value above the Int column ceiling', async () => {
+    const res = await postKey({ label: 'acme', dailyQuotaCents: 9_999_999_999 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/dailyQuotaCents/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown overagePolicy instead of silently defaulting to block', async () => {
+    const res = await postKey({ label: 'acme', overagePolicy: 'refund_everything' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/overagePolicy/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a per-day rate below the per-minute rate', async () => {
+    const res = await postKey({ label: 'acme', ratePerMin: 100, ratePerDay: 50 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerDay/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a blank (whitespace-only) label', async () => {
+    const res = await postKey({ label: '   ' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/label/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('accepts valid rates and policy at the boundary', async () => {
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+    const res = await postKey({ label: 'acme', ratePerMin: 60, ratePerDay: 60, overagePolicy: 'charge_402' })
+    expect(res.statusCode).toBe(201)
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 
   it('revokes a key by id', async () => {

@@ -8,23 +8,27 @@
  * Run it against a local server with:
  *
  *   npx tsx clients/typescript/src/example.ts
+ *
+ * Paths carry the `/v1` prefix because that is the canonical form the spec
+ * documents. The unversioned aliases still answer, but they respond with a
+ * `Deprecation` header — see docs/api-versioning.md.
  */
 import { createLensClient, type paths } from "./client.js";
 
 /** A price response, derived from the spec — never written by hand. */
-type AggregatedPrice = paths["/price/{assetA}/{assetB}"]["get"]["responses"][200]["content"]["application/json"];
+type AggregatedPrice = paths["/v1/price/{assetA}/{assetB}"]["get"]["responses"][200]["content"]["application/json"];
 
 const client = createLensClient({ baseUrl: "http://localhost:3002" });
 
 async function main(): Promise<void> {
-  const status = await client.GET("/status");
+  const status = await client.GET("/v1/status");
   if (status.error) {
     throw new Error(`GET /status failed with ${status.response.status}`);
   }
   console.log(`watching ${status.data.watchedPairs?.length ?? 0} pairs`);
   console.log(`last indexed ledger: ${status.data.lastIndexedLedger}`);
 
-  const price = await client.GET("/price/{assetA}/{assetB}", {
+  const price = await client.GET("/v1/price/{assetA}/{assetB}", {
     params: { path: { assetA: "XLM", assetB: "USDC" } },
   });
   if (price.error) {
@@ -38,7 +42,7 @@ async function main(): Promise<void> {
   console.log(`XLM/USDC best route: ${data.bestRoute}`);
   console.log(`XLM/USDC vwap1h: ${data.vwap1h}`);
 
-  const snapshots = await client.GET("/prices/history", {
+  const snapshots = await client.GET("/v1/prices/history", {
     params: { query: { pair: "XLM/USDC", interval: "1h" } },
   });
   if (snapshots.error) {

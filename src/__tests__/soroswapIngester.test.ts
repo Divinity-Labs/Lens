@@ -30,8 +30,10 @@ vi.mock('../webhookDispatcher', () => ({
   dispatchPriceUpdate: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('../ingesters/soroswap', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../ingesters/soroswap')>()
+// We mock fetchPoolReserves and fetchPoolsFromFactory at module level so
+// ingestPool / ingestPair tests can control RPC responses without a live node.
+vi.mock('../ingest/venues/soroswap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ingest/venues/soroswap')>()
   return {
     ...actual,
     fetchPoolReserves: vi.fn(),
@@ -56,7 +58,7 @@ import {
   isPricePlausible,
   type PoolEntry,
   type SoroswapToken,
-} from '../ingesters/soroswap'
+} from '../ingest/venues/soroswap'
 import { upsertPricePoints } from '../db'
 import { dispatchPriceUpdate } from '../webhookDispatcher'
 import { price_rejected_total } from '../metrics'
