@@ -10,7 +10,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Asset, Networks, StrKey } from '@stellar/stellar-sdk'
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   activeNetwork: 'testnet',
   getNetworkConfig: (network: string) => ({
     network: {

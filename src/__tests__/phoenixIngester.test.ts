@@ -83,7 +83,8 @@ const {
 
 const mocks = fixtures
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: { indexer: { pollIntervalMs: 5_000 } },
   activeNetwork: 'testnet',
   getNetworkConfig: (network: string) => mocks.networks[network],

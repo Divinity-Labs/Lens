@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 
 // activeNetwork is derived from STELLAR_NETWORK at config-module load; pin it so
 // the fallback path is deterministic regardless of the ambient env.
-vi.mock('../config', () => ({ activeNetwork: 'testnet' }))
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')), activeNetwork: 'testnet' }))
 
 import { getEnabledNetworks } from '../network/enabledNetworks'
 

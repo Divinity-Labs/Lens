@@ -1,6 +1,6 @@
 import { Queue, Worker } from 'bullmq'
 import { pgPool } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, type NetworkName, getEnvironment } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
 import { createLogger } from '../logger'
 
@@ -11,7 +11,7 @@ const QUEUE_NAME = `${activeNetwork}:rate-retention`
 /** Lending rates older than this many days are pruned by the retention job. */
 export const RATE_RETENTION_DAYS = 30
 /** Maximum rows removed by one database statement during a retention run. */
-export const RATE_PRUNE_BATCH_SIZE = Number(process.env.RATE_PRUNE_BATCH_SIZE ?? 1_000)
+export const RATE_PRUNE_BATCH_SIZE = Number(getEnvironment().RATE_PRUNE_BATCH_SIZE ?? 1_000)
 
 export interface RatePruneProgress {
   network: NetworkName
@@ -21,7 +21,7 @@ export interface RatePruneProgress {
 }
 
 function redisConnection() {
-  const url = process.env.REDIS_URL
+  const url = getEnvironment().REDIS_URL
   if (url) return { url }
   return { host: 'localhost', port: 6379 }
 }

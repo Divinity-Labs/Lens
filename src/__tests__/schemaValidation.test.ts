@@ -43,7 +43,8 @@ const { schemaTestPairs } = vi.hoisted(() => ({
   ],
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: {
     pairs: schemaTestPairs,
     cache: { priceTtl: 10 },

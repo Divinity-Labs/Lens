@@ -1,11 +1,7 @@
 import 'dotenv/config'
 import Fastify from 'fastify'
-
-if (!process.env.DIRECT_DATABASE_URL && process.env.DATABASE_URL) {
-  process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL
-}
 import { installProcessErrorHandlers } from './processErrorHandlers'
-import { config, getNetworkConfig, type NetworkName } from './config'
+import { config, ensureDirectDatabaseUrl, getNetworkConfig, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
@@ -43,6 +39,7 @@ installProcessErrorHandlers(log)
 
 
 async function main() {
+  ensureDirectDatabaseUrl()
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
   // #233: apply committed, reviewable migrations — never `db push`. `migrate
   // deploy` only runs migrations already in prisma/migrations and fails loudly

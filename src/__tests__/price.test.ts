@@ -37,7 +37,8 @@ const { testnetPairs, mainnetPairs } = vi.hoisted(() => ({
   ],
 }))
 
-vi.mock('../config', () => ({
+vi.mock('../config', async () => ({
+  ...(await vi.importActual<typeof import('../config')>('../config')),
   config: {
     pairs: testnetPairs,
     cache: { priceTtl: 10 },

@@ -9,7 +9,7 @@ import {
   db_pool_exhaustion_errors_total,
   setPoolMetricsUpdater,
 } from './metrics'
-import { config, type NetworkName } from './config'
+import { config, type NetworkName, getEnvironment } from './config'
 import { createLogger } from './logger'
 
 const log = createLogger('db')
@@ -66,9 +66,9 @@ const configuredDbUrl = buildDatabaseUrl(
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({
   datasourceUrl: configuredDbUrl,
-  log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+  log: getEnvironment().NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+if (getEnvironment().NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 ;(globalThis as any).__lens_prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)

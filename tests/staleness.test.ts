@@ -30,7 +30,8 @@ const { stalenessTestPairs } = vi.hoisted(() => ({
   ],
 }))
 
-vi.mock('../src/config', () => ({
+vi.mock('../src/config', async () => ({
+  ...(await vi.importActual<typeof import('../src/config')>('../src/config')),
   config: {
     pairs: stalenessTestPairs,
     cache: { priceTtl: 10 },

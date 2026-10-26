@@ -28,6 +28,7 @@ import type { NetworkName } from '../../config'
 import type { WatchedPair } from '../../types'
 import type { VenuePricePoint } from '../venues/types'
 import type { CexAdapter, CexOrderBook, CexTicker } from './index'
+import { getEnvironment } from '../../config'
 
 const log = createLogger('ingest:cex:coinbase')
 
@@ -199,7 +200,7 @@ export class CoinbaseAdapter implements CexAdapter {
 
   constructor(options: CoinbaseAdapterOptions = {}) {
     this.baseUrl =
-      options.baseUrl ?? process.env.COINBASE_EXCHANGE_BASE_URL ?? COINBASE_DEFAULT_BASE_URL
+      options.baseUrl ?? getEnvironment().COINBASE_EXCHANGE_BASE_URL ?? COINBASE_DEFAULT_BASE_URL
     this.maxRetries = options.maxRetries ?? 3
     this.initialBackoffMs = options.initialBackoffMs ?? 500
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000

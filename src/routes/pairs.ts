@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { getActivePairs, parseAssetStr, makePairKey, registerPair, persistPair, hasPair } from '../pairsRegistry'
 import { pgPool } from '../db'
-import { activeNetwork } from '../config'
+import { activeNetwork, getEnvironment } from '../config'
 import {
   PAIRS_DEFAULT_LIMIT,
   PAIRS_MAX_LIMIT,
@@ -103,7 +103,7 @@ export async function registerPairsRoutes(app: FastifyInstance) {
   }>('/pairs', async (req, reply) => {
     const log = req.log.child({ component: 'route:pairs' })
     // Auth check — read at request time so env can be set after module load
-    const ADMIN_API_KEY = process.env.ADMIN_API_KEY
+    const ADMIN_API_KEY = getEnvironment().ADMIN_API_KEY
     const key = req.headers['x-admin-key'] ?? req.headers['authorization']?.replace(/^Bearer /, '')
     if (!ADMIN_API_KEY || key !== ADMIN_API_KEY) {
       admin_auth_failures_total.inc()

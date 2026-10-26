@@ -28,6 +28,7 @@ vi.mock('../config', () => {
     facilitator: { feeStroops: 50000 },
   }
   return {
+    getEnvironment: () => ({}), getEnvironmentValue: () => undefined,
     activeNetwork: 'testnet',
     getNetworkConfig: () => block,
     config: { indexer: { pollIntervalMs: 5000 }, aquarius: { apiUrl: '' } },

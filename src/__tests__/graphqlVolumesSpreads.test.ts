@@ -7,7 +7,7 @@ vi.mock('../db', () => ({ pgPool: { query: mockQuery }, prisma: {} }))
 vi.mock('../redis', () => ({ getCachedPrice: vi.fn() }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({ config: { pairs: [] }, activeNetwork: 'testnet' }))
+vi.mock('../config', () => ({ config: { pairs: [] }, activeNetwork: 'testnet', getEnvironment: () => ({}) }))
 
 import { registerGraphQL } from '../api/graphql'
 import { registerVolumeRoutes } from '../routes/volumes'
