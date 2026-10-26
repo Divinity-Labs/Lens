@@ -109,7 +109,7 @@ describe('GraphQL production UI configuration', () => {
         url: '/graphql',
         payload: { query: '{ __schema { queryType { name } } }' },
       })
-      expect(response.statusCode).toBe(200)
+      expect(response.statusCode).toBe(400)
       expect(response.json().errors?.[0]?.message).toMatch(/introspection/i)
     } finally {
       await app.close()

@@ -466,6 +466,14 @@ export interface GraphQLUiOptions {
   introspectionEnabled?: boolean
 }
 
+const NoIntrospectionFieldsRule = (context: ValidationContext) => ({
+  Field(node: FieldNode) {
+    if (node.name.value === '__schema' || node.name.value === '__type') {
+      context.reportError(new GraphQLError('GraphQL introspection is disabled', { nodes: node }))
+    }
+  },
+})
+
 /**
  * GraphiQL is an interactive console, so production defaults it off. Schema
  * introspection is controlled independently: it remains on by default because
@@ -486,14 +494,6 @@ export function resolveGraphQLUiOptions(
     introspectionEnabled: overrides.introspectionEnabled ?? parseBoolean(env.GRAPHQL_INTROSPECTION_ENABLED, true),
   }
 }
-
-const NoIntrospectionFieldsRule = (context: ValidationContext) => ({
-  Field(node: FieldNode) {
-    if (node.name.value === '__schema' || node.name.value === '__type') {
-      context.reportError(new GraphQLError('GraphQL introspection is disabled', { nodes: node }))
-    }
-  },
-})
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
