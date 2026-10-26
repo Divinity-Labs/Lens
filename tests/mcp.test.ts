@@ -1096,7 +1096,7 @@ describe('cumulative spend budget', () => {
 // (#411), discovery upstream failures (#349) and paid-call classification; what
 // follows covers where discovery routes to, what the server advertises, and what
 // the PaymentLedger this branch adds actually records.
-import { register } from '../src/metrics';
+import { register, mcp_tool_calls_total, mcp_tool_duration_seconds, mcp_errors_total } from '../src/metrics';
 import { PaymentLedger } from '../src/mcp/ledger';
 
 /**
@@ -1788,3 +1788,117 @@ describe('payment audit ledger', () => {
     expect(ledger.totalSpend().attempts).toBe(0);
   });
 });
+
+describe('BazaarMcpServer — Prometheus metrics (#425)', () => {
+  beforeEach(() => {
+    mcp_tool_calls_total.reset();
+    mcp_tool_duration_seconds.reset();
+    mcp_errors_total.reset();
+  });
+
+  it('counts tool calls by name and outcome on success', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(jsonResponse({ asset: 'XLM', price: '0.15' }));
+    const { callTool } = createHarness(fetchWithPayment);
+
+    const res = await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
+    expect(res.isError).toBeFalsy();
+
+    const sample = (await register.getSingleMetric('mcp_tool_calls_total')!.get()).values;
+    const match = sample.find(
+      (v) => v.labels.tool === 'paid_call' && v.labels.outcome === 'success'
+    );
+    expect(match).toBeDefined();
+    expect(match?.value).toBe(1);
+  });
+
+  it('counts tool calls by name and outcome on failure', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(new Response('Payment Required', { status: 402 }));
+    const { callTool } = createHarness(fetchWithPayment);
+
+    const res = await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
+    expect(res.isError).toBe(true);
+
+    const sample = (await register.getSingleMetric('mcp_tool_calls_total')!.get()).values;
+    const match = sample.find(
+      (v) => v.labels.tool === 'paid_call' && v.labels.outcome === 'failure'
+    );
+    expect(match).toBeDefined();
+    expect(match?.value).toBe(1);
+  });
+
+  it('records duration per tool in mcp_tool_duration_seconds histogram', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(jsonResponse({ asset: 'XLM', price: '0.15' }));
+    const { callTool } = createHarness(fetchWithPayment);
+
+    await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
+
+    const sample = (await register.getSingleMetric('mcp_tool_duration_seconds')!.get()).values;
+    const countSample = sample.find(
+      (v) => v.metricName === 'mcp_tool_duration_seconds_count' && v.labels.tool === 'paid_call'
+    );
+    const sumSample = sample.find(
+      (v) => v.metricName === 'mcp_tool_duration_seconds_sum' && v.labels.tool === 'paid_call'
+    );
+    expect(countSample).toBeDefined();
+    expect(countSample?.value).toBe(1);
+    expect(sumSample).toBeDefined();
+    expect(sumSample?.value).toBeGreaterThanOrEqual(0);
+  });
+
+  it('counts errors by error code in mcp_errors_total', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(new Response('Payment Required', { status: 402 }));
+    const { callTool } = createHarness(fetchWithPayment);
+
+    await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
+    await callTool('unknown_tool_test_xyz');
+
+    const sample = (await register.getSingleMetric('mcp_errors_total')!.get()).values;
+    const paymentRejected = sample.find((v) => v.labels.code === 'ERR_PAYMENT_REJECTED');
+    const unknownTool = sample.find((v) => v.labels.code === 'ERR_UNKNOWN_TOOL');
+
+    expect(paymentRejected).toBeDefined();
+    expect(paymentRejected?.value).toBe(1);
+    expect(unknownTool).toBeDefined();
+    expect(unknownTool?.value).toBe(1);
+  });
+
+  it('ensures all tool labels come from closed sets even for unknown tool names', async () => {
+    const { callTool } = createHarness();
+
+    await callTool('completely_arbitrary_unbounded_tool_name_that_should_not_pollute_metrics');
+
+    const toolCallsSample = (await register.getSingleMetric('mcp_tool_calls_total')!.get()).values;
+    const durationSample = (await register.getSingleMetric('mcp_tool_duration_seconds')!.get()).values;
+
+    // Must NOT have created a series with the arbitrary tool name
+    expect(toolCallsSample.some((v) => v.labels.tool === 'completely_arbitrary_unbounded_tool_name_that_should_not_pollute_metrics')).toBe(false);
+    expect(durationSample.some((v) => v.labels.tool === 'completely_arbitrary_unbounded_tool_name_that_should_not_pollute_metrics')).toBe(false);
+
+    // Must map safely to 'unknown'
+    const unknownToolCall = toolCallsSample.find(
+      (v) => v.labels.tool === 'unknown' && v.labels.outcome === 'failure'
+    );
+    expect(unknownToolCall).toBeDefined();
+    expect(unknownToolCall?.value).toBe(1);
+
+    const unknownDuration = durationSample.find(
+      (v) => v.metricName === 'mcp_tool_duration_seconds_count' && v.labels.tool === 'unknown'
+    );
+    expect(unknownDuration).toBeDefined();
+    expect(unknownDuration?.value).toBe(1);
+  });
+
+  it('exposes MCP metrics at register.metrics() output for /metrics scraping', async () => {
+    const fetchWithPayment = vi.fn().mockResolvedValue(jsonResponse({ asset: 'XLM', price: '0.15' }));
+    const { callTool } = createHarness(fetchWithPayment);
+
+    await callTool('paid_call', { url: 'https://ledger-offer.test/api/v1/price' });
+
+    const metricsOutput = await register.metrics();
+    expect(metricsOutput).toContain('mcp_tool_calls_total');
+    expect(metricsOutput).toContain('mcp_tool_duration_seconds');
+    expect(metricsOutput).toContain('mcp_errors_total');
+    expect(metricsOutput).toMatch(/mcp_tool_calls_total\{[^}]*tool="paid_call"[^}]*outcome="success"[^}]*\} 1/);
+  });
+});
+
