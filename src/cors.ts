@@ -270,6 +270,16 @@ export function getCorsOptionsForRequest(
  */
 export function createCorsDelegator(config?: CorsConfig) {
   return async (req: FastifyRequest): Promise<FastifyCorsOptions> => {
-    return getCorsOptionsForRequest(req, config)
+    const options = await getCorsOptionsForRequest(req, config)
+    return {
+      ...options,
+      // `Deprecation` and `Link` are set on the unversioned aliases (see
+      // src/api/versioning.ts). A custom response header is hidden from a
+      // cross-origin reader unless it is exposed, so without this a browser
+      // client would never see the deprecation warning. Added here rather than
+      // in each per-route branch so no policy can forget it; on a denied
+      // origin it is inert, because the response carries no allow-origin.
+      exposedHeaders: ['Deprecation', 'Link'],
+    }
   }
 }

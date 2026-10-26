@@ -1,4 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { resolveDecimalFormat, formatDecimal } from '../utils/decimals'
+import { listCrashes } from '../ingester/restart'
+import { listSourceFailures } from '../ingest/sourceFailures'
+import { isBootComplete } from '../health'
 import { price_requests_total } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -18,10 +22,16 @@ import {
   impactResponseSchema,
   installResponseValidation,
 } from './schemas'
+import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
-import { listCrashes } from '../ingester/restart'
-import { isBootComplete } from '../health'
-import { resolveDecimalFormat, formatDecimal } from '../utils/decimals'
+import {
+  POOLS_DEFAULT_LIMIT,
+  POOLS_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
@@ -184,6 +194,16 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           message: c.message,
           at: c.at.toISOString(),
         })),
+        // #329: sources whose latest fetch failed on this network, so a venue
+        // that is down is visible rather than reading as a venue with nothing
+        // to report. The error message stays in the log: an upstream client
+        // error can carry the upstream URL, and this route is public.
+        failedSources: listSourceFailures(network).map(f => ({
+          source: f.source,
+          network: f.network,
+          subject: f.subject,
+          at: f.at.toISOString(),
+        })),
       }
     }
   )
@@ -192,7 +212,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // GET /price/:assetA/:assetB
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { decimals?: string; decimalFormat?: string }
+    Querystring: {
+      decimals?: string
+      decimalFormat?: string
+      staleThreshold?: string
+      staleThresholdSeconds?: string
+    }
   }>(
     '/price/:assetA/:assetB',
     { config: { scope: 'read:prices' }, schema: { response: { 200: priceResponseSchema } } },
@@ -203,15 +228,27 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const pair = findPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
 
+      const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
+      let staleThreshold: number | undefined
+      if (rawThreshold !== undefined) {
+        staleThreshold = parseInt(rawThreshold, 10)
+        if (isNaN(staleThreshold) || staleThreshold <= 0) {
+          return reply.status(400).send({ error: 'staleThreshold must be a positive integer' })
+        }
+      }
+
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
       }
 
-      // Cache key is network-scoped and format-isolated so number and string payloads never collide.
-      const cacheKey = decimalFormat === 'string'
-        ? `${network}:${pair.pairKey}:decimals_string`
-        : `${network}:${pair.pairKey}`
+      // Cache key is network-scoped and format-isolated so number and string payloads never collide,
+      // and scoped to staleThreshold if customized.
+      const cacheParts = [network, pair.pairKey]
+      if (decimalFormat === 'string') cacheParts.push('decimals_string')
+      if (staleThreshold !== undefined) cacheParts.push(`stale_${staleThreshold}`)
+      const cacheKey = cacheParts.join(':')
+
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
         try {
@@ -220,7 +257,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pair.pairKey, network, { decimalFormat })
+      const agg = await getAggregatedPrice(pair.pairKey, network, { decimalFormat, staleThresholdSeconds: staleThreshold })
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
       const result = {
         assetA: pair.assetA.code,
@@ -280,10 +317,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
       const window = req.query.window ?? '1h'
       const limit = Math.min(parseInt(req.query.limit ?? String(HISTORY_DEFAULT_LIMIT), 10), HISTORY_MAX_LIMIT)
       const pairKey = makePairKey(assetA, assetB)
-      const network = req.network ?? activeNetwork
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
@@ -304,6 +341,25 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         [pairKey, window, network, limit]
       )
 
+      const windowMs: Record<string, number> = {
+        '1m': 60_000,
+        '5m': 300_000,
+        '1h': 3600_000,
+        '24h': 86400_000,
+      }
+      const span = (windowMs[window] ?? 3600_000) * limit
+      const now = new Date()
+      const queryStart = new Date(now.getTime() - span)
+
+      const overlappingGaps = await findOverlappingGaps({
+        network,
+        pair: pairKey,
+        start: queryStart,
+        end: now,
+      })
+
+      const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
       return {
         pairKey,
         network,
@@ -320,11 +376,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           high: formatDecimal(r.high_price, decimalFormat),
           low: formatDecimal(r.low_price, decimalFormat),
         })),
+        ...gapDeclaration,
       }
     }
   )
 
-  // GET /pools
+  // GET /pools?cursor=&limit=
   //
   // Latest snapshot per pool for one network, without reading history. The pool
   // ids are discovered with a recursive "skip scan" over the
@@ -332,36 +389,72 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // each step), then one LIMIT 1 index probe per pool fetches its newest row.
   // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
   // network. A quiet pool is kept with its real `timestamp`, never dropped.
-  app.get('/pools', { config: { scope: 'read:prices' }, schema: { response: { 200: poolsResponseSchema } } }, async (req, reply) => {
-    const network = req.network ?? activeNetwork
-    const decimalFormat = resolveDecimalFormat(req)
-    if (decimalFormat === 'string') {
-      reply.header('x-decimal-format', 'string')
-    }
-    const result = await pgPool.query(
-      `WITH RECURSIVE ids AS (
-         (SELECT pool_id FROM pool_snapshots WHERE network = $1 ORDER BY pool_id LIMIT 1)
-         UNION ALL
-         SELECT (SELECT s.pool_id FROM pool_snapshots s
-                  WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                  ORDER BY s.pool_id LIMIT 1)
+  //
+  // Paginated keyset-style on pool_id ASC (default limit 50, max 200): the
+  // cursor carries the last page's pool_id, and the skip scan's seed query
+  // resumes strictly after it, so a pool inserted mid-paging cannot shift a
+  // page boundary the way an OFFSET would.
+  app.get<{ Querystring: { cursor?: string; limit?: string } }>(
+    '/pools',
+    { config: { scope: 'read:prices' }, schema: { response: { 200: poolsResponseSchema } } },
+    async (req, reply) => {
+      const network = req.network ?? activeNetwork
+      const decimalFormat = resolveDecimalFormat(req)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+      }
+
+      const parsedLimit = parseLimit(req.query.limit, POOLS_DEFAULT_LIMIT, POOLS_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send({ error: parsedLimit.error })
+      }
+      const { limit } = parsedLimit
+
+      const params: unknown[] = [network]
+      let seedFilter = ''
+      if (req.query.cursor) {
+        const decoded = decodeCursor(req.query.cursor)
+        if (decoded === null) {
+          return reply.status(400).send({ error: 'Invalid cursor format' })
+        }
+        if (decoded !== 'skip') {
+          params.push(decoded.value)
+          seedFilter = ` AND pool_id > $${params.length}`
+        }
+      }
+      params.push(limit + 1) // Fetch one extra to determine hasMore
+
+      const result = await pgPool.query(
+        `WITH RECURSIVE ids AS (
+           (SELECT pool_id FROM pool_snapshots WHERE network = $1${seedFilter} ORDER BY pool_id LIMIT 1)
+           UNION ALL
+           SELECT (SELECT s.pool_id FROM pool_snapshots s
+                    WHERE s.network = $1 AND s.pool_id > ids.pool_id
+                    ORDER BY s.pool_id LIMIT 1)
+             FROM ids
+            WHERE ids.pool_id IS NOT NULL
+         )
+         SELECT l.pool_id, l.asset_a, l.asset_b,
+                l.reserve_a::numeric, l.reserve_b::numeric, l.spot_price::numeric, l.fee_bp, l.timestamp
            FROM ids
+          CROSS JOIN LATERAL (
+                SELECT * FROM pool_snapshots s
+                 WHERE s.network = $1 AND s.pool_id = ids.pool_id
+                 ORDER BY s.timestamp DESC
+                 LIMIT 1
+               ) l
           WHERE ids.pool_id IS NOT NULL
-       )
-       SELECT l.pool_id, l.asset_a, l.asset_b,
-              l.reserve_a::numeric, l.reserve_b::numeric, l.spot_price::numeric, l.fee_bp, l.timestamp
-         FROM ids
-        CROSS JOIN LATERAL (
-              SELECT * FROM pool_snapshots s
-               WHERE s.network = $1 AND s.pool_id = ids.pool_id
-               ORDER BY s.timestamp DESC
-               LIMIT 1
-             ) l
-        WHERE ids.pool_id IS NOT NULL`,
-        [network]
+          ORDER BY l.pool_id ASC
+          LIMIT $${params.length}`,
+        params
       )
+
+      const { data, hasMore } = slicePage(result.rows, limit)
+      const nextCursor =
+        hasMore && data.length > 0 ? encodeCursor(data[data.length - 1].pool_id, data[data.length - 1].pool_id) : null
+
       return {
-        pools: result.rows.map(r => ({
+        pools: data.map(r => ({
           pool_id: r.pool_id,
           asset_a: r.asset_a,
           asset_b: r.asset_b,
@@ -371,6 +464,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           fee_bp: r.fee_bp !== null && r.fee_bp !== undefined ? parseInt(String(r.fee_bp), 10) : null,
           timestamp: r.timestamp,
         })),
+        nextCursor,
+        hasMore,
       }
     }
   )
@@ -381,10 +476,16 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     Querystring: { amount?: string; decimals?: string; decimalFormat?: string }
   }>(
     '/price/:assetA/:assetB/depth',
-    { config: { scope: 'read:prices' }, schema: { response: { 200: depthResponseSchema } } },
+    {
+      config: { scope: 'read:prices' },
+      schema: { response: { 200: depthResponseSchema, 503: depthResponseSchema } },
+    },
     async (req, reply) => {
       const { assetA, assetB } = req.params
-      const amount = parseFloat(req.query.amount ?? '1000')
+      // Number(), not parseFloat(): parseFloat('100abc') is 100, so a typo in a
+      // query string would silently price a different trade than the caller
+      // asked for. Trailing junk is a 400.
+      const amount = Number(req.query.amount ?? '1000')
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
 
@@ -394,14 +495,24 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       // Depth reads are network-scoped on both legs (pool_snapshots and the
       // price_points subquery that names this pair's pools), so a mainnet pair
       // is never priced off a testnet pool's reserves.
-      const depthResult = await getDepth(pair.pairKey, amount, network)
+      // Argument order is (network, pairKey, amount, feeOpts). network and
+      // pairKey are both strings, so swapping them compiles cleanly and then
+      // prices every pair against a network named "XLM/USDC" — worth reading
+      // twice before editing this line.
+      const depthResult = await getDepth(network, pair.pairKey, amount, {
+        horizonUrl: getNetworkConfig(network).horizon.url,
+      })
 
-      return {
+      // An unavailable answer is a 503, not a 200 with zeros: the pair is
+      // watched, we simply cannot price it right now, and a caller retrying
+      // later is the correct response to that.
+      return reply.status(depthResult.status === 'unavailable' ? 503 : 200).send({
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
-        pairKey: pair.pairKey,
+        // pairKey and network come from depthResult, which carries both on each
+        // arm of the union. Naming pairKey here too made it a duplicate key.
         ...depthResult,
-      }
+      })
     }
   )
 

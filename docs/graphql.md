@@ -7,20 +7,22 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
 ## Table of Contents
 
 1. [Endpoints & Access](#endpoints--access)
-2. [Schema & Types](#schema--types)
-3. [Queries & Runnable Examples](#queries--runnable-examples)
+2. [Authentication & Scopes](#authentication--scopes)
+3. [Query depth limit](#query-depth-limit)
+4. [Schema & Types](#schema--types)
+5. [Queries & Runnable Examples](#queries--runnable-examples)
    - [`getPrice`](#1-getprice)
-   - [`etBestRoute`](#2-getbestroute)
+   - [`getBestRoute`](#2-getbestroute)
    - [`getPriceHistory`](#3-getpricehistory)
    - [`listPairs`](#4-listpairs)
    - [`screener`](#5-screener)
-4. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
+   - [`volumes` and `spreads`](#6-volumes-and-spreads)
+6. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
    - [Runnable Client Example (Raw WebSocket & Handshake)](#runnable-client-example-raw-websocket---handshake)
    - [Runnable Client Example (`graphql-ws` Library)](#runnable-client-example-graphql-ws-library)
-5. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
-6. [Query depth limit](#query-depth-limit)
+7. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
 
 ---
 
@@ -34,6 +36,69 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
 
 > [!IMPORTANT]
 > **WebSocket Subprotocol Requirement**: The subscription server requires the modern **@graphql-transport-ws** subprotocol (the standard implemented by [`graphql-ws`](https://github.com/enisdenjo/graphql-ws)). Legacy Apollo `subscriptions-transport-ws` is **not** supported and will be rejected during connection initialization.
+
+## Authentication & Scopes
+
+GraphQL operations on Lens enforce the same fine-grained per-route scopes required by their REST equivalents. If an authenticated API key lacks the required scope for any requested root field, the entire operation is rejected with **HTTP 403 Forbidden** before any resolver is executed.
+
+### Operation Field Scopes
+
+| Operation Field | Operation Type | Required Scope | REST Equivalent |
+|---|---|---|---|
+| `getPrice` | `Query` | `read:prices` | `GET /price/:assetA/:assetB` |
+| `getBestRoute` | `Query` | `read:prices` | `GET /route/:assetA/:assetB` |
+| `getPriceHistory` | `Query` | `read:history` | `GET /prices/history` |
+| `listPairs` | `Query` | `read:prices` | `GET /pairs` |
+| `pairs` | `Query` | `read:prices` | `GET /pairs` |
+| `oracle` | `Query` | `read:prices` | `GET /oracle` |
+| `screener` | `Query` | `read:prices` | `GET /screener` |
+| `volumes` | `Query` | `read:prices` | `GET /volumes/:asset` |
+| `spreads` | `Query` | `read:prices` | `GET /spreads/:asset` |
+| `priceUpdated` | `Subscription` | `subscribe` | WebSocket `/ws/prices` |
+
+### Multi-Field Queries & Scope Union
+
+A single GraphQL document querying multiple root fields (including fields selected via inline fragments, fragment spreads, or aliases) requires the **union** of all scopes needed by those fields.
+
+For example, a query requesting both `getPrice` and `getPriceHistory` requires an API key that possesses **both** `read:prices` and `read:history`. If the key only has `read:prices`, the request is refused with HTTP 403 and no resolver runs:
+
+```json
+{
+  "data": null,
+  "errors": [
+    {
+      "message": "Missing required scope: read:history",
+      "extensions": {
+        "code": "insufficient_scope",
+        "requiredScope": "read:history",
+        "scope": "read:history",
+        "statusCode": 403
+      }
+    }
+  ]
+}
+```
+
+### Passing Authentication
+
+- **HTTP Queries**: Pass the API key in the `Authorization` header:
+  ```http
+  Authorization: Bearer <api_key>
+  ```
+- **WebSocket Subscriptions**: Pass the API key in the `connection_init` payload during the protocol handshake:
+  ```json
+  {
+    "type": "connection_init",
+    "payload": {
+      "authorization": "Bearer <api_key>"
+    }
+  }
+  ```
+  Or as an `Authorization` header in the initial WebSocket upgrade request.
+
+Legacy unscoped API keys (`scopes: []`) and keys configured with wildcard access (`scopes: ['*']`) satisfy all operation scopes.
+
+---
 
 ## Query depth limit
 
@@ -71,6 +136,8 @@ type Query {
   getPriceHistory(assetA: String!, assetB: String!, window: String!, from: String, to: String, limit: Int): [PriceBucket]
   listPairs: [String]!
   screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
+  volumes(asset: String!, window: String, network: String): VolumeReport!
+  spreads(asset: String!, window: String, network: String): SpreadReport!
 }
 
 type Subscription {
@@ -449,6 +516,65 @@ curl -s -X POST http://localhost:3002/graphql \
 To fetch the next page, pass the previous response's `nextCursor` back as the
 `cursor` argument. `nextCursor` is `null` on the last page; `hasMore` reports
 whether another page exists.
+
+---
+
+### 6. `volumes` and `spreads`
+
+GraphQL counterparts of REST `GET /volumes/:asset` and `GET /spreads/:asset`.
+Each resolver calls the REST route's own implementation (`computeVolumes` in
+`src/routes/volumes.ts`, `computeSpreads` in `src/routes/spreads.ts`), so the
+figures cannot drift between the two surfaces.
+
+| Argument | `volumes` | `spreads` |
+|---|---|---|
+| `asset` | required, e.g. `XLM` | required, e.g. `XLM` |
+| `window` | `24h` (default), `7d`, `30d` | `5m` (default), `15m`, `1h`, `24h` |
+| `network` | `testnet` / `mainnet`, defaults to the active network | `testnet` / `mainnet`, defaults to the active network |
+
+An unrecognised `window` or `network` fails with `INVALID_INPUT` and the same
+message REST returns with its 400. The network answered for is echoed in
+`network`; the two chains are never pooled.
+
+Per-venue results are a typed list of `VenueQuote`, so a client can select
+just the fields it wants per venue:
+
+- `volumes.venues`: `venue`, `volume` (in the asset's own units, summed across
+  pairs) and `aggregator`. This is REST's `byVenue` map as a list, in REST's
+  `venues` order. Every other REST field (`totals`, `netVolume`,
+  `grossVolume`, `totalVolume`, trade counts, trade-size statistics, `status`,
+  `provenance`) is returned under the same name.
+- `spreads.venues`: one entry per (venue, pair), tightest first, with `pairKey`,
+  `bid`, `ask`, `mid`, `spreadBps`, `spreadPct`, `observations` and `lastSeen`.
+  `tightest` is the first of them, or `null` when no venue quoted the asset.
+
+Fields that belong to the other query are `null` on a `VenueQuote`.
+
+#### Query Definition
+```graphql
+query VenueViews($asset: String!, $network: String) {
+  volumes(asset: $asset, window: "24h", network: $network) {
+    network
+    totals { net gross }
+    venues { venue volume aggregator }
+  }
+  spreads(asset: $asset, window: "5m", network: $network) {
+    network
+    tightest { venue pairKey spreadBps }
+    venues { venue pairKey bid ask spreadBps }
+  }
+}
+```
+
+#### Runnable `curl` Command
+```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query VenueViews($asset: String!, $network: String) { volumes(asset: $asset, network: $network) { network totals { net gross } venues { venue volume aggregator } } spreads(asset: $asset, network: $network) { network tightest { venue pairKey spreadBps } } }",
+    "variables": { "asset": "XLM", "network": "testnet" }
+  }'
+```
 
 ---
 
