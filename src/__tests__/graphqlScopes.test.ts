@@ -113,6 +113,7 @@ vi.mock('../routes/spreads', () => ({
 }))
 vi.mock('../config', () => ({
   activeNetwork: 'testnet',
+  getEnvironment: () => ({}),
   config: {
     pairs: mocks.pairs,
   },
