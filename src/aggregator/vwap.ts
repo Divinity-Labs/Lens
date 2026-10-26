@@ -45,7 +45,6 @@ export async function calculateVWAPDetailed(
   const raw = String(result.rows[0]?.vwap ?? '0')
   return { num: parseFloat(raw), raw }
 }
-
 export async function calculateVWAP(
   pairKey: string,
   windowMinutes: number,
@@ -56,6 +55,17 @@ export async function calculateVWAP(
   return detailed.num
 }
 
+/** VWAP as PostgreSQL numeric text, with no Number round-trip. */
+export async function calculateVWAPExact(
+  pairKey: string,
+  windowMinutes: number,
+  network: NetworkName,
+  source?: 'SDEX' | 'AMM'
+): Promise<string> {
+  const detailed = await calculateVWAPDetailed(pairKey, windowMinutes, network, source)
+  return detailed.raw
+}
+
 export async function calculateOHLCV(
   pairKey: string,
   windowMinutes: number,
@@ -63,6 +73,26 @@ export async function calculateOHLCV(
 ): Promise<{
   open: number; high: number; low: number; close: number
   volume: number; tradeCount: number
+}> {
+  const exact = await calculateOHLCVExact(pairKey, windowMinutes, network)
+  return {
+    open: parseFloat(exact.open),
+    high: parseFloat(exact.high),
+    low: parseFloat(exact.low),
+    close: parseFloat(exact.close),
+    volume: parseFloat(exact.volume),
+    tradeCount: exact.tradeCount,
+  }
+}
+
+/** OHLCV with prices and volume as PostgreSQL numeric text. */
+export async function calculateOHLCVExact(
+  pairKey: string,
+  windowMinutes: number,
+  network: NetworkName
+): Promise<{
+  open: string; high: string; low: string; close: string
+  volume: string; tradeCount: number
 }> {
   const result = await pgPool.query(
     `SELECT
@@ -86,11 +116,11 @@ export async function calculateOHLCV(
   )
   const row = result.rows[0]
   return {
-    open: parseFloat(row?.open ?? '0'),
-    high: parseFloat(row?.high ?? '0'),
-    low: parseFloat(row?.low ?? '0'),
-    close: parseFloat(row?.close ?? '0'),
-    volume: parseFloat(row?.volume ?? '0'),
+    open: String(row?.open ?? '0'),
+    high: String(row?.high ?? '0'),
+    low: String(row?.low ?? '0'),
+    close: String(row?.close ?? '0'),
+    volume: String(row?.volume ?? '0'),
     tradeCount: parseInt(row?.trade_count ?? '0', 10),
   }
 }
@@ -419,4 +449,3 @@ export async function getAggregatedPrice(
     stale,
   }
 }
-

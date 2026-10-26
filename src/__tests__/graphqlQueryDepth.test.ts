@@ -49,7 +49,11 @@ describe('GraphQL query depth limit', () => {
   beforeEach(async () => {
     process.env.GRAPHQL_MAX_QUERY_DEPTH = '2'
     vi.clearAllMocks()
-    vi.mocked(getCachedPrice).mockResolvedValue(JSON.stringify({ price: 0.1234 }))
+    vi.mocked(getCachedPrice).mockResolvedValue(JSON.stringify({
+      price: 0.1234, priceExact: '0.1234', sdexPriceExact: '0.1234', ammPriceExact: '0',
+      volume24hExact: '0', sdexVolume24hExact: '0', ammVolume24hExact: '0', vwap1mExact: '0',
+      vwap5mExact: '0', vwap1hExact: '0', vwap24hExact: '0', priceChange24hExact: '0',
+    }))
     app = await buildServer()
   })
 
