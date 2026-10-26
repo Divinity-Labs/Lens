@@ -780,6 +780,15 @@
                     "window": {
                       "type": "string"
                     },
+                    "incomplete": {
+                      "type": "boolean"
+                    },
+                    "gaps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DataGap"
+                      }
+                    },
                     "buckets": {
                       "type": "array",
                       "items": {
@@ -1077,6 +1086,15 @@
                     },
                     "hasMore": {
                       "type": "boolean"
+                    },
+                    "incomplete": {
+                      "type": "boolean"
+                    },
+                    "gaps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DataGap"
+                      }
                     }
                   }
                 }
@@ -1245,6 +1263,15 @@
                     "to": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "incomplete": {
+                      "type": "boolean"
+                    },
+                    "gaps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DataGap"
+                      }
                     },
                     "count": {
                       "type": "integer",
@@ -5194,6 +5221,15 @@
               "iqr",
               "modified_zscore"
             ]
+          },
+          "incomplete": {
+            "type": "boolean"
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataGap"
+            }
           }
         }
       },
@@ -5277,6 +5313,45 @@
             "enum": [
               "iqr",
               "modified_zscore"
+            ]
+          },
+          "incomplete": {
+            "type": "boolean"
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataGap"
+            }
+          }
+        }
+      },
+      "DataGap": {
+        "type": "object",
+        "required": [
+          "source",
+          "start",
+          "end",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "permanent"
             ]
           }
         }
