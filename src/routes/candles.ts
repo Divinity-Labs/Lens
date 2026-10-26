@@ -1,7 +1,18 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
+import {
+  CANDLES_DEFAULT_LIMIT,
+  CANDLES_MAX_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 import { activeNetwork, type NetworkName } from '../config'
+import { findOverlappingGaps } from '../backfill/gaps'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { formatPrice, formatVolume } from '../pricing/precision'
+
 
 const INTERVAL_SECONDS: Record<string, number> = {
   '1m': 60,
@@ -23,9 +34,17 @@ const INTERVAL_SECONDS: Record<string, number> = {
  * An inclusive-at-both-ends window double-counted every such sample.
  */
 export async function registerCandleRoutes(app: FastifyInstance) {
+  // GET /candles/:assetA/:assetB?interval=&from=&to=&cursor=&limit=
+  //
+  // Paginated keyset-style on the bucket start time ASC (default limit 500,
+  // max 5000). The cursor carries the last page's bucket epoch in seconds (the
+  // tiebreaker id is the pairKey, kept so every route emits the same cursor
+  // shape), and the keyset predicate is applied to the bucket expression in
+  // the WHERE clause, so a candle inserted mid-paging cannot shift a page
+  // boundary the way an offset would.
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { interval?: string; from?: string; to?: string }
+    Querystring: { interval?: string; from?: string; to?: string; cursor?: string; limit?: string }
   }>('/candles/:assetA/:assetB', { config: { scope: 'read:history' } }, async (req, reply) => {
     const { assetA, assetB } = req.params
     const interval = req.query.interval ?? '1h'
@@ -36,6 +55,12 @@ export async function registerCandleRoutes(app: FastifyInstance) {
         error: `interval must be one of: ${Object.keys(INTERVAL_SECONDS).join(', ')}`,
       })
     }
+
+    const parsedLimit = parseLimit(req.query.limit, CANDLES_DEFAULT_LIMIT, CANDLES_MAX_LIMIT)
+    if ('error' in parsedLimit) {
+      return reply.status(400).send({ error: parsedLimit.error })
+    }
+    const { limit } = parsedLimit
 
     const pairKey = [assetA, assetB].sort().join('/')
 
@@ -57,23 +82,55 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
     }
 
+    // $5 is the network predicate in the WHERE clause below. It has to be
+    // pushed here, before the optional cursor and the limit, or those take
+    // its placeholder and every row is compared against a row count.
+    const params: unknown[] = [intervalSecs, pairKey, from, to, network]
+    let cursorCondition = ''
+    if (req.query.cursor) {
+      const decoded = decodeCursor(req.query.cursor)
+      if (decoded === null) {
+        return reply.status(400).send({ error: 'Invalid cursor format' })
+      }
+      if (decoded !== 'skip') {
+        params.push(Number(decoded.value))
+        cursorCondition = ` AND floor(EXTRACT(EPOCH FROM observed_at) / $1) * $1 > $${params.length}`
+      }
+    }
+    params.push(limit + 1) // Fetch one extra to determine hasMore
+
     const result = await pgPool.query(
       `SELECT
-         to_timestamp(floor(EXTRACT(EPOCH FROM timestamp) / $1) * $1) AS time,
-         (array_agg(price::float ORDER BY timestamp ASC))[1]  AS open,
-         MAX(price::float)                                     AS high,
-         MIN(price::float)                                     AS low,
-         (array_agg(price::float ORDER BY timestamp DESC))[1] AS close,
-         SUM(base_volume::float)                              AS volume
+         to_timestamp(floor(EXTRACT(EPOCH FROM observed_at) / $1) * $1) AS time,
+         (array_agg(price ORDER BY observed_at ASC, id ASC))[1]  AS open,
+         MAX(price)                                              AS high,
+         MIN(price)                                              AS low,
+         (array_agg(price ORDER BY observed_at DESC, id DESC))[1] AS close,
+         SUM(base_volume)                                        AS volume
        FROM price_points
        WHERE pair_key = $2
          AND network = $5
-         AND timestamp >= $3
-         AND timestamp < $4
-       GROUP BY floor(EXTRACT(EPOCH FROM timestamp) / $1)
-       ORDER BY time ASC`,
-      [intervalSecs, pairKey, from, to, network]
+         AND observed_at >= $3
+         AND observed_at < $4${cursorCondition}
+       GROUP BY floor(EXTRACT(EPOCH FROM observed_at) / $1)
+       ORDER BY time ASC
+       LIMIT $${params.length}`,
+      params
     )
+
+    const overlappingGaps = await findOverlappingGaps({
+      network,
+      pair: pairKey,
+      start: from,
+      end: to,
+    })
+
+    const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+    const { data, hasMore } = slicePage(result.rows, limit)
+    const last = hasMore && data.length > 0 ? data[data.length - 1] : null
+    const nextCursor = last
+      ? encodeCursor(Math.floor(new Date(last.time).getTime() / 1000), pairKey)
+      : null
 
     return {
       pairKey,
@@ -81,14 +138,17 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       network,
       from: from.toISOString(),
       to: to.toISOString(),
-      candles: result.rows.map(r => ({
+      candles: data.map(r => ({
         time: r.time,
-        open: Number(r.open),
-        high: Number(r.high),
-        low: Number(r.low),
-        close: Number(r.close),
-        volume: Number(r.volume),
+        open: formatPrice(r.open),
+        high: formatPrice(r.high),
+        low: formatPrice(r.low),
+        close: formatPrice(r.close),
+        volume: formatVolume(r.volume),
       })),
+      ...gapDeclaration,
+      nextCursor,
+      hasMore,
     }
   })
 }

@@ -22,6 +22,9 @@ describe('cachePolicyFor', () => {
     expect(cachePolicyFor('GET', '/price/twap/:assetA/:assetB', 200)).toBe('public, max-age=60')
     expect(cachePolicyFor('GET', '/price/vwap/:assetA/:assetB', 200)).toBe('public, max-age=60')
     expect(cachePolicyFor('GET', '/prices/history', 200)).toBe('public, max-age=60')
+    expect(cachePolicyFor('GET', '/compare/:asset', 200)).toBe('public, max-age=60')
+    expect(cachePolicyFor('GET', '/compare/:asset/history', 200)).toBe('public, max-age=60')
+    expect(cachePolicyFor('GET', '/compare/:asset/summary', 200)).toBe('public, max-age=60')
   })
 
   it('marks per-caller responses no-store', () => {

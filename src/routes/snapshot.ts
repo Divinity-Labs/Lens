@@ -579,11 +579,22 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
         samples24h: number
         lastUpdated: string | null
       }[] = []
-      for (const pair of getNetworkConfig(network).pairs) {
+      const netConfig = getNetworkConfig(network)
+      const configuredPegs = netConfig.pegged ?? []
+      const matchConfiguredPeg = (asset: { code: string; issuer: string | null }) =>
+        configuredPegs.find(
+          p =>
+            p.asset.code.toUpperCase() === asset.code.toUpperCase() &&
+            (!p.asset.issuer || !asset.issuer || p.asset.issuer === asset.issuer)
+        )
+
+      for (const pair of netConfig.pairs) {
         for (const side of ['assetA', 'assetB'] as const) {
           const pegged = pair[side]
           const quote = side === 'assetA' ? pair.assetB : pair.assetA
-          const target = PEGGED_ASSETS[pegged.code]
+          const configuredPeg = matchConfiguredPeg(pegged)
+          const target = configuredPeg?.target ?? PEGGED_ASSETS[pegged.code]
+          const targetPrice = configuredPeg?.targetPrice ?? 1
           if (!target) continue
 
           const agg = pairs.get(pair.pairKey)
@@ -604,12 +615,17 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
           }
 
           // Stored price is assetB-per-assetA. Read as quote-per-pegged so a
-          // pair quoted directly in its fiat target sits near 1.0: the pegged
-          // asset is asset A → price is already quote-per-pegged; the pegged
-          // asset is asset B → invert it.
+          // pair quoted directly in its fiat target sits near targetPrice: the
+          // pegged asset is asset A → price is already quote-per-pegged; the
+          // pegged asset is asset B → invert it.
           const reading = side === 'assetA' ? agg.price : 1 / agg.price
+          const quoteConfiguredPeg = matchConfiguredPeg(quote)
+          const quoteSiblingTarget =
+            quoteConfiguredPeg && quoteConfiguredPeg.targetPrice === 1
+              ? quoteConfiguredPeg.target
+              : PEGGED_ASSETS[quote.code]
           const quoteIsReference =
-            quote.code === target || PEGGED_ASSETS[quote.code] === target
+            quote.code === target || quoteSiblingTarget === target
 
           if (!quoteIsReference) {
             pegs.push({
@@ -622,7 +638,7 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
             continue
           }
 
-          const deviationBp = (reading - 1) * 10_000
+          const deviationBp = ((reading - targetPrice) / targetPrice) * 10_000
           pegs.push({
             ...base,
             price: reading,

@@ -9,6 +9,7 @@ vi.mock('../db', () => ({
     apiKey: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
+      count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -44,6 +45,7 @@ import {
 
 const mockFindUnique = prisma.apiKey.findUnique as unknown as ReturnType<typeof vi.fn>
 const mockFindMany = prisma.apiKey.findMany as unknown as ReturnType<typeof vi.fn>
+const mockCount = prisma.apiKey.count as unknown as ReturnType<typeof vi.fn>
 const mockCreate = prisma.apiKey.create as unknown as ReturnType<typeof vi.fn>
 const mockUpdate = prisma.apiKey.update as unknown as ReturnType<typeof vi.fn>
 
@@ -80,8 +82,16 @@ beforeEach(() => {
   resetApiKeyLastUsedThrottle()
   mockFindUnique.mockReset()
   mockFindMany.mockReset()
+  mockCount.mockReset()
   mockCreate.mockReset()
   mockUpdate.mockReset()
+  // webhookDeliveryFailure mocks are shared across the admin-endpoint tests;
+  // reset them too, or a prior test's call count / mockResolvedValue leaks into
+  // the next one under shuffled order (the "recent webhook failure endpoint"
+  // test then sees findMany already called and fails).
+  vi.mocked(prisma.webhookDeliveryFailure.findMany).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.create).mockReset()
+  vi.mocked(prisma.webhookDeliveryFailure.deleteMany).mockReset()
   // The lookup cache is module-global; a stale entry from a previous test
   // would otherwise mask a different mock for the same key.
   clearApiKeyCache()
@@ -527,6 +537,69 @@ describe('admin endpoints', () => {
     expect(k).toMatch(/^lens_[a-f0-9]{48}$/)
   })
 
+  it('lists only safe key metadata, paginates, and hides revoked keys by default', async () => {
+    const createdAt = new Date('2026-10-01T12:00:00.000Z')
+    mockFindMany.mockResolvedValue([{
+      id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 5000,
+      monthlyQuotaCents: 20000, dailyQuotaCents: 1000, overagePolicy: 'block',
+      createdAt, revokedAt: null, expiresAt: null, scopes: ['read:prices'], lastUsedAt: null,
+      hash: 'do-not-return-this-hash',
+    }])
+    mockCount.mockResolvedValue(3)
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?limit=1&offset=2',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { revokedAt: null }, skip: 2, take: 1,
+      select: expect.not.objectContaining({ hash: true }),
+    }))
+    expect(mockCount).toHaveBeenCalledWith({ where: { revokedAt: null } })
+    expect(res.json()).toEqual({
+      keys: [{
+        id: 'key-1', label: 'acme', ratePerMin: 120, ratePerDay: 5000,
+        monthlyQuotaCents: 20000, dailyQuotaCents: 1000, overagePolicy: 'block',
+        scopes: ['read:prices'], createdAt: createdAt.toISOString(), revokedAt: null, expiresAt: null, lastUsedAt: null,
+      }],
+      pagination: { limit: 1, offset: 2, total: 3 },
+    })
+    expect(JSON.stringify(res.json())).not.toContain('do-not-return-this-hash')
+  })
+
+  it('requires the admin token to list API keys', async () => {
+    const before = (await admin_auth_failures_total.get()).values[0]?.value ?? 0
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'GET', url: '/admin/keys' })
+    expect(res.statusCode).toBe(401)
+    expect(mockFindMany).not.toHaveBeenCalled()
+    expect((await admin_auth_failures_total.get()).values[0]?.value).toBe(before + 1)
+  })
+
+  it('can include revoked keys when explicitly requested', async () => {
+    mockFindMany.mockResolvedValue([])
+    mockCount.mockResolvedValue(0)
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?revoked=true',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: { revokedAt: { not: null } } }))
+  })
+
+  it('rejects invalid key-list pagination and filters', async () => {
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/keys?limit=1000&revoked=maybe',
+      headers: { 'x-admin-token': 'admin-secret' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(mockFindMany).not.toHaveBeenCalled()
+  })
+
   it('rejects minting without the admin token', async () => {
     const before = (await admin_auth_failures_total.get()).values[0]?.value ?? 0
     const app = await buildAdminApp()
@@ -645,6 +718,75 @@ describe('admin endpoints', () => {
     })
     expect(res.statusCode).toBe(401)
     expect(mockFindMany).not.toHaveBeenCalled()
+  })
+
+  // ── Body validation (issue #506): reject bad quotas/policies, don't coerce ──
+  async function postKey(payload: unknown) {
+    const app = await buildAdminApp()
+    return app.inject({
+      method: 'POST',
+      url: '/admin/keys',
+      headers: { 'x-admin-token': 'admin-secret' },
+      payload: payload as object,
+    })
+  }
+
+  it('rejects a negative rate and names the field, without touching the database', async () => {
+    const res = await postKey({ label: 'acme', ratePerMin: -5 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerMin/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a fractional quota', async () => {
+    const res = await postKey({ label: 'acme', monthlyQuotaCents: 10.5 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/monthlyQuotaCents/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a zero rate (a key that can never call anything)', async () => {
+    const res = await postKey({ label: 'acme', ratePerDay: 0 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerDay/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an out-of-range value above the Int column ceiling', async () => {
+    const res = await postKey({ label: 'acme', dailyQuotaCents: 9_999_999_999 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/dailyQuotaCents/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown overagePolicy instead of silently defaulting to block', async () => {
+    const res = await postKey({ label: 'acme', overagePolicy: 'refund_everything' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/overagePolicy/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a per-day rate below the per-minute rate', async () => {
+    const res = await postKey({ label: 'acme', ratePerMin: 100, ratePerDay: 50 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ratePerDay/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a blank (whitespace-only) label', async () => {
+    const res = await postKey({ label: '   ' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/label/)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('accepts valid rates and policy at the boundary', async () => {
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+    const res = await postKey({ label: 'acme', ratePerMin: 60, ratePerDay: 60, overagePolicy: 'charge_402' })
+    expect(res.statusCode).toBe(201)
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 
   it('revokes a key by id', async () => {

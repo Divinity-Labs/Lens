@@ -1,7 +1,7 @@
 import { amm_snapshots_total, trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '../../metrics'
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '../../db'
-import { resolvePageLedgers } from '../../ingesters/toid'
+import { resolvePageLedgers } from '../toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
@@ -15,6 +15,8 @@ import {
   startVenueAdapter,
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
+import { fetchOk, fetchFailed, type FetchResult } from '../fetchResult'
+import { recordSourceFailure, clearSourceFailure } from '../sourceFailures'
 
 const log = createLogger('ingester:amm')
 
@@ -26,9 +28,25 @@ export function _getLastPrice(network: NetworkName, pairKey: string): number | u
   return getLastPrice('AMM', network, pairKey)
 }
 
-export async function fetchPools(pair: WatchedPair, network: NetworkName = activeNetwork, signal?: AbortSignal): Promise<any[]> {
+/** `price_points.source` for the Horizon AMM, and its key in the source-failure record. */
+export const AMM_SOURCE = 'AMM'
+
+/**
+ * Fetch the Horizon liquidity pools for a pair (#329).
+ *
+ * `{ ok: true, data: [] }` means Horizon answered and there are no pools.
+ * `{ ok: false }` means it did not answer usefully (network error, timeout,
+ * non-2xx, a body without `_embedded.records`, or a cycle abandoned before the
+ * request went out) — never to be read as "no pools". A persistent 429 is
+ * still thrown (#348) so the runner backs the whole cycle off.
+ */
+export async function fetchPools(
+  pair: WatchedPair,
+  network: NetworkName = activeNetwork,
+  signal?: AbortSignal
+): Promise<FetchResult<any[]>> {
   try {
-    if (signal?.aborted) return []
+    if (signal?.aborted) return fetchFailed(new Error('cycle aborted before the Horizon pools request was sent'))
 
     const assetAStr = pair.assetA.issuer
       ? `${pair.assetA.code}:${pair.assetA.issuer}`
@@ -47,14 +65,17 @@ export async function fetchPools(pair: WatchedPair, network: NetworkName = activ
       network,
       { signal }
     )
-    if (!data._embedded?.records) return []
-    return data._embedded.records
+    if (!Array.isArray(data?._embedded?.records)) {
+      log.error({ pair: pair.pairKey }, 'failed to fetch pools: response has no _embedded.records')
+      return fetchFailed(new Error('Horizon liquidity_pools response has no _embedded.records'))
+    }
+    return fetchOk(data._embedded.records)
   } catch (err) {
     // A persistent 429 is raised, not logged and swallowed: the runner counts
     // it and backs the whole cycle off, which is the point of #348.
     if (err instanceof HorizonRateLimitError) throw err
-    log.error({ pair: pair.pairKey, err }, 'failed to fetch pools')
-    return []
+    log.error({ venue: 'AMM', network, pair: pair.pairKey, err }, 'failed to fetch pools')
+    return fetchFailed(err)
   }
 }
 
@@ -103,6 +124,7 @@ export async function snapshotPool(
 
     // Also record spot price as a price point (no volume — it's a snapshot, not a trade)
     if (spotPrice > 0) {
+      const now = new Date()
       await upsertPricePoints(
         [
           {
@@ -115,7 +137,9 @@ export async function snapshotPool(
             baseVolume: 0,
             counterVolume: 0,
             ledger: pool.last_modified_ledger ?? 0,
-            timestamp: new Date(),
+            observedAt: now,
+            sourceTime: null,
+            timestamp: now,
             // #237: snapshot price points have no trade event to key on, so
             // the id is derived from the pool's STATE — (pool, ledger) is the
             // version of the reserves, and two ingesters that read the same
@@ -195,6 +219,9 @@ export async function ingestPoolTrades(
         ? parseFloat(t.counter_amount) / parseFloat(t.base_amount)
         : parseFloat(t.base_amount) / parseFloat(t.counter_amount)
 
+      const now = new Date()
+      const sourceTime = new Date(t.ledger_close_time)
+
       return {
         assetA: pair.assetA.code,
         assetB: pair.assetB.code,
@@ -205,7 +232,9 @@ export async function ingestPoolTrades(
         baseVolume: parseFloat(t.base_amount),
         counterVolume: parseFloat(t.counter_amount),
         ledger: ledgers[i],
-        timestamp: new Date(t.ledger_close_time),
+        observedAt: now,
+        sourceTime,
+        timestamp: now,
         eventId: t.id,
       }
     })
@@ -230,9 +259,10 @@ export async function ingestPoolTrades(
     markIngestSuccess('AMM', network)
 
     trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
+    const tradeTime = points[points.length - 1].sourceTime ?? points[points.length - 1].observedAt
     last_trade_timestamp.set(
       { pair: pair.pairKey, network },
-      Math.floor(points[points.length - 1].timestamp.getTime() / 1000)
+      Math.floor(tradeTime.getTime() / 1000)
     )
 
     const lastRecord = records[records.length - 1]
@@ -242,7 +272,7 @@ export async function ingestPoolTrades(
     publishPriceUpdate({
       pair: pair.pairKey,
       price: currentPrice,
-      ts: points[points.length - 1].timestamp.toISOString(),
+      ts: points[points.length - 1].observedAt.toISOString(),
       network,
     })
 
@@ -260,7 +290,26 @@ export async function ingestPoolTrades(
 }
 
 export async function ingestPair(pair: WatchedPair, network: NetworkName = activeNetwork, signal?: AbortSignal): Promise<void> {
-  const pools = await fetchPools(pair, network, signal)
+  // An abandoned cycle (#351) never asked Horizon anything, so it is neither a
+  // failure nor a success and leaves the recorded state alone.
+  if (signal?.aborted) return
+
+  let fetched: FetchResult<any[]>
+  try {
+    fetched = await fetchPools(pair, network, signal)
+  } catch (err) {
+    // The rate-limit path (#348) still throws to back the cycle off, but the
+    // AMM did fail for this pair and the aggregate has to know (#329).
+    recordSourceFailure(AMM_SOURCE, network, pair.pairKey, err)
+    throw err
+  }
+  if (!fetched.ok) {
+    recordSourceFailure(AMM_SOURCE, network, pair.pairKey, fetched.error)
+    return
+  }
+  clearSourceFailure(AMM_SOURCE, network, pair.pairKey)
+
+  const pools = fetched.data
   log.info({ pair: pair.pairKey, pools: pools.length }, 'found AMM pools')
 
   await Promise.all(
@@ -280,6 +329,7 @@ export const ammAdapter: VenueAdapter<any, any> = {
   name: 'AMM',
   kind: 'amm',
   source: 'AMM',
+  sourceTimeCapability: { status: 'provided', semantic: 'ledger_close' },
   classification: 'primary',
   type: 'Liquidity Pool',
   description: 'Stellar native AMM liquidity pools (Horizon)',
@@ -293,7 +343,9 @@ export const ammAdapter: VenueAdapter<any, any> = {
   },
 
   async discover(pair: WatchedPair, network: NetworkName): Promise<any[]> {
-    return fetchPools(pair, network)
+    const fetched = await fetchPools(pair, network)
+    if (!fetched.ok) throw fetched.error
+    return fetched.data
   },
 
   async read(pool: any, _pair: WatchedPair, _network: NetworkName): Promise<any | null> {
