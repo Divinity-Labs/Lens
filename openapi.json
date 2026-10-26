@@ -2984,6 +2984,39 @@
         }
       }
     },
+    "/v1/pegs": {
+      "get": {
+        "operationId": "getPegs",
+        "summary": "Get peg deviation and window statistics for all configured pegged assets",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of configured pegged assets and their peg deviations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PegsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid network parameter"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
     "/v1/basket": {
       "get": {
         "operationId": "getBasket",
@@ -7682,6 +7715,113 @@
           "cexAgeSeconds": {
             "type": "integer",
             "nullable": true
+          }
+        }
+      },
+      "PegReport": {
+        "type": "object",
+        "required": [
+          "asset",
+          "code",
+          "issuer",
+          "target",
+          "targetPrice",
+          "pairKey",
+          "currentPrice",
+          "currentDeviationBps",
+          "worstDeviationBps",
+          "window",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string",
+            "nullable": true
+          },
+          "target": {
+            "type": "string"
+          },
+          "targetPrice": {
+            "type": "number"
+          },
+          "pairKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "currentPrice": {
+            "type": "number",
+            "nullable": true
+          },
+          "currentDeviationBps": {
+            "type": "number",
+            "nullable": true
+          },
+          "worstDeviationBps": {
+            "type": "number",
+            "nullable": true
+          },
+          "window": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "venues",
+              "sampleCount",
+              "freshnessSeconds",
+              "lastSampleTimestamp"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "venues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sampleCount": {
+                "type": "integer"
+              },
+              "freshnessSeconds": {
+                "type": "integer",
+                "nullable": true
+              },
+              "lastSampleTimestamp": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "PegsResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "pegs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "pegs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PegReport"
+            }
           }
         }
       }
