@@ -20,6 +20,10 @@
       "get": {
         "operationId": "getVenueRegistry",
         "summary": "List registered venues and their network liveness",
+        "x-question": "Which venue adapters (order books, AMMs, oracles) are registered and live?",
+        "x-example": "GET /venues/registry?network=testnet",
+        "x-order": 39,
+        "x-category": "System Health & Venue Infrastructure",
         "description": "Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.",
         "security": [],
         "parameters": [
@@ -107,6 +111,10 @@
     },
     "/v1/venues": {
       "get": {
+        "x-question": "Which venue is actually carrying the trading volume?",
+        "x-example": "GET /venues?window=24h&network=testnet",
+        "x-order": 12,
+        "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getVenueVolumeShare",
         "summary": "Venue Share of Volume",
         "description": "Per-venue traded volume, market share (percentage of total), and period-over-period percentage change comparing the requested window against the immediately preceding window of identical duration.\nMarket shares sum to 100% within floating-point tolerance. Stale or excluded venues are explicitly listed in `excludedVenues`.\nAll queries are filtered by `network` via the `x-network` header — testnet and mainnet data are never merged into a single series.",
@@ -165,6 +173,10 @@
     },
     "/v1/live": {
       "get": {
+        "x-question": "Is the service process alive at all?",
+        "x-example": "GET /live",
+        "x-order": 40,
+        "x-category": "System Health & Venue Infrastructure",
         "operationId": "getLive",
         "summary": "Liveness probe",
         "description": "Reports whether this process is wedged and needs to be restarted. It checks no dependencies by design: a process that cannot reach Postgres is still healthy and should keep running, so failing liveness during a database outage would restart every instance at once. Use `/ready` to decide whether to send traffic.",
@@ -178,6 +190,10 @@
     },
     "/v1/tvl": {
       "get": {
+        "x-question": "How much value is locked across Stellar DeFi, and in which venues?",
+        "x-example": "GET /tvl?network=testnet",
+        "x-order": 11,
+        "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getTvl",
         "summary": "Total Value Locked across Stellar DeFi venues",
         "description": "Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, and Aquarius. Reports totals, breakdown by venue, breakdown by asset with valuation sources named, and marks pools with unpriceable assets as unpriced rather than zero. Querying `?history=true` returns historical hourly TVL samples.",
@@ -243,6 +259,10 @@
     },
     "/v1/ready": {
       "get": {
+        "x-question": "Is it safe to send traffic yet, or are dependencies still starting?",
+        "x-example": "GET /ready",
+        "x-order": 41,
+        "x-category": "System Health & Venue Infrastructure",
         "operationId": "getReady",
         "summary": "Readiness probe",
         "description": "Reports whether this process should receive traffic yet. Unhealthy until the boot sequence finishes — the server starts listening before the ingesters and background workers are running — and while Postgres is unreachable or unmigrated, or Redis is unreachable when Redis is part of readiness (`READINESS_REDIS_CHECK`, default true).\nA probe timeout is reported as `down`, and answers are cached briefly, so this is cheap to poll every few seconds. `/live` stays healthy throughout: a starting instance should be held out of rotation, not killed.",
@@ -317,6 +337,10 @@
       "get": {
         "operationId": "getStatus",
         "summary": "Get API status and indexer state",
+        "x-question": "Is the Lens indexer healthy, up to date, and what is the latest processed ledger?",
+        "x-example": "GET /status?network=testnet",
+        "x-order": 38,
+        "x-category": "System Health & Venue Infrastructure",
         "security": [],
         "parameters": [
           {
@@ -472,6 +496,10 @@
     },
     "/v1/snapshot": {
       "get": {
+        "x-question": "Can I get the whole market in one request instead of ten?",
+        "x-example": "GET /snapshot?network=testnet",
+        "x-order": 13,
+        "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getSnapshot",
         "summary": "Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)",
         "description": "A single timestamped summary of one network: every venue's liveness, AMM pool reserves (TVL), 24h traded volume, the busiest pairs, stablecoin peg readings and how fresh the underlying data is. All figures are read in one consistent database statement, so `asOf` is a real instant and every age is measured from it. Missing data is reported as `null` with a reason (or an empty list), never invented — a cross-pair volume total is only returned when the pairs share one unit. Responses are cached briefly per network; `cache.ageSeconds` states the age of a served copy.",
@@ -530,6 +558,10 @@
       "get": {
         "operationId": "getPrice",
         "summary": "Get aggregated price for a pair",
+        "x-question": "What is the current market price and 24-hour volume for an asset pair?",
+        "x-example": "GET /price/XLM/USDC?network=testnet",
+        "x-order": 1,
+        "x-category": "Core Pricing & Trade Execution",
         "security": [
           {
             "x402": []
@@ -601,6 +633,10 @@
     },
     "/v1/premium/{assetA}/{assetB}": {
       "get": {
+        "x-question": "Is this pair trading above or below the centralised exchanges?",
+        "x-example": "GET /premium/XLM/USDC?network=testnet",
+        "x-order": 27,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPremium",
         "summary": "Get on-chain vs CEX price premium and spread",
         "description": "Returns the on-chain price, the best CEX price, the spread in basis points, both sources, and both timestamps. Refuses to answer with a 400 when either side is older than the configured staleness bound.",
@@ -686,6 +722,10 @@
       "get": {
         "operationId": "getBestRoute",
         "summary": "Get best swap route for a pair and amount",
+        "x-question": "Where can I execute a swap for the best return at a given trade size?",
+        "x-example": "GET /price/XLM/USDC/route?amount=1000&network=testnet",
+        "x-order": 2,
+        "x-category": "Core Pricing & Trade Execution",
         "security": [
           {
             "x402": []
@@ -753,6 +793,10 @@
     },
     "/v1/price/{asset}/fiat": {
       "get": {
+        "x-question": "What is this asset worth in my local currency, such as naira?",
+        "x-example": "GET /price/XLM/fiat?currency=NGN&network=testnet",
+        "x-order": 6,
+        "x-category": "Core Pricing & Trade Execution",
         "operationId": "getFiatPrice",
         "summary": "Convert asset price to fiat currency with NGN support (#290)",
         "security": [],
@@ -804,6 +848,10 @@
         "operationId": "getPriceHistory",
         "summary": "Get price history buckets",
         "description": "Returns price aggregate buckets (1m, 5m, 1h, 24h). Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge.",
+        "x-question": "What were the historical price buckets for a pair over a recent window?",
+        "x-example": "GET /price/XLM/USDC/history?window=1h&network=testnet",
+        "x-order": 32,
+        "x-category": "Historical Trends & Robust Averages",
         "security": [],
         "parameters": [
           {
@@ -916,6 +964,10 @@
         "operationId": "getPools",
         "summary": "Get AMM liquidity pool reserves and spot prices",
         "description": "Latest snapshot per pool for one network. Paginated with the shared keyset convention: ordered by pool_id ascending, default limit 50, maximum 200.",
+        "x-question": "Which AMM liquidity pools are being watched, and what are their reserves?",
+        "x-example": "GET /pools?network=testnet",
+        "x-order": 9,
+        "x-category": "Market Overview & Liquidity Pools",
         "security": [
           {
             "x402": []
@@ -1068,6 +1120,10 @@
         "operationId": "getCandles",
         "summary": "Get OHLCV candle data",
         "description": "OHLCV candles for a pair. Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.",
+        "x-question": "What are the historical OHLCV candlestick bars for a trading pair?",
+        "x-example": "GET /candles/XLM/USDC?interval=1h&network=testnet",
+        "x-order": 31,
+        "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
             "x402": []
@@ -1245,6 +1301,10 @@
       "get": {
         "operationId": "getPriceSnapshots",
         "summary": "Get historical 1-minute price snapshots",
+        "x-question": "Where can I query raw 1-minute historical snapshots or export them as CSV?",
+        "x-example": "GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet",
+        "x-order": 33,
+        "x-category": "Historical Trends & Robust Averages",
         "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets, with exact numeric arithmetic in the database so a sum does not depend on row order. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).",
         "security": [
           {
@@ -1452,6 +1512,10 @@
         "operationId": "listPairs",
         "summary": "List all active trading pairs",
         "description": "Active trading pairs with their latest price metadata. Paginated with the shared keyset convention: ordered by pairKey ascending, default limit 50, maximum 200.",
+        "x-question": "Which trading pairs are currently tracked by Lens on the active network?",
+        "x-example": "GET /pairs?network=testnet",
+        "x-order": 7,
+        "x-category": "Market Overview & Liquidity Pools",
         "security": [],
         "parameters": [
           {
@@ -1540,6 +1604,10 @@
       "post": {
         "operationId": "addPair",
         "summary": "Add a new trading pair (Admin only)",
+        "x-question": "How do I configure Lens to track a new trading pair?",
+        "x-example": "POST /pairs",
+        "x-order": 8,
+        "x-category": "Market Overview & Liquidity Pools",
         "security": [
           {
             "adminAuth": []
@@ -1588,6 +1656,10 @@
       "get": {
         "operationId": "getDepth",
         "summary": "Get order-book depth and execution slippage for a pair",
+        "x-question": "What is the simulated order-book depth and expected slippage for a trade size?",
+        "x-example": "GET /price/XLM/USDC/depth?amount=1000&network=testnet",
+        "x-order": 4,
+        "x-category": "Core Pricing & Trade Execution",
         "description": "Simulates an order of `amount` units of assetA and returns the price ladder plus the execution price and slippage versus the spot price.",
         "security": [
           {
@@ -1664,6 +1736,10 @@
       "get": {
         "operationId": "getBook",
         "summary": "Get the aggregated SDEX and AMM price ladder for a pair",
+        "x-question": "What does the combined order book look like across SDEX and AMM liquidity pools?",
+        "x-example": "GET /book/XLM/USDC?depth=0.1&step=0.01&network=testnet",
+        "x-order": 3,
+        "x-category": "Core Pricing & Trade Execution",
         "description": "Returns asks and bids as cumulative assetA size at each price. Live SDEX levels are reported as observed; AMM levels are synthetic, fee-adjusted reserve steps. `depth` is a fractional price distance around spot (default 0.1), and `step` is the fraction of each AMM reserve used per synthetic level (default 0.01). Per-venue sample counts, observation times, ages and availability are included.",
         "parameters": [
           {
@@ -1749,6 +1825,10 @@
     },
     "/v1/impact/{assetA}/{assetB}": {
       "get": {
+        "x-question": "How does slippage grow as my trade size increases?",
+        "x-example": "GET /impact/XLM/USDC?network=testnet",
+        "x-order": 5,
+        "x-category": "Core Pricing & Trade Execution",
         "operationId": "getImpact",
         "summary": "Get an adaptive slippage impact curve for a pair",
         "description": "Returns slippage at standard trade sizes, an additional liquidity-sized point, and the size at which configured slippage thresholds are crossed. A thin pair returns `insufficient_liquidity` instead of a fabricated 100% slippage result.",
@@ -1830,6 +1910,10 @@
       "get": {
         "operationId": "getTwap",
         "summary": "Get a manipulation-resistant time-weighted average price",
+        "x-question": "What is the manipulation-resistant time-weighted average price (TWAP) for settlement?",
+        "x-example": "GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet",
+        "x-order": 34,
+        "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
             "x402": []
@@ -1943,6 +2027,10 @@
       "get": {
         "operationId": "getVwap",
         "summary": "Get a volume-weighted average price",
+        "x-question": "What is the volume-weighted average price (VWAP) across venues for a pair?",
+        "x-example": "GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet",
+        "x-order": 35,
+        "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
             "x402": []
@@ -2047,6 +2135,10 @@
       "get": {
         "operationId": "getVolumes",
         "summary": "Get cross-venue traded volume for an asset",
+        "x-question": "What is the total cross-venue trading volume for an asset over time?",
+        "x-example": "GET /volumes/XLM?window=24h&network=testnet",
+        "x-order": 10,
+        "x-category": "Market Overview & Liquidity Pools",
         "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`. Venues are classified as primary markets or aggregators in the registry. `totals.net` / `netVolume` sum primary markets only, while `totals.gross` / `grossVolume` include aggregator venues (e.g. Aquarius) that re-report trades settled elsewhere. `totalVolume` and `tradeCount` report the net figures; the trade-size statistics and provenance cover every venue (gross).",
         "security": [],
         "parameters": [
@@ -2114,6 +2206,10 @@
     },
     "/v1/coverage": {
       "get": {
+        "x-question": "How much of the market can Lens actually see?",
+        "x-example": "GET /coverage?network=testnet",
+        "x-order": 29,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getOverallCoverage",
         "summary": "Get overall market coverage ratio and cross-venue activity",
         "description": "Compares indexed trade activity in Lens across all tracked assets against total network activity from Horizon over a time window.",
@@ -2164,6 +2260,10 @@
     },
     "/v1/coverage/{asset}": {
       "get": {
+        "x-question": "For one asset, which venues is Lens watching and how much do they cover?",
+        "x-example": "GET /coverage/XLM?network=testnet",
+        "x-order": 30,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getAssetCoverage",
         "summary": "Get market coverage ratio and venue breakdown for a specific asset",
         "description": "Compares indexed trade volume and count for a specific asset against total network activity from Horizon over a time window.",
@@ -2225,6 +2325,10 @@
       "get": {
         "operationId": "getSpreads",
         "summary": "Get the tightest per-venue bid/ask spread for an asset",
+        "x-question": "Which venues offer the tightest bid/ask spread for an asset right now?",
+        "x-example": "GET /spreads/XLM?window=5m&network=testnet",
+        "x-order": 16,
+        "x-category": "Comparative Analytics & Market Quality",
         "description": "Reports, for every (venue, pair) that quoted `asset` inside the window, the observed low, high and spread in basis points, tightest first. The spread is the dispersion of recent prints, not a resting order book's top-of-book gap.",
         "security": [],
         "parameters": [
@@ -2293,6 +2397,10 @@
     },
     "/v1/rates/{asset}": {
       "get": {
+        "x-question": "What are the supply and borrow rates for one asset on each lending venue?",
+        "x-example": "GET /rates/USDC?network=testnet",
+        "x-order": 15,
+        "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getLendingRates",
         "summary": "Get supply and borrow rates for an asset across lending venues",
         "description": "Answers what `asset` earns when supplied and costs to borrow at every lending venue Lens ingests, one entry per venue sorted best-first (highest supply rate first). Each entry names the venue, the source it was read from and the specific pool/market it came from, so a rate is always attributable and venues are never silently averaged.\nAn asset with no lending market returns an empty `venues` list with a 200, not a 404.",
@@ -2336,6 +2444,10 @@
     },
     "/v1/dispersion/{assetA}/{assetB}": {
       "get": {
+        "x-question": "The venues disagree on this pair — which one is the outlier?",
+        "x-example": "GET /dispersion/XLM/USDC?network=testnet",
+        "x-order": 26,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPairDispersion",
         "summary": "Get venue price dispersion and outlier attribution for a pair",
         "description": "Returns cross-venue price dispersion history and outlier attribution for a pair over time, including median, max absolute percentage deviation, spread in basis points, and outlying venue.",
@@ -2443,6 +2555,10 @@
     },
     "/v1/dispersion": {
       "get": {
+        "x-question": "Which pairs disagree most across venues right now?",
+        "x-example": "GET /dispersion?network=testnet",
+        "x-order": 25,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "listDispersion",
         "summary": "List cross-venue dispersion across watched pairs",
         "description": "Queries recent cross-venue dispersion reconciliation records across all pairs or filtered by a specific pair.",
@@ -2534,6 +2650,10 @@
         "operationId": "compareAsset",
         "summary": "Compare Lens prices with every configured external oracle",
         "description": "Returns 200 even when both Lens and all configured oracles have no data for the asset. The `status` field distinguishes \"no_data\" from \"aligned\", \"minor_deviation\", \"major_deviation\" and \"partial\" (one source only). The response includes both the legacy `reflector` field for backward compatibility and an `oracles` array listing every configured source.",
+        "x-question": "How do Lens aggregated prices compare against external oracles?",
+        "x-example": "GET /compare/XLM?network=testnet",
+        "x-order": 20,
+        "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
           {
@@ -2573,6 +2693,10 @@
     },
     "/v1/compare/{asset}/history": {
       "get": {
+        "x-question": "How has the gap between an oracle and the market moved over time?",
+        "x-example": "GET /compare/XLM/history?window=7d&network=testnet",
+        "x-order": 22,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "compareAssetHistory",
         "summary": "Query historical oracle comparison series and window summary statistics",
         "security": [],
@@ -2688,6 +2812,10 @@
     },
     "/v1/compare/{asset}/summary": {
       "get": {
+        "x-question": "Over the past week, which oracle tracked the market most closely?",
+        "x-example": "GET /compare/XLM/summary?window=7d&network=testnet",
+        "x-order": 21,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "compareAssetSummary",
         "summary": "Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band)",
         "security": [],
@@ -2805,6 +2933,10 @@
       "get": {
         "operationId": "screenPairs",
         "summary": "Screen pairs by volume, change, liquidity and price",
+        "x-question": "Which pairs currently have the highest volume, price changes, or liquidity?",
+        "x-example": "GET /screener?sortBy=volume&order=desc&limit=20&network=testnet",
+        "x-order": 17,
+        "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
           {
@@ -2933,6 +3065,10 @@
     },
     "/v1/movers": {
       "get": {
+        "x-question": "What moved most today, up, down, or by volume?",
+        "x-example": "GET /movers?window=24h&limit=10&network=testnet",
+        "x-order": 18,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getMovers",
         "summary": "Get biggest gainers, biggest losers, and volume movers",
         "description": "Returns the top gainers, losers, and volume movers for the specified lookback window, annotated with venue provenance, sample counts, and single-venue move labelling.",
@@ -2983,6 +3119,10 @@
       "get": {
         "operationId": "getBenchmark",
         "summary": "Get peg-deviation statistics for an asset against a target",
+        "x-question": "How closely is a pegged or wrapped asset tracking its peg target?",
+        "x-example": "GET /benchmark/USDC?target=USD&network=testnet",
+        "x-order": 19,
+        "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
           {
@@ -3041,6 +3181,10 @@
     },
     "/v1/pegs": {
       "get": {
+        "x-question": "Is this stablecoin still holding its peg?",
+        "x-example": "GET /pegs?network=testnet",
+        "x-order": 28,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPegs",
         "summary": "Get peg deviation and window statistics for all configured pegged assets",
         "security": [],
@@ -3077,6 +3221,10 @@
         "operationId": "getBasket",
         "summary": "Compute the weighted price of a basket of assets",
         "description": "Returns 200 even when one or more assets have no price data. The response body will contain an `error` field listing the missing assets and `reason: \"missing_price_data\"` rather than computing a partial basket price. A 404 would imply the assets themselves are invalid.",
+        "x-question": "What is the weighted price of a custom portfolio basket of assets?",
+        "x-example": "GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet",
+        "x-order": 23,
+        "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
           {
@@ -3143,6 +3291,10 @@
     },
     "/v1/correlation": {
       "get": {
+        "x-question": "Do these assets move together, or are they genuinely diversified?",
+        "x-example": "GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet",
+        "x-order": 24,
+        "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getCorrelation",
         "summary": "Compute price correlation matrix across a basket of assets over a window",
         "security": [],
@@ -3216,6 +3368,10 @@
       "get": {
         "operationId": "listDiscoveryResources",
         "summary": "Browse the x402 Bazaar catalog of discoverable resources",
+        "x-question": "What payable endpoints and datasets are discoverable in the x402 Bazaar catalog?",
+        "x-example": "GET /discovery/resources?network=testnet",
+        "x-order": 44,
+        "x-category": "Automation, Discovery & Payments",
         "security": [],
         "parameters": [
           {
@@ -3302,6 +3458,10 @@
     },
     "/v1/discovery/search": {
       "get": {
+        "x-question": "Can I find the right endpoint by describing what I want in plain language?",
+        "x-example": "GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5",
+        "x-order": 45,
+        "x-category": "Automation, Discovery & Payments",
         "operationId": "searchDiscoveryResources",
         "summary": "Natural language search with ranking and quality evaluation for discoverable resources",
         "parameters": [
@@ -3353,6 +3513,10 @@
       "post": {
         "operationId": "createWebhook",
         "summary": "Subscribe to a price-threshold webhook",
+        "x-question": "How can my application receive push alerts when a price crosses a threshold?",
+        "x-example": "POST /webhooks",
+        "x-order": 49,
+        "x-category": "Automation, Discovery & Payments",
         "description": "Registers an HTTPS endpoint to be called when the pair's price crosses `threshold` in the given `direction`. The response contains the signing secret exactly once.",
         "security": [],
         "requestBody": {
@@ -3421,6 +3585,10 @@
       "delete": {
         "operationId": "deleteWebhook",
         "summary": "Delete a webhook subscription",
+        "x-question": "How do I cancel an existing price threshold alert webhook?",
+        "x-example": "DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet",
+        "x-order": 50,
+        "x-category": "Automation, Discovery & Payments",
         "security": [],
         "parameters": [
           {
@@ -3446,6 +3614,10 @@
       "get": {
         "operationId": "getMyUsage",
         "summary": "Get usage and quota for the calling API key",
+        "x-question": "How many requests have I made and what is my remaining API key quota?",
+        "x-example": "GET /usage/me",
+        "x-order": 42,
+        "x-category": "System Health & Venue Infrastructure",
         "security": [
           {
             "apiKeyAuth": []
@@ -3478,6 +3650,10 @@
     },
     "/v1/usage": {
       "get": {
+        "x-question": "How much of my API quota have I used?",
+        "x-example": "GET /usage",
+        "x-order": 43,
+        "x-category": "System Health & Venue Infrastructure",
         "operationId": "getCallerUsage",
         "summary": "Get usage and quota for the calling API key (alias for /usage/me)",
         "security": [
@@ -3514,6 +3690,10 @@
       "get": {
         "operationId": "getSupported",
         "summary": "List the payment kinds and extensions this facilitator supports",
+        "x-question": "Which payment schemes and token mechanisms does this x402 facilitator support?",
+        "x-example": "GET /supported",
+        "x-order": 46,
+        "x-category": "Automation, Discovery & Payments",
         "security": [],
         "responses": {
           "200": {
@@ -3538,6 +3718,10 @@
       "post": {
         "operationId": "verifyPayment",
         "summary": "Verify an x402 payment payload",
+        "x-question": "How do I verify a signed x402 payment payload before fulfilling a service?",
+        "x-example": "POST /verify",
+        "x-order": 47,
+        "x-category": "Automation, Discovery & Payments",
         "security": [],
         "requestBody": {
           "required": true,
@@ -3587,6 +3771,10 @@
       "post": {
         "operationId": "settlePayment",
         "summary": "Settle an x402 payment (idempotent)",
+        "x-question": "How do I submit and settle an x402 payment on the Stellar network?",
+        "x-example": "POST /settle",
+        "x-order": 48,
+        "x-category": "Automation, Discovery & Payments",
         "description": "Submits the payment transaction and records the attempt keyed on its transaction hash. Retrying the same payload replays the stored answer instead of paying twice.",
         "security": [],
         "requestBody": {
@@ -3627,6 +3815,10 @@
       "get": {
         "operationId": "graphqlGet",
         "summary": "Execute a GraphQL query over HTTP GET",
+        "x-question": "How do I query multiple prices, routes, and analytics in a single GET request?",
+        "x-example": "GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D",
+        "x-order": 36,
+        "x-category": "Multi-Query & Streaming",
         "security": [],
         "parameters": [
           {
@@ -3676,6 +3868,10 @@
       "post": {
         "operationId": "graphqlPost",
         "summary": "Execute a GraphQL query, mutation or subscription handshake",
+        "x-question": "How do I execute complex GraphQL operations or initiate WebSocket subscriptions?",
+        "x-example": "POST /graphql",
+        "x-order": 37,
+        "x-category": "Multi-Query & Streaming",
         "security": [
           {
             "x402": []
@@ -3724,6 +3920,10 @@
     },
     "/v1/rates": {
       "get": {
+        "x-question": "What can I earn lending, and what does borrowing cost, across venues?",
+        "x-example": "GET /rates?network=testnet",
+        "x-order": 14,
+        "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getLendingRates",
         "summary": "Query latest lending and borrow rates across pools",
         "description": "Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.",
