@@ -22,7 +22,7 @@
         "summary": "List registered venues and their network liveness",
         "x-question": "Which venue adapters (order books, AMMs, oracles) are registered and live?",
         "x-example": "GET /venues/registry?network=testnet",
-        "x-order": 39,
+        "x-order": 41,
         "x-category": "System Health & Venue Infrastructure",
         "description": "Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.",
         "security": [],
@@ -113,7 +113,7 @@
       "get": {
         "x-question": "Which venue is actually carrying the trading volume?",
         "x-example": "GET /venues?window=24h&network=testnet",
-        "x-order": 12,
+        "x-order": 14,
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getVenueVolumeShare",
         "summary": "Venue Share of Volume",
@@ -175,7 +175,7 @@
       "get": {
         "x-question": "Is the service process alive at all?",
         "x-example": "GET /live",
-        "x-order": 40,
+        "x-order": 42,
         "x-category": "System Health & Venue Infrastructure",
         "operationId": "getLive",
         "summary": "Liveness probe",
@@ -192,7 +192,7 @@
       "get": {
         "x-question": "How much value is locked across Stellar DeFi, and in which venues?",
         "x-example": "GET /tvl?network=testnet",
-        "x-order": 11,
+        "x-order": 13,
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getTvl",
         "summary": "Total Value Locked across Stellar DeFi venues",
@@ -261,7 +261,7 @@
       "get": {
         "x-question": "Is it safe to send traffic yet, or are dependencies still starting?",
         "x-example": "GET /ready",
-        "x-order": 41,
+        "x-order": 43,
         "x-category": "System Health & Venue Infrastructure",
         "operationId": "getReady",
         "summary": "Readiness probe",
@@ -339,7 +339,7 @@
         "summary": "Get API status and indexer state",
         "x-question": "Is the Lens indexer healthy, up to date, and what is the latest processed ledger?",
         "x-example": "GET /status?network=testnet",
-        "x-order": 38,
+        "x-order": 40,
         "x-category": "System Health & Venue Infrastructure",
         "security": [],
         "parameters": [
@@ -498,7 +498,7 @@
       "get": {
         "x-question": "Can I get the whole market in one request instead of ten?",
         "x-example": "GET /snapshot?network=testnet",
-        "x-order": 13,
+        "x-order": 15,
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getSnapshot",
         "summary": "Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)",
@@ -635,7 +635,7 @@
       "get": {
         "x-question": "Is this pair trading above or below the centralised exchanges?",
         "x-example": "GET /premium/XLM/USDC?network=testnet",
-        "x-order": 27,
+        "x-order": 29,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPremium",
         "summary": "Get on-chain vs CEX price premium and spread",
@@ -850,7 +850,7 @@
         "description": "Returns price aggregate buckets (1m, 5m, 1h, 24h). Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge.",
         "x-question": "What were the historical price buckets for a pair over a recent window?",
         "x-example": "GET /price/XLM/USDC/history?window=1h&network=testnet",
-        "x-order": 32,
+        "x-order": 34,
         "x-category": "Historical Trends & Robust Averages",
         "security": [],
         "parameters": [
@@ -1122,7 +1122,7 @@
         "description": "OHLCV candles for a pair. Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 500, maximum 5000.",
         "x-question": "What are the historical OHLCV candlestick bars for a trading pair?",
         "x-example": "GET /candles/XLM/USDC?interval=1h&network=testnet",
-        "x-order": 31,
+        "x-order": 33,
         "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
@@ -1303,7 +1303,7 @@
         "summary": "Get historical 1-minute price snapshots",
         "x-question": "Where can I query raw 1-minute historical snapshots or export them as CSV?",
         "x-example": "GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet",
-        "x-order": 33,
+        "x-order": 35,
         "x-category": "Historical Trends & Robust Averages",
         "description": "Returns minute-resolution price snapshots for a pair over [from, to], optionally aggregated into 5m or 1h buckets, with exact numeric arithmetic in the database so a sum does not depend on row order. Snapshots are retained for ~30 days. Paginated with the shared keyset convention: ordered by bucket start time ascending, default limit 1000, maximum 10000 points. With format=csv the pagination envelope travels in the X-Next-Cursor and X-Has-More response headers; with format=json it is in the body. Gated by x402 (matches the /price prefix).",
         "security": [
@@ -1912,7 +1912,7 @@
         "summary": "Get a manipulation-resistant time-weighted average price",
         "x-question": "What is the manipulation-resistant time-weighted average price (TWAP) for settlement?",
         "x-example": "GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet",
-        "x-order": 34,
+        "x-order": 36,
         "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
@@ -2029,7 +2029,7 @@
         "summary": "Get a volume-weighted average price",
         "x-question": "What is the volume-weighted average price (VWAP) across venues for a pair?",
         "x-example": "GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet",
-        "x-order": 35,
+        "x-order": 37,
         "x-category": "Historical Trends & Robust Averages",
         "security": [
           {
@@ -2137,7 +2137,7 @@
         "summary": "Get cross-venue traded volume for an asset",
         "x-question": "What is the total cross-venue trading volume for an asset over time?",
         "x-example": "GET /volumes/XLM?window=24h&network=testnet",
-        "x-order": 10,
+        "x-order": 12,
         "x-category": "Market Overview & Liquidity Pools",
         "description": "Sums traded volume for `asset` across every pair and venue it appears in, measured in the asset's own units, with a per-venue breakdown and trade-size statistics. `volumeConcentration` is the Herfindahl-Hirschman Index (HHI), calculated as the sum of squared per-trade volume shares across the selected venues and window; it ranges from 0 to 1, with 1 meaning all volume came from one trade. A missing statistic is `null` when there are no trades or no positive volume. Provenance reports the venues, positive-volume trade count, observed sample count, most recent trade timestamp and its age at `endTime`. Venues are classified as primary markets or aggregators in the registry. `totals.net` / `netVolume` sum primary markets only, while `totals.gross` / `grossVolume` include aggregator venues (e.g. Aquarius) that re-report trades settled elsewhere. `totalVolume` and `tradeCount` report the net figures; the trade-size statistics and provenance cover every venue (gross).",
         "security": [],
@@ -2208,7 +2208,7 @@
       "get": {
         "x-question": "How much of the market can Lens actually see?",
         "x-example": "GET /coverage?network=testnet",
-        "x-order": 29,
+        "x-order": 31,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getOverallCoverage",
         "summary": "Get overall market coverage ratio and cross-venue activity",
@@ -2262,7 +2262,7 @@
       "get": {
         "x-question": "For one asset, which venues is Lens watching and how much do they cover?",
         "x-example": "GET /coverage/XLM?network=testnet",
-        "x-order": 30,
+        "x-order": 32,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getAssetCoverage",
         "summary": "Get market coverage ratio and venue breakdown for a specific asset",
@@ -2327,7 +2327,7 @@
         "summary": "Get the tightest per-venue bid/ask spread for an asset",
         "x-question": "Which venues offer the tightest bid/ask spread for an asset right now?",
         "x-example": "GET /spreads/XLM?window=5m&network=testnet",
-        "x-order": 16,
+        "x-order": 18,
         "x-category": "Comparative Analytics & Market Quality",
         "description": "Reports, for every (venue, pair) that quoted `asset` inside the window, the observed low, high and spread in basis points, tightest first. The spread is the dispersion of recent prints, not a resting order book's top-of-book gap.",
         "security": [],
@@ -2399,7 +2399,7 @@
       "get": {
         "x-question": "What are the supply and borrow rates for one asset on each lending venue?",
         "x-example": "GET /rates/USDC?network=testnet",
-        "x-order": 15,
+        "x-order": 17,
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getLendingRates",
         "summary": "Get supply and borrow rates for an asset across lending venues",
@@ -2446,7 +2446,7 @@
       "get": {
         "x-question": "The venues disagree on this pair — which one is the outlier?",
         "x-example": "GET /dispersion/XLM/USDC?network=testnet",
-        "x-order": 26,
+        "x-order": 28,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPairDispersion",
         "summary": "Get venue price dispersion and outlier attribution for a pair",
@@ -2557,7 +2557,7 @@
       "get": {
         "x-question": "Which pairs disagree most across venues right now?",
         "x-example": "GET /dispersion?network=testnet",
-        "x-order": 25,
+        "x-order": 27,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "listDispersion",
         "summary": "List cross-venue dispersion across watched pairs",
@@ -2652,7 +2652,7 @@
         "description": "Returns 200 even when both Lens and all configured oracles have no data for the asset. The `status` field distinguishes \"no_data\" from \"aligned\", \"minor_deviation\", \"major_deviation\" and \"partial\" (one source only). The response includes both the legacy `reflector` field for backward compatibility and an `oracles` array listing every configured source.",
         "x-question": "How do Lens aggregated prices compare against external oracles?",
         "x-example": "GET /compare/XLM?network=testnet",
-        "x-order": 20,
+        "x-order": 22,
         "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
@@ -2695,7 +2695,7 @@
       "get": {
         "x-question": "How has the gap between an oracle and the market moved over time?",
         "x-example": "GET /compare/XLM/history?window=7d&network=testnet",
-        "x-order": 22,
+        "x-order": 24,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "compareAssetHistory",
         "summary": "Query historical oracle comparison series and window summary statistics",
@@ -2814,7 +2814,7 @@
       "get": {
         "x-question": "Over the past week, which oracle tracked the market most closely?",
         "x-example": "GET /compare/XLM/summary?window=7d&network=testnet",
-        "x-order": 21,
+        "x-order": 23,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "compareAssetSummary",
         "summary": "Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band)",
@@ -2935,7 +2935,7 @@
         "summary": "Screen pairs by volume, change, liquidity and price",
         "x-question": "Which pairs currently have the highest volume, price changes, or liquidity?",
         "x-example": "GET /screener?sortBy=volume&order=desc&limit=20&network=testnet",
-        "x-order": 17,
+        "x-order": 19,
         "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
@@ -3067,7 +3067,7 @@
       "get": {
         "x-question": "What moved most today, up, down, or by volume?",
         "x-example": "GET /movers?window=24h&limit=10&network=testnet",
-        "x-order": 18,
+        "x-order": 20,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getMovers",
         "summary": "Get biggest gainers, biggest losers, and volume movers",
@@ -3121,7 +3121,7 @@
         "summary": "Get peg-deviation statistics for an asset against a target",
         "x-question": "How closely is a pegged or wrapped asset tracking its peg target?",
         "x-example": "GET /benchmark/USDC?target=USD&network=testnet",
-        "x-order": 19,
+        "x-order": 21,
         "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
@@ -3183,7 +3183,7 @@
       "get": {
         "x-question": "Is this stablecoin still holding its peg?",
         "x-example": "GET /pegs?network=testnet",
-        "x-order": 28,
+        "x-order": 30,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getPegs",
         "summary": "Get peg deviation and window statistics for all configured pegged assets",
@@ -3223,7 +3223,7 @@
         "description": "Returns 200 even when one or more assets have no price data. The response body will contain an `error` field listing the missing assets and `reason: \"missing_price_data\"` rather than computing a partial basket price. A 404 would imply the assets themselves are invalid.",
         "x-question": "What is the weighted price of a custom portfolio basket of assets?",
         "x-example": "GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet",
-        "x-order": 23,
+        "x-order": 25,
         "x-category": "Comparative Analytics & Market Quality",
         "security": [],
         "parameters": [
@@ -3293,7 +3293,7 @@
       "get": {
         "x-question": "Do these assets move together, or are they genuinely diversified?",
         "x-example": "GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet",
-        "x-order": 24,
+        "x-order": 26,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getCorrelation",
         "summary": "Compute price correlation matrix across a basket of assets over a window",
@@ -3370,7 +3370,7 @@
         "summary": "Browse the x402 Bazaar catalog of discoverable resources",
         "x-question": "What payable endpoints and datasets are discoverable in the x402 Bazaar catalog?",
         "x-example": "GET /discovery/resources?network=testnet",
-        "x-order": 44,
+        "x-order": 46,
         "x-category": "Automation, Discovery & Payments",
         "security": [],
         "parameters": [
@@ -3460,7 +3460,7 @@
       "get": {
         "x-question": "Can I find the right endpoint by describing what I want in plain language?",
         "x-example": "GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5",
-        "x-order": 45,
+        "x-order": 47,
         "x-category": "Automation, Discovery & Payments",
         "operationId": "searchDiscoveryResources",
         "summary": "Natural language search with ranking and quality evaluation for discoverable resources",
@@ -3515,7 +3515,7 @@
         "summary": "Subscribe to a price-threshold webhook",
         "x-question": "How can my application receive push alerts when a price crosses a threshold?",
         "x-example": "POST /webhooks",
-        "x-order": 49,
+        "x-order": 51,
         "x-category": "Automation, Discovery & Payments",
         "description": "Registers an HTTPS endpoint to be called when the pair's price crosses `threshold` in the given `direction`. The response contains the signing secret exactly once.",
         "security": [],
@@ -3587,7 +3587,7 @@
         "summary": "Delete a webhook subscription",
         "x-question": "How do I cancel an existing price threshold alert webhook?",
         "x-example": "DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet",
-        "x-order": 50,
+        "x-order": 52,
         "x-category": "Automation, Discovery & Payments",
         "security": [],
         "parameters": [
@@ -3616,7 +3616,7 @@
         "summary": "Get usage and quota for the calling API key",
         "x-question": "How many requests have I made and what is my remaining API key quota?",
         "x-example": "GET /usage/me",
-        "x-order": 42,
+        "x-order": 44,
         "x-category": "System Health & Venue Infrastructure",
         "security": [
           {
@@ -3652,7 +3652,7 @@
       "get": {
         "x-question": "How much of my API quota have I used?",
         "x-example": "GET /usage",
-        "x-order": 43,
+        "x-order": 45,
         "x-category": "System Health & Venue Infrastructure",
         "operationId": "getCallerUsage",
         "summary": "Get usage and quota for the calling API key (alias for /usage/me)",
@@ -3692,7 +3692,7 @@
         "summary": "List the payment kinds and extensions this facilitator supports",
         "x-question": "Which payment schemes and token mechanisms does this x402 facilitator support?",
         "x-example": "GET /supported",
-        "x-order": 46,
+        "x-order": 48,
         "x-category": "Automation, Discovery & Payments",
         "security": [],
         "responses": {
@@ -3720,7 +3720,7 @@
         "summary": "Verify an x402 payment payload",
         "x-question": "How do I verify a signed x402 payment payload before fulfilling a service?",
         "x-example": "POST /verify",
-        "x-order": 47,
+        "x-order": 49,
         "x-category": "Automation, Discovery & Payments",
         "security": [],
         "requestBody": {
@@ -3773,7 +3773,7 @@
         "summary": "Settle an x402 payment (idempotent)",
         "x-question": "How do I submit and settle an x402 payment on the Stellar network?",
         "x-example": "POST /settle",
-        "x-order": 48,
+        "x-order": 50,
         "x-category": "Automation, Discovery & Payments",
         "description": "Submits the payment transaction and records the attempt keyed on its transaction hash. Retrying the same payload replays the stored answer instead of paying twice.",
         "security": [],
@@ -3817,7 +3817,7 @@
         "summary": "Execute a GraphQL query over HTTP GET",
         "x-question": "How do I query multiple prices, routes, and analytics in a single GET request?",
         "x-example": "GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D",
-        "x-order": 36,
+        "x-order": 38,
         "x-category": "Multi-Query & Streaming",
         "security": [],
         "parameters": [
@@ -3870,7 +3870,7 @@
         "summary": "Execute a GraphQL query, mutation or subscription handshake",
         "x-question": "How do I execute complex GraphQL operations or initiate WebSocket subscriptions?",
         "x-example": "POST /graphql",
-        "x-order": 37,
+        "x-order": 39,
         "x-category": "Multi-Query & Streaming",
         "security": [
           {
@@ -3922,7 +3922,7 @@
       "get": {
         "x-question": "What can I earn lending, and what does borrowing cost, across venues?",
         "x-example": "GET /rates?network=testnet",
-        "x-order": 14,
+        "x-order": 16,
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getLendingRates",
         "summary": "Query latest lending and borrow rates across pools",
@@ -3984,6 +3984,124 @@
           },
           "400": {
             "description": "Invalid parameters"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "x-question": "Which assets does Lens track, and which issuers are verified?",
+        "x-example": "GET /assets?network=testnet",
+        "x-order": 10,
+        "x-category": "Market Overview & Liquidity Pools",
+        "operationId": "listAssets",
+        "summary": "List tracked assets with metadata and verification status",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "description": "Filter assets by asset code (case-insensitive).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verified",
+            "in": "query",
+            "required": false,
+            "description": "Filter assets by verification status.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tracked assets with metadata and verification status",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/assets/{code}": {
+      "get": {
+        "x-question": "Who issues this asset, and can I trust that issuer?",
+        "x-example": "GET /assets/USDC?network=testnet",
+        "x-order": 11,
+        "x-category": "Market Overview & Liquidity Pools",
+        "operationId": "getAsset",
+        "summary": "Get metadata and verification status for a specific asset",
+        "security": [],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "description": "Asset code (e.g. XLM, USDC) or canonical identifier (CODE:ISSUER).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "name": "issuer",
+            "in": "query",
+            "required": false,
+            "description": "Full 56-character Stellar issuer account address (e.g. GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asset metadata with verification status and date checked",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid asset code or parameters"
+          },
+          "404": {
+            "description": "Asset not found on the specified network"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -8138,6 +8256,293 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PegReport"
+            }
+          }
+        }
+      },
+      "AssetMetadata": {
+        "type": "object",
+        "required": [
+          "code",
+          "issuer",
+          "name",
+          "homeDomain",
+          "domain",
+          "decimals",
+          "status",
+          "verified",
+          "checkedAt",
+          "dateChecked"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "USDC"
+          },
+          "issuer": {
+            "type": "string",
+            "nullable": true,
+            "example": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "USD Coin"
+          },
+          "homeDomain": {
+            "type": "string",
+            "nullable": true,
+            "example": "circle.com"
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "example": "circle.com"
+          },
+          "decimals": {
+            "type": "integer",
+            "example": 7
+          },
+          "displayDecimals": {
+            "type": "integer",
+            "nullable": true,
+            "example": 2
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "example": "verified"
+          },
+          "verified": {
+            "type": "boolean",
+            "example": true
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dateChecked": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "contractId": {
+            "type": "string",
+            "nullable": true,
+            "example": "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
+          },
+          "tomlUrl": {
+            "type": "string",
+            "nullable": true,
+            "example": "https://circle.com/.well-known/stellar.toml"
+          },
+          "verification": {
+            "type": "object",
+            "required": [
+              "status",
+              "verified",
+              "checkedAt",
+              "tomlUrl"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "verified",
+                  "unverified"
+                ]
+              },
+              "verified": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tomlUrl": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "source",
+              "checkedAt",
+              "tomlUrl",
+              "verified"
+            ],
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tomlUrl": {
+                "type": "string",
+                "nullable": true
+              },
+              "verified": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "AssetsResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "assets"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetMetadata"
+            }
+          }
+        }
+      },
+      "AssetDetailResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "code",
+          "issuer",
+          "name",
+          "homeDomain",
+          "domain",
+          "decimals",
+          "status",
+          "verified",
+          "checkedAt",
+          "dateChecked"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "homeDomain": {
+            "type": "string",
+            "nullable": true
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "displayDecimals": {
+            "type": "integer",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ]
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dateChecked": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "contractId": {
+            "type": "string",
+            "nullable": true
+          },
+          "tomlUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "type": "object",
+            "required": [
+              "status",
+              "verified",
+              "checkedAt",
+              "tomlUrl"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "verified",
+                  "unverified"
+                ]
+              },
+              "verified": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tomlUrl": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "source",
+              "checkedAt",
+              "tomlUrl",
+              "verified"
+            ],
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tomlUrl": {
+                "type": "string",
+                "nullable": true
+              },
+              "verified": {
+                "type": "boolean"
+              }
             }
           }
         }
