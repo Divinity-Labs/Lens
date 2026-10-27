@@ -1009,6 +1009,32 @@
                           "timestamp": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "window": {
+                            "type": "string",
+                            "enum": [
+                              "24h"
+                            ],
+                            "description": "The window every estimate below is measured over."
+                          },
+                          "feeAprPct": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "24h fee return annualised by 365. Null when the pool has no value or no AMM volume in the window, which is an unknown return rather than a zero one."
+                          },
+                          "impermanentLossPct": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "Constant-product divergence loss over the window, already signed: zero when the price has not moved and negative otherwise. Null when the window has no opening price."
+                          },
+                          "netReturn24hPct": {
+                            "type": "number",
+                            "nullable": true,
+                            "description": "24h fee return plus the (negative) divergence loss. Null when either part is unknown."
+                          },
+                          "estimate": {
+                            "type": "boolean",
+                            "description": "Always true. These are floating-point estimates, not settled values, and are not affected by ?decimalFormat=string."
                           }
                         }
                       }
