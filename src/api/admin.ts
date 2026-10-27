@@ -6,6 +6,12 @@ import { admin_auth_failures_total } from '../metrics'
 import { formatValidationError } from '../validation'
 import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
 import { copyUsageHistory } from '../x402/metering'
+import {
+  connectionRegistry,
+  publishRevocation,
+  CLOSE_CODE_KEY_REVOKED,
+  CLOSE_REASON_KEY_REVOKED,
+} from '../ws/connectionRegistry'
 
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
@@ -313,6 +319,17 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       // Drop the cached lookup so the revoke takes effect immediately on this
       // instance (Issue #495). Other instances pick it up within the cache TTL.
       invalidateApiKey(existing.hash)
+
+      // Tear down any live connections this key holds on this instance, then
+      // tell the other instances to do the same (#503).
+      if (existing.hash) {
+        connectionRegistry.closeConnectionsForKey(
+          existing.hash,
+          CLOSE_CODE_KEY_REVOKED,
+          CLOSE_REASON_KEY_REVOKED,
+        )
+        await publishRevocation(existing.hash)
+      }
 
       return reply.status(200).send({ id, revoked: true })
     },
