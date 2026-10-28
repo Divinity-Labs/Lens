@@ -690,17 +690,16 @@ export const resolvers = {
       const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
-                volume, trade_count, open_price, close_price,
-                high_price, low_price
-         FROM price_aggregates
+        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float, volume::float, trade_count, open_price::float, close_price::float, high_price::float, low_price::float
+         FROM price_buckets
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
          LIMIT ${limitParam}`,
         params
       )
-      return result.rows.map(r => ({
-        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
+
+      return result.rows.map((r: any) => ({
+        bucket: new Date(r.bucket).toISOString(),
         window: r.window,
         vwap: formatPrice(r.vwap),
         sdexVwap: formatPrice(r.sdex_vwap),
@@ -960,20 +959,12 @@ export const resolvers = {
 }
 
 export async function registerGraphQL(app: FastifyInstance) {
-  const maxQueryDepth = getMaxGraphQLQueryDepth()
-
-  await app.register(mercurius, {
+  app.register(mercurius, {
     schema,
-    resolvers,
-    graphiql: true,
-    // Mercurius 16.9.0 supplies the selected operation name to this callback.
-    // Its built-in queryDepth option neither expands fragments nor distinguishes
-    // an unselected operation in a multi-operation document. A callback cannot
-    // be used with Mercurius's document cache, so disable that cache rather
-    // than weakening the operation-aware validation policy.
-    cache: false,
-    validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
+    resolvers: resolvers as any,
+    subscription: true,
     errorFormatter: formatGraphQLErrors,
+    validationRules: queryDepthValidationRules(getMaxGraphQLQueryDepth()),
     path: '/graphql',
     subscription: {
       // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
