@@ -1,13 +1,12 @@
 # Database Schema & Migration Strategy
 
-## Current state: `prisma migrate`
-
+## Current state: `prisma migrate`(
 > **Superseded (#233).** `prisma/` now contains a `migrations/` directory with a
 > committed baseline, CI fails on drift between `schema.prisma` and the
 > migrations, and both startup and deploys run `prisma migrate deploy`.
 > `prisma db push` is no longer a `package.json` script and must not be run
 > against any environment. See
-> [`docs/database-migrations.md`](database-migrations.md). The rest of this
+> [`docs/database-migrations.md](database-migrations.md). The rest of this
 > section records why `db push` was used during early development.
 
 ### Architectural Rationale
@@ -19,15 +18,45 @@
    Running complex automated migrations inside container entrypoints poses locking hazards when running horizontally scaled nodes against shared PostgreSQL databases. Decoupling schema validation from schema migration prevents distributed boot race conditions.
 
 3. **Time-Series Partitioning Compatibility:**
-   Lens's high-frequency tables (such as `price_points` and `price_aggregates`) require composite primary keys (e.g. `[id, timestamp]`) and time-series optimizations.
+   Lens's high-frequency tables (such as `price_points` and `price_aggregates`) require composite primary keys (e.g. `[id, timestamp]) and time-series optimizations.
 
 ## Startup Verification Guard (#352)
 
 To ensure that running code never crashes at request time due to missing columns or unapplied schema changes:
 - `src/db/schemaVerify.ts` runs on boot via `assertSchemaValid()` / `verifyDatabaseSchema()`.
 - It performs a low-overhead inspection against PostgreSQL `information_schema.tables` and `information_schema.columns`.
-- If an expected table or column is absent, it fails fast and names the missing entities.
+-  If an expected table or column is absent, it fails fast and names the missing entities.
 - `/ready` and `/status` can query `verifyDatabaseSchema()` to isolate instances before they receive live traffic.
+
+## Price Audit Records (#audit)
+
+Every published aggregate writes one bounded audit record so a disputed price can be reconstructed from the inputs that produced it.
+
+### Model: `price_audit_records`
+
+- `id` — primary key.
+- `network` — chain the aggregate was computed for. Every lookup leads with this predicate; a query without it reads both chains and cannot use the index.
+- `pairKey` — pair the aggregate covers.
+- `timestamp` — the aggregate's timestamp; the record is retrievable for any past timestamp via `(network, pairKey, timestamp)`.
+- `method` — aggregation method used (e.g. `median`, `vwap`).
+- `params` — JSON of the method's parameters (trim window, outlier bounds, weights).
+- `inputsUsed` — JSON array of the `price_points` rows the aggregate consumed, each with its `id`, `timestamp`, `source`, `price`, `baseVolume`, `counterVolume`.
+- `inputsRejected` — JSON array of rejected inputs, each with the same identifying fields plus a `reason` (e.g. `stale`, `outlier`, `zero_volume`, `wrong_network`).
+- `price` — the published aggregate, `Decimal(36,18)`, matching `price_points.price`.
+
+### Bounded size
+
+Audit records are written on every aggregation, so their growth is capped:
+
+-  `inputsUsed` and `inputsRejected` are truncated to a fixed maximum number of entries per record (the top contributors by volume, with the remainder counted in a `truncated` field). The cap is a constant in `src/pricing/aggregate.ts`; per-record size is therefore O
+cap), independent of how many inputs the aggregation saw.
+-  The cap is enforced when the record is built, before it is written, so a single aggregation can never produce an unbounded row regardless of how many `price_points` rows it read.
+-  Records older than the retention window are pruned by a scheduled job (`pruneAuditRecords`); the window is a documented constant alongside the job, so total storage is bounded by (aggregations per retention window × per-record cap).
+-  The record stores identifiers and reasons, not full source payloads, so per-record size stays proportional to the input cap rather than to venue response size.
+
+### Reconstruction
+
+`GET /prices/:network/:pairKey/audit?timestamp=<iso>` returns the audit record for a past timestamp, including the used and rejected inputs with reasons, so a dispute can be settled by replaying the recorded method and parameters against the recorded inputs.
 
 ## Path Forward: Transitioning to `prisma migrate`
 
