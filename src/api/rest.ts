@@ -17,21 +17,15 @@ import {
   priceResponseSchema,
   routeResponseSchema,
   historyResponseSchema,
-  poolsResponseSchema,
   depthResponseSchema,
   impactResponseSchema,
   installResponseValidation,
 } from './schemas'
+import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
-import {
-  POOLS_DEFAULT_LIMIT,
-  POOLS_MAX_LIMIT,
-  decodeCursor,
-  encodeCursor,
-  parseLimit,
-  slicePage,
-} from '../pagination'
+import { getRetentionPath } from '../jobs/retentionStatus'
 
+import { apiError } from '../errors'
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
 }
@@ -182,6 +176,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         lastIndexedLedger,
         lastProcessedAt,
         ingestLagSeconds,
+        retentionPath: getRetentionPath(),
         // #508: whether the admin surface is usable at all, so an operator
         // can tell "I sent the wrong token" from "this deployment has no
         // ADMIN_TOKEN" without guessing from a 401. It reports only that the
@@ -211,7 +206,12 @@ export async function registerRESTRoutes(app: FastifyInstance) {
   // GET /price/:assetA/:assetB
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { decimals?: string; decimalFormat?: string }
+    Querystring: {
+      decimals?: string
+      decimalFormat?: string
+      staleThreshold?: string
+      staleThresholdSeconds?: string
+    }
   }>(
     '/price/:assetA/:assetB',
     { config: { scope: 'read:prices' }, schema: { response: { 200: priceResponseSchema } } },
@@ -220,17 +220,29 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+
+      const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
+      let staleThreshold: number | undefined
+      if (rawThreshold !== undefined) {
+        staleThreshold = parseInt(rawThreshold, 10)
+        if (isNaN(staleThreshold) || staleThreshold <= 0) {
+          return reply.status(400).send(apiError('invalid_parameter', 'staleThreshold must be a positive integer'))
+        }
+      }
 
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
       }
 
-      // Cache key is network-scoped and format-isolated so number and string payloads never collide.
-      const cacheKey = decimalFormat === 'string'
-        ? `${network}:${pair.pairKey}:decimals_string`
-        : `${network}:${pair.pairKey}`
+      // Cache key is network-scoped and format-isolated so number and string payloads never collide,
+      // and scoped to staleThreshold if customized.
+      const cacheParts = [network, pair.pairKey]
+      if (decimalFormat === 'string') cacheParts.push('decimals_string')
+      if (staleThreshold !== undefined) cacheParts.push(`stale_${staleThreshold}`)
+      const cacheKey = cacheParts.join(':')
+
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
         try {
@@ -239,7 +251,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pair.pairKey, network, { decimalFormat })
+      const agg = await getAggregatedPrice(pair.pairKey, network, { decimalFormat, staleThresholdSeconds: staleThreshold })
       const route = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, 1000, network)
       const result = {
         assetA: pair.assetA.code,
@@ -269,10 +281,10 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const amount = parseFloat(req.query.amount ?? '1000')
       // Validate amount before the pair check: a malformed request parameter
       // is a 400 regardless of whether the pair is watched.
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send(apiError('invalid_parameter', 'amount must be a positive number'))
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const decimalFormat = resolveDecimalFormat(req)
       const routeInfo = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
@@ -299,17 +311,17 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
       const window = req.query.window ?? '1h'
       const limit = Math.min(parseInt(req.query.limit ?? String(HISTORY_DEFAULT_LIMIT), 10), HISTORY_MAX_LIMIT)
       const pairKey = makePairKey(assetA, assetB)
-      const network = req.network ?? activeNetwork
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
       }
 
       if (!['1m', '5m', '1h', '24h'].includes(window)) {
-        return reply.status(400).send({ error: 'window must be one of: 1m, 5m, 1h, 24h' })
+        return reply.status(400).send(apiError('bad_window', 'window must be one of: 1m, 5m, 1h, 24h'))
       }
 
       const result = await pgPool.query(
@@ -322,6 +334,25 @@ export async function registerRESTRoutes(app: FastifyInstance) {
          LIMIT $4`,
         [pairKey, window, network, limit]
       )
+
+      const windowMs: Record<string, number> = {
+        '1m': 60_000,
+        '5m': 300_000,
+        '1h': 3600_000,
+        '24h': 86400_000,
+      }
+      const span = (windowMs[window] ?? 3600_000) * limit
+      const now = new Date()
+      const queryStart = new Date(now.getTime() - span)
+
+      const overlappingGaps = await findOverlappingGaps({
+        network,
+        pair: pairKey,
+        start: queryStart,
+        end: now,
+      })
+
+      const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
 
       return {
         pairKey,
@@ -339,98 +370,14 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           high: formatDecimal(r.high_price, decimalFormat),
           low: formatDecimal(r.low_price, decimalFormat),
         })),
+        ...gapDeclaration,
       }
     }
   )
 
-  // GET /pools?cursor=&limit=
-  //
-  // Latest snapshot per pool for one network, without reading history. The pool
-  // ids are discovered with a recursive "skip scan" over the
-  // (network, pool_id, timestamp DESC) index (jump to the next distinct pool_id
-  // each step), then one LIMIT 1 index probe per pool fetches its newest row.
-  // Cost is O(pools x log n); the old DISTINCT ON sorted every row of every
-  // network. A quiet pool is kept with its real `timestamp`, never dropped.
-  //
-  // Paginated keyset-style on pool_id ASC (default limit 50, max 200): the
-  // cursor carries the last page's pool_id, and the skip scan's seed query
-  // resumes strictly after it, so a pool inserted mid-paging cannot shift a
-  // page boundary the way an OFFSET would.
-  app.get<{ Querystring: { cursor?: string; limit?: string } }>(
-    '/pools',
-    { config: { scope: 'read:prices' }, schema: { response: { 200: poolsResponseSchema } } },
-    async (req, reply) => {
-      const network = req.network ?? activeNetwork
-      const decimalFormat = resolveDecimalFormat(req)
-      if (decimalFormat === 'string') {
-        reply.header('x-decimal-format', 'string')
-      }
-
-      const parsedLimit = parseLimit(req.query.limit, POOLS_DEFAULT_LIMIT, POOLS_MAX_LIMIT)
-      if ('error' in parsedLimit) {
-        return reply.status(400).send({ error: parsedLimit.error })
-      }
-      const { limit } = parsedLimit
-
-      const params: unknown[] = [network]
-      let seedFilter = ''
-      if (req.query.cursor) {
-        const decoded = decodeCursor(req.query.cursor)
-        if (decoded === null) {
-          return reply.status(400).send({ error: 'Invalid cursor format' })
-        }
-        if (decoded !== 'skip') {
-          params.push(decoded.value)
-          seedFilter = ` AND pool_id > $${params.length}`
-        }
-      }
-      params.push(limit + 1) // Fetch one extra to determine hasMore
-
-      const result = await pgPool.query(
-        `WITH RECURSIVE ids AS (
-           (SELECT pool_id FROM pool_snapshots WHERE network = $1${seedFilter} ORDER BY pool_id LIMIT 1)
-           UNION ALL
-           SELECT (SELECT s.pool_id FROM pool_snapshots s
-                    WHERE s.network = $1 AND s.pool_id > ids.pool_id
-                    ORDER BY s.pool_id LIMIT 1)
-             FROM ids
-            WHERE ids.pool_id IS NOT NULL
-         )
-         SELECT l.pool_id, l.asset_a, l.asset_b,
-                l.reserve_a::numeric, l.reserve_b::numeric, l.spot_price::numeric, l.fee_bp, l.timestamp
-           FROM ids
-          CROSS JOIN LATERAL (
-                SELECT * FROM pool_snapshots s
-                 WHERE s.network = $1 AND s.pool_id = ids.pool_id
-                 ORDER BY s.timestamp DESC
-                 LIMIT 1
-               ) l
-          WHERE ids.pool_id IS NOT NULL
-          ORDER BY l.pool_id ASC
-          LIMIT $${params.length}`,
-        params
-      )
-
-      const { data, hasMore } = slicePage(result.rows, limit)
-      const nextCursor =
-        hasMore && data.length > 0 ? encodeCursor(data[data.length - 1].pool_id, data[data.length - 1].pool_id) : null
-
-      return {
-        pools: data.map(r => ({
-          pool_id: r.pool_id,
-          asset_a: r.asset_a,
-          asset_b: r.asset_b,
-          reserve_a: formatDecimal(r.reserve_a, decimalFormat),
-          reserve_b: formatDecimal(r.reserve_b, decimalFormat),
-          spot_price: formatDecimal(r.spot_price, decimalFormat),
-          fee_bp: r.fee_bp !== null && r.fee_bp !== undefined ? parseInt(String(r.fee_bp), 10) : null,
-          timestamp: r.timestamp,
-        })),
-        nextCursor,
-        hasMore,
-      }
-    }
-  )
+  // GET /pools?cursor=&limit= lives in src/routes/pools.ts, next to /pairs and
+  // /screener, so the `lens_get_pools` MCP tool runs the same listPools this
+  // route does; registerPoolsRoutes() is called from app.ts.
 
   // GET /price/:assetA/:assetB/depth?amount=1000
   app.get<{
@@ -451,8 +398,8 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
 
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send({ error: 'amount must be a positive number' })
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      if (isNaN(amount) || amount <= 0) return reply.status(400).send(apiError('invalid_parameter', 'amount must be a positive number'))
 
       // Depth reads are network-scoped on both legs (pool_snapshots and the
       // price_points subquery that names this pair's pools), so a mainnet pair
@@ -489,7 +436,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send({ error: `Pair ${assetA}/${assetB} not watched on ${network}` })
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const thresholds = req.query.thresholds
         ? req.query.thresholds.split(',').map(Number)
@@ -502,11 +449,11 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         thresholds.some(value => !Number.isFinite(value) || value <= 0) ||
         !Number.isFinite(liquidityFraction) || liquidityFraction <= 0 || liquidityFraction > 1
       ) {
-        return reply.status(400).send({ error: 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1' })
+        return reply.status(400).send(apiError('invalid_parameter', 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1'))
       }
 
       const impact = await getImpact(pair.pairKey, { thresholds, liquidityFraction }, network)
-      if (!impact) return reply.status(404).send({ error: `No AMM liquidity available for ${assetA}/${assetB}` })
+      if (!impact) return reply.status(404).send(apiError('unknown_pair', `No AMM liquidity available for ${assetA}/${assetB}`))
       return { assetA: pair.assetA.code, assetB: pair.assetB.code, pairKey: pair.pairKey, ...impact }
     }
   )

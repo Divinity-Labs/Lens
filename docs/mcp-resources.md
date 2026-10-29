@@ -3,7 +3,8 @@
 The Lens MCP server (`src/mcp/server.ts`) offers an agent two kinds of thing:
 
 - **Tools** — functions it calls to *do* something: `bazaar_search`,
-  `paid_call`, `lens_get_price`.
+  `paid_call`, `lens_get_price`, and where Lens's own data is reachable the
+  three data tools `lens_list_pairs`, `lens_get_pools` and `lens_screen_pairs`.
 - **Resources** — read-only content it attaches to its context once, instead of
   re-fetching by calling a tool every turn.
 
@@ -62,7 +63,10 @@ for the same reason `createLensPriceQueries` lives in its own module: a process
 that has not opted into Lens's own price data should not pay for importing `pg`
 and Prisma just to list what the service watches. `lens://pairs` therefore
 reports the *declared* pair list for the network, not the process-wide runtime
-registry, matching what `lens_get_price` accepts.
+registry, matching what `lens_get_price` accepts. The `lens_list_pairs` tool is
+the other half of that: it runs `GET /pairs`'s own listing, including pairs
+added at runtime, one bounded page with a cursor at a time — which is why the
+resource stays a cheap, cacheable snapshot instead of a paginated read.
 
 A host that does hold that state can inject its own descriptors, exactly as it
 injects `priceQueries`:

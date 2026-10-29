@@ -161,6 +161,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/premium/{assetA}/{assetB}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get on-chain vs CEX price premium and spread
+         * @description Returns the on-chain price, the best CEX price, the spread in basis points, both sources, and both timestamps. Refuses to answer with a 400 when either side is older than the configured staleness bound.
+         */
+        get: operations["getPremium"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/price/{assetA}/{assetB}/route": {
         parameters: {
             query?: never;
@@ -204,7 +224,7 @@ export interface paths {
         };
         /**
          * Get price history buckets
-         * @description Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18 decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
+         * @description Returns price aggregate buckets (1m, 5m, 1h, 24h). Buckets are aggregated with exact numeric arithmetic in the database, so a sum does not depend on the order rows were summed in; values are narrowed to JSON numbers at the edge.
          */
         get: operations["getPriceHistory"];
         put?: never;
@@ -410,6 +430,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get overall market coverage ratio and cross-venue activity
+         * @description Compares indexed trade activity in Lens across all tracked assets against total network activity from Horizon over a time window.
+         */
+        get: operations["getOverallCoverage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/coverage/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get market coverage ratio and venue breakdown for a specific asset
+         * @description Compares indexed trade volume and count for a specific asset against total network activity from Horizon over a time window.
+         */
+        get: operations["getAssetCoverage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/spreads/{asset}": {
         parameters: {
             query?: never;
@@ -511,6 +571,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/compare/{asset}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query historical oracle comparison series and window summary statistics */
+        get: operations["compareAssetHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compare/{asset}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band) */
+        get: operations["compareAssetSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/screener": {
         parameters: {
             query?: never;
@@ -557,6 +651,23 @@ export interface paths {
         };
         /** Get peg-deviation statistics for an asset against a target */
         get: operations["getBenchmark"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/pegs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get peg deviation and window statistics for all configured pegged assets */
+        get: operations["getPegs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -799,10 +910,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List tracked assets with metadata and verification status */
+        get: operations["listAssets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assets/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get metadata and verification status for a specific asset */
+        get: operations["getAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Stable machine-readable error code. Branch on this, never on `error`, which is human-readable.
+         * @enum {string}
+         */
+        ErrorCode: "missing_parameter" | "invalid_parameter" | "bad_network" | "bad_interval" | "bad_window" | "unsupported" | "unknown_pair" | "unwatched_pair" | "pair_already_watched" | "unauthorized" | "not_found" | "upstream_unavailable" | "internal_error" | "rate_limited" | "payment_required" | "payment_invalid" | "payment_verification_failed" | "quota_exceeded" | "admin_not_configured" | "admin_unauthorized" | "missing" | "malformed" | "unknown" | "revoked" | "expired" | "insufficient_scope" | "discovery_database_unavailable" | "VALIDATION_ERROR" | "UNSUPPORTED_PARAMETER" | "INVALID_NETWORK" | "STALE_DATA" | "INVALID_PRICE" | "INTERNAL_ERROR" | "DB_POOL_EXHAUSTED";
+        Error: {
+            /** @description Human-readable error message. Do not branch on it. */
+            error: string;
+            code: components["schemas"]["ErrorCode"];
+        };
         LendingRateEntry: {
             id: string;
             /** @example blend */
@@ -1064,6 +1219,17 @@ export interface components {
             /** @enum {string} */
             confidence?: "high" | "medium" | "low" | "unknown";
             lastTradeAgeSeconds?: number | null;
+            /**
+             * Format: date-time
+             * @description Observation timestamp of the newest input data point used.
+             */
+            newestInputObservedAt?: string | null;
+            /** @description Count of input data points used in the calculation. */
+            inputCount?: number;
+            /** @description Configured staleness threshold in seconds for this response. */
+            stalenessThresholdSeconds?: number;
+            /** @description True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds. */
+            stale?: boolean;
         };
         RouteHop: {
             assetIn: components["schemas"]["Asset"];
@@ -1235,6 +1401,19 @@ export interface components {
             outlierRejected: number;
             /** @enum {string} */
             filterMethod: "iqr" | "modified_zscore";
+            /**
+             * Format: date-time
+             * @description Observation timestamp of the newest input data point used.
+             */
+            newestInputObservedAt: string | null;
+            /** @description Count of input data points used in the calculation. */
+            inputCount: number;
+            /** @description Configured staleness threshold in seconds for this response. */
+            stalenessThresholdSeconds: number;
+            /** @description True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds. */
+            stale: boolean;
+            incomplete?: boolean;
+            gaps?: components["schemas"]["DataGap"][];
         };
         VwapResponse: {
             assetA: string;
@@ -1254,6 +1433,28 @@ export interface components {
             outlierRejected: number;
             /** @enum {string} */
             filterMethod: "iqr" | "modified_zscore";
+            /**
+             * Format: date-time
+             * @description Observation timestamp of the newest input data point used.
+             */
+            newestInputObservedAt: string | null;
+            /** @description Count of input data points used in the calculation. */
+            inputCount: number;
+            /** @description Configured staleness threshold in seconds for this response. */
+            stalenessThresholdSeconds: number;
+            /** @description True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds. */
+            stale: boolean;
+            incomplete?: boolean;
+            gaps?: components["schemas"]["DataGap"][];
+        };
+        DataGap: {
+            source: string;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            /** @enum {string} */
+            status: "open" | "permanent";
         };
         VolumeTotals: {
             /** @description Volume summed across primary markets only (excluding aggregator double-counts) */
@@ -1308,6 +1509,102 @@ export interface components {
                 latestTradeAt: string | null;
                 dataAgeSeconds: number | null;
             };
+        };
+        OverallCoverageResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            /** @enum {string} */
+            window: "24h" | "7d" | "30d";
+            /** Format: date-time */
+            startTime: string;
+            /** Format: date-time */
+            endTime: string;
+            overall: {
+                tradeCoverageRatio: number | null;
+                volumeCoverageRatio?: number | null;
+                totalIndexedTrades: number;
+                totalNetworkTrades: number;
+                assetsTracked: number;
+                assetsWithActivity: number;
+                /** @enum {string} */
+                status: "computed" | "unanswerable";
+                reason?: string | null;
+                venues: string[];
+            };
+            assets: {
+                asset: string;
+                coverageRatio: number | null;
+                indexedVolume: number;
+                networkVolume: number;
+                indexedTradeCount: number;
+                networkTradeCount: number;
+                /** @enum {string} */
+                status: "computed" | "unanswerable";
+                reason?: string | null;
+                byVenue: {
+                    [key: string]: number;
+                };
+                venues: string[];
+                /** Format: date-time */
+                lastIndexedTrade?: string | null;
+            }[];
+            provenance: {
+                venues: string[];
+                indexedSampleCount: number;
+                networkSampleCount: number;
+                /** Format: date-time */
+                asOf: string;
+                horizonUrl: string;
+                window: string;
+                /** Format: date-time */
+                startTime: string;
+                /** Format: date-time */
+                endTime: string;
+            };
+            methodology: string;
+        };
+        AssetCoverageResponse: {
+            asset: string;
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            /** @enum {string} */
+            window: "24h" | "7d" | "30d";
+            /** Format: date-time */
+            startTime: string;
+            /** Format: date-time */
+            endTime: string;
+            coverageRatio: number | null;
+            /** @enum {string} */
+            status: "computed" | "unanswerable";
+            reason?: string | null;
+            indexed: {
+                totalVolume: number;
+                tradeCount: number;
+                byVenue: {
+                    [key: string]: number;
+                };
+                venues: string[];
+            };
+            networkActivity?: {
+                totalVolume?: number;
+                tradeCount?: number;
+                source?: string;
+                horizonUrl?: string;
+            } | null;
+            tradeCoverageRatio?: number | null;
+            provenance: {
+                venues: string[];
+                indexedSampleCount: number;
+                networkSampleCount: number;
+                /** Format: date-time */
+                lastIndexedTrade?: string | null;
+                dataAgeSeconds?: number | null;
+                hasGap: boolean;
+                /** Format: date-time */
+                asOf: string;
+                horizonUrl: string;
+            };
+            methodology: string;
         };
         SpreadVenue: {
             venue: string;
@@ -1387,6 +1684,81 @@ export interface components {
                 status: "available" | "unreachable" | "empty" | "not_configured";
                 ageSeconds: number | null;
             }[];
+        };
+        OracleComparisonPoint: {
+            id?: string;
+            /** Format: date-time */
+            timestamp: string;
+            oracle: string;
+            lensPrice: number | null;
+            oraclePrice: number | null;
+            deviationPct: number | null;
+            status: string;
+            /** @description Venues that contributed to the Lens VWAP calculation */
+            venues: string[];
+            /** @description Number of trade observations in the Lens VWAP window */
+            sampleCount: number;
+            /** Format: date-time */
+            oracleTimestamp: string | null;
+            ageSeconds: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        OracleSummaryStatistic: {
+            oracle: string;
+            /** @description Mean percentage deviation from Lens VWAP across valid samples */
+            meanDeviationPct: number | null;
+            /** @description Maximum observed percentage deviation from Lens VWAP in the window */
+            worstDeviationPct: number | null;
+            /** @description Total seconds in the window where the oracle deviated beyond bandPct */
+            timeOutsideBandSeconds: number | null;
+            /** @description Alias for timeOutsideBandSeconds */
+            outsideBandSeconds?: number | null;
+            /** @description Percentage of window duration spent outside bandPct */
+            outsideBandPct: number | null;
+            /** @description Deviation percentage threshold applied for outside-band calculations */
+            bandPct: number;
+            /** @description Number of comparison samples in the window */
+            samples: number;
+            /** @description Distinct venues that contributed to Lens VWAPs across all samples */
+            venues: string[];
+            /** Format: date-time */
+            freshestComparison: string | null;
+            /** Format: date-time */
+            oldestComparison: string | null;
+            /** @description Latest status or alignment health */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
+        OracleComparisonHistoryResponse: {
+            asset: string;
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            window?: string | null;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            band: number;
+            points: components["schemas"]["OracleComparisonPoint"][];
+            summary: components["schemas"]["OracleSummaryStatistic"][];
+        } & {
+            [key: string]: unknown;
+        };
+        OracleComparisonSummaryResponse: {
+            asset: string;
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            window?: string | null;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            band: number;
+            summary: components["schemas"]["OracleSummaryStatistic"][];
+        } & {
+            [key: string]: unknown;
         };
         ScreenerRow: {
             pair_key?: string;
@@ -1605,6 +1977,139 @@ export interface components {
             }[];
         } & {
             [key: string]: unknown;
+        };
+        PremiumPricePoint: {
+            price: number;
+            source: string;
+            /** Format: date-time */
+            timestamp: string;
+        };
+        PremiumResponse: {
+            assetA: string;
+            assetB: string;
+            network: string;
+            onChain: components["schemas"]["PremiumPricePoint"];
+            cex: components["schemas"]["PremiumPricePoint"];
+            spreadBps: number;
+        };
+        PremiumErrorResponse: {
+            error: string;
+            code?: string;
+            /** @enum {string} */
+            stale?: "onChain" | "cex" | "both";
+            ageSeconds?: number | null;
+            onChainAgeSeconds?: number | null;
+            cexAgeSeconds?: number | null;
+        };
+        PegReport: {
+            asset: string;
+            code: string;
+            issuer: string | null;
+            target: string;
+            targetPrice: number;
+            pairKey: string | null;
+            currentPrice: number | null;
+            currentDeviationBps: number | null;
+            worstDeviationBps: number | null;
+            window: string;
+            provenance: {
+                venues: string[];
+                sampleCount: number;
+                freshnessSeconds: number | null;
+                /** Format: date-time */
+                lastSampleTimestamp: string | null;
+            };
+        };
+        PegsResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            pegs: components["schemas"]["PegReport"][];
+        };
+        AssetMetadata: {
+            /** @example USDC */
+            code: string;
+            /** @example GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN */
+            issuer: string | null;
+            /** @example USD Coin */
+            name: string | null;
+            /** @example circle.com */
+            homeDomain: string | null;
+            /** @example circle.com */
+            domain: string | null;
+            /** @example 7 */
+            decimals: number;
+            /** @example 2 */
+            displayDecimals?: number | null;
+            /**
+             * @example verified
+             * @enum {string}
+             */
+            status: "verified" | "unverified";
+            /** @example true */
+            verified: boolean;
+            /** Format: date-time */
+            checkedAt: string;
+            /** Format: date-time */
+            dateChecked: string;
+            /** @example CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75 */
+            contractId?: string | null;
+            /** @example https://circle.com/.well-known/stellar.toml */
+            tomlUrl?: string | null;
+            verification?: {
+                /** @enum {string} */
+                status: "verified" | "unverified";
+                verified: boolean;
+                /** Format: date-time */
+                checkedAt: string;
+                tomlUrl: string | null;
+            };
+            provenance?: {
+                source: string;
+                /** Format: date-time */
+                checkedAt: string;
+                tomlUrl: string | null;
+                verified: boolean;
+            };
+        };
+        AssetsResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            assets: components["schemas"]["AssetMetadata"][];
+        };
+        AssetDetailResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            code: string;
+            issuer: string | null;
+            name: string | null;
+            homeDomain: string | null;
+            domain: string | null;
+            decimals: number;
+            displayDecimals?: number | null;
+            /** @enum {string} */
+            status: "verified" | "unverified";
+            verified: boolean;
+            /** Format: date-time */
+            checkedAt: string;
+            /** Format: date-time */
+            dateChecked: string;
+            contractId?: string | null;
+            tomlUrl?: string | null;
+            verification?: {
+                /** @enum {string} */
+                status: "verified" | "unverified";
+                verified: boolean;
+                /** Format: date-time */
+                checkedAt: string;
+                tomlUrl: string | null;
+            };
+            provenance?: {
+                source: string;
+                /** Format: date-time */
+                checkedAt: string;
+                tomlUrl: string | null;
+                verified: boolean;
+            };
         };
     };
     responses: {
@@ -1894,6 +2399,11 @@ export interface operations {
                         /** Format: date-time */
                         lastProcessedAt?: string | null;
                         ingestLagSeconds?: number | null;
+                        /**
+                         * @description Which scheduler is pruning snapshots. `redis_queue` is the normal path; `in_process` means Redis was unreachable at boot and an hourly in-process timer took over, with a retry still running. Reported so that fallback is visible rather than inferred from the absence of queue activity.
+                         * @enum {string}
+                         */
+                        retentionPath?: "starting" | "redis_queue" | "in_process";
                         /** @description Whether this deployment has an ADMIN_TOKEN configured, so an operator can tell a rejected token from a disabled admin surface. Reports only that a token is set, never any part of its value. Admin routes answer 503 admin_not_configured when this is false. */
                         adminConfigured?: boolean;
                     };
@@ -1961,6 +2471,8 @@ export interface operations {
     getPrice: {
         parameters: {
             query?: {
+                /** @description Max age in seconds before the price is marked stale (overrides default staleness bound). */
+                staleThreshold?: number;
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
             };
@@ -1997,6 +2509,57 @@ export interface operations {
                 content?: never;
             };
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getPremium: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path: {
+                /** @example XLM */
+                assetA: string;
+                /** @example USDC */
+                assetB: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Premium and spread calculation */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PremiumResponse"];
+                };
+            };
+            /** @description Stale price data or unrecognised network */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PremiumErrorResponse"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        code: string;
+                    };
+                };
+            };
         };
     };
     getBestRoute: {
@@ -2102,6 +2665,8 @@ export interface operations {
                         /** @enum {string} */
                         network?: "testnet" | "mainnet";
                         window?: string;
+                        incomplete?: boolean;
+                        gaps?: components["schemas"]["DataGap"][];
                         buckets?: components["schemas"]["PriceBucket"][];
                     };
                 };
@@ -2150,6 +2715,19 @@ export interface operations {
                             fee_bp?: number;
                             /** Format: date-time */
                             timestamp?: string;
+                            /**
+                             * @description The window every estimate below is measured over.
+                             * @enum {string}
+                             */
+                            window?: "24h";
+                            /** @description 24h fee return annualised by 365. Null when the pool has no value or no AMM volume in the window, which is an unknown return rather than a zero one. */
+                            feeAprPct?: number | null;
+                            /** @description Constant-product divergence loss over the window, already signed: zero when the price has not moved and negative otherwise. Null when the window has no opening price. */
+                            impermanentLossPct?: number | null;
+                            /** @description 24h fee return plus the (negative) divergence loss. Null when either part is unknown. */
+                            netReturn24hPct?: number | null;
+                            /** @description Always true. These are floating-point estimates, not settled values, and are not affected by ?decimalFormat=string. */
+                            estimate?: boolean;
                         }[];
                         nextCursor: string | null;
                         hasMore: boolean;
@@ -2216,6 +2794,8 @@ export interface operations {
                         }[];
                         nextCursor: string | null;
                         hasMore: boolean;
+                        incomplete?: boolean;
+                        gaps?: components["schemas"]["DataGap"][];
                     };
                 };
             };
@@ -2275,6 +2855,8 @@ export interface operations {
                         from: string;
                         /** Format: date-time */
                         to: string;
+                        incomplete?: boolean;
+                        gaps?: components["schemas"]["DataGap"][];
                         /** @description Number of points in this page (not the total across pages). */
                         count: number;
                         points: {
@@ -2558,6 +3140,8 @@ export interface operations {
                 /** @description Sampling grid width in seconds. */
                 sampleInterval?: number;
                 method?: "iqr" | "modified_zscore";
+                /** @description Max age in seconds before the price is marked stale (overrides default staleness bound). */
+                staleThreshold?: number;
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
             };
@@ -2699,6 +3283,75 @@ export interface operations {
                     "application/json": components["schemas"]["InternalErrorResponse"];
                 };
             };
+        };
+    };
+    getOverallCoverage: {
+        parameters: {
+            query?: {
+                window?: "24h" | "7d" | "30d";
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Overall coverage metrics across all tracked assets */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverallCoverageResponse"];
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getAssetCoverage: {
+        parameters: {
+            query?: {
+                window?: "24h" | "7d" | "30d";
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path: {
+                /** @example USDC */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Market coverage metrics for the requested asset */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetCoverageResponse"];
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
         };
     };
     getSpreads: {
@@ -2924,6 +3577,112 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
         };
     };
+    compareAssetHistory: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                /**
+                 * @description Filter to comparisons for a specific oracle adapter
+                 * @example reflector
+                 */
+                oracle?: string;
+                /**
+                 * @description Lookback window ending now (ignored if both from and to are specified)
+                 * @example 24h
+                 */
+                window?: "5m" | "15m" | "1h" | "24h" | "7d" | "30d";
+                /** @description Start of the query window (ISO 8601) */
+                from?: string;
+                /** @description End of the query window (ISO 8601) */
+                to?: string;
+                /** @description Deviation percentage threshold for outside-band duration calculation */
+                band?: number;
+                /** @description Maximum number of history points to return */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @example XLM */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical oracle comparison points and window summary statistics */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OracleComparisonHistoryResponse"];
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    compareAssetSummary: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                /**
+                 * @description Filter to comparisons for a specific oracle adapter
+                 * @example reflector
+                 */
+                oracle?: string;
+                /**
+                 * @description Lookback window ending now (ignored if both from and to are specified)
+                 * @example 24h
+                 */
+                window?: "5m" | "15m" | "1h" | "24h" | "7d" | "30d";
+                /** @description Start of the query window (ISO 8601) */
+                from?: string;
+                /** @description End of the query window (ISO 8601) */
+                to?: string;
+                /** @description Deviation percentage threshold for outside-band duration calculation */
+                band?: number;
+                /** @description Maximum number of comparisons evaluated */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @example XLM */
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Oracle summary statistics over the window */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OracleComparisonSummaryResponse"];
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
     screenPairs: {
         parameters: {
             query?: {
@@ -3055,6 +3814,44 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["InternalErrorResponse"];
                 };
+            };
+        };
+    };
+    getPegs: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of configured pegged assets and their peg deviations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PegsResponse"];
+                };
+            };
+            /** @description Invalid network parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3509,6 +4306,89 @@ export interface operations {
             };
             /** @description Invalid parameters */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listAssets: {
+        parameters: {
+            query?: {
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+                /** @description Filter assets by asset code (case-insensitive). */
+                code?: string;
+                /** @description Filter assets by verification status. */
+                verified?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of tracked assets with metadata and verification status */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetsResponse"];
+                };
+            };
+            /** @description Invalid request parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getAsset: {
+        parameters: {
+            query?: {
+                /** @description Full 56-character Stellar issuer account address (e.g. GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN). */
+                issuer?: string;
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Asset code (e.g. XLM, USDC) or canonical identifier (CODE:ISSUER).
+                 * @example USDC
+                 */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asset metadata with verification status and date checked */
+            200: {
+                headers: {
+                    "Cache-Control": components["headers"]["CacheControl"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetDetailResponse"];
+                };
+            };
+            /** @description Invalid asset code or parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Asset not found on the specified network */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

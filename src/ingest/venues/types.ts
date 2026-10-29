@@ -8,6 +8,7 @@ export type SourceTimeCapability =
   | { readonly status: 'unavailable'; readonly semantic?: never }
 
 export interface VenuePricePoint {
+  network?: string
   assetA: string
   assetB: string
   pairKey: string

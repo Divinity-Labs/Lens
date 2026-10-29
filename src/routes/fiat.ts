@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { activeNetwork, type NetworkName } from '../config'
 import { pgPool } from '../db'
 
+import { apiError } from '../errors'
 export const SUPPORTED_FIAT_CURRENCIES = ['USD', 'NGN', 'EUR', 'GBP', 'KES', 'ZAR', 'CAD', 'BRL'] as const
 export type SupportedFiatCurrency = typeof SUPPORTED_FIAT_CURRENCIES[number]
 
@@ -39,7 +40,7 @@ export async function registerFiatRoutes(app: FastifyInstance) {
 
     if (!SUPPORTED_FIAT_CURRENCIES.includes(currencyStr as SupportedFiatCurrency)) {
       return reply.status(400).send({
-        error: `Unsupported currency: ${currencyStr}. Supported currencies: ${SUPPORTED_FIAT_CURRENCIES.join(', ')}`,
+        ...apiError('invalid_parameter', `Unsupported currency: ${currencyStr}. Supported currencies: ${SUPPORTED_FIAT_CURRENCIES.join(', ')}`),
         supportedCurrencies: SUPPORTED_FIAT_CURRENCIES,
       })
     }

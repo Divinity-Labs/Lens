@@ -39,7 +39,7 @@ import {
   POOLS_DEFAULT_LIMIT,
   POOLS_MAX_LIMIT,
 } from '../pagination'
-import { registerRESTRoutes } from '../api/rest'
+import { registerPoolsRoutes } from '../routes/pools'
 import { registerPairsRoutes } from '../routes/pairs'
 
 describe('parseLimit', () => {
@@ -111,7 +111,7 @@ describe('slicePage', () => {
 
 async function buildPoolsApp() {
   const app = Fastify({ logger: false })
-  await registerRESTRoutes(app)
+  await registerPoolsRoutes(app)
   await app.ready()
   return app
 }

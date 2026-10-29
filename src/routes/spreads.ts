@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
-import { sendInternalError } from '../errors'
+import { sendInternalError, apiError } from '../errors'
 
 // Supported windows → lookback in minutes. A spread is a statement about *now*,
 // so these are deliberately short: widen the window far enough and you stop
@@ -74,14 +74,14 @@ export async function registerSpreadsRoutes(app: FastifyInstance) {
     const { asset } = req.params
 
     if (!asset) {
-      return reply.status(400).send({ error: 'Asset parameter is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'Asset parameter is required'))
     }
 
     try {
       return await computeSpreads(asset, req.query.window, req.query.network)
     } catch (err) {
       if (err instanceof SpreadsInputError) {
-        return reply.status(400).send({ error: err.message })
+        return reply.status(400).send(apiError('invalid_parameter', err.message))
       }
       return sendInternalError(reply, req, err, 'Spread aggregation failed')
     }

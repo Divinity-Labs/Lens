@@ -1,5 +1,5 @@
 import { pgPool } from '../db'
-import type { NetworkName } from '../config'
+import { config, type NetworkName } from '../config'
 import type { DecimalFormat } from '../utils/decimals'
 
 export const STALENESS_THRESHOLD_SECONDS = 300
@@ -210,6 +210,9 @@ export interface AggregatedPriceNumeric {
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
+  newestInputObservedAt: string | null
+  inputCount: number
+  stalenessThresholdSeconds: number
   stale: boolean
 }
 
@@ -228,28 +231,31 @@ export interface AggregatedPriceString {
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
+  newestInputObservedAt: string | null
+  inputCount: number
+  stalenessThresholdSeconds: number
   stale: boolean
 }
 
 export async function getAggregatedPrice(
   pairKey: string,
   network: NetworkName,
-  options: { decimalFormat: 'string' }
+  options: { decimalFormat: 'string'; staleThresholdSeconds?: number }
 ): Promise<AggregatedPriceString>
 export async function getAggregatedPrice(
   pairKey: string,
   network: NetworkName,
-  options?: { decimalFormat?: 'number' }
+  options?: { decimalFormat?: 'number'; staleThresholdSeconds?: number }
 ): Promise<AggregatedPriceNumeric>
 export async function getAggregatedPrice(
   pairKey: string,
   network: NetworkName,
-  options?: { decimalFormat?: DecimalFormat }
+  options?: { decimalFormat?: DecimalFormat; staleThresholdSeconds?: number }
 ): Promise<AggregatedPriceNumeric | AggregatedPriceString>
 export async function getAggregatedPrice(
   pairKey: string,
   network: NetworkName,
-  options?: { decimalFormat?: DecimalFormat }
+  options?: { decimalFormat?: DecimalFormat; staleThresholdSeconds?: number }
 ): Promise<AggregatedPriceNumeric | AggregatedPriceString> {
   const [vwap1m, vwap5m, vwap1h, vwap24h, sdexVwap24h, priceChange24h, ammSpotResult, lastTradeResult] = await Promise.all([
     calculateVWAPDetailed(pairKey, 1, network),
@@ -277,9 +283,9 @@ export async function getAggregatedPrice(
        ) latest`,
       [pairKey, network]
     ),
-    // Last trade timestamp
+    // Last trade timestamp and input count
     pgPool.query(
-      `SELECT MAX(COALESCE(observed_at, timestamp)) as last_trade /* MAX(timestamp) as last_trade */ FROM price_points
+      `SELECT MAX(timestamp) as last_trade, COUNT(*) as input_count FROM price_points
        WHERE pair_key = $1 AND network = $2`,
       [pairKey, network]
     ),
@@ -339,6 +345,16 @@ export async function getAggregatedPrice(
   const lastTradeAgeSeconds = lastTrade ? Math.floor((Date.now() - new Date(lastTrade).getTime()) / 1000) : null
   const sources = parseInt(sourcesResult.rows[0]?.sources ?? '0', 10)
 
+  const rawInputCount = lastTradeResult.rows[0]?.input_count
+  const inputCount = rawInputCount !== undefined
+    ? parseInt(rawInputCount, 10)
+    : (lastTrade ? Math.max(1, sources) : 0)
+  const newestInputObservedAt = lastTrade ? new Date(lastTrade).toISOString() : null
+
+  const staleThreshold = options?.staleThresholdSeconds
+    ?? (config as any).pricing?.staleThresholdSeconds
+    ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
+
   let confidence: 'high' | 'medium' | 'low' | 'unknown' = 'unknown'
   if (lastTradeAgeSeconds === null) {
     confidence = 'unknown'
@@ -350,7 +366,7 @@ export async function getAggregatedPrice(
     confidence = 'low'
   }
 
-  const stale = lastTradeAgeSeconds !== null && lastTradeAgeSeconds >= STALENESS_THRESHOLD_SECONDS
+  const stale = lastTradeAgeSeconds !== null && lastTradeAgeSeconds >= staleThreshold
 
   const isString = options?.decimalFormat === 'string'
 
@@ -375,6 +391,9 @@ export async function getAggregatedPrice(
       sources,
       confidence,
       lastTradeAgeSeconds,
+      newestInputObservedAt,
+      inputCount,
+      stalenessThresholdSeconds: staleThreshold,
       stale,
     }
   }
@@ -394,6 +413,9 @@ export async function getAggregatedPrice(
     sources,
     confidence,
     lastTradeAgeSeconds,
+    newestInputObservedAt,
+    inputCount,
+    stalenessThresholdSeconds: staleThreshold,
     stale,
   }
 }

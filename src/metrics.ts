@@ -36,6 +36,22 @@ export const trades_ingested_total = new Counter({
   registers: [register]
 })
 
+export const price_points_accepted_total = new Counter({
+  name: 'price_points_accepted_total',
+  help: 'Total number of price points accepted by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_quarantined_total = new Counter({
+  name: 'price_points_quarantined_total',
+  help: 'Total number of price points quarantined by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_rejected_total = price_points_quarantined_total
+
 export const amm_snapshots_total = new Counter({
   name: 'amm_snapshots_total',
   help: 'Total number of AMM pool snapshots captured',
@@ -218,6 +234,13 @@ export const ingest_errors_total = new Counter({
 export function markIngestSuccess(venue: string, network: string): void {
   ingest_last_success_timestamp.set({ venue, network }, Math.floor(Date.now() / 1000))
 }
+
+export const snapshot_retention_path = new Gauge({
+  name: 'snapshot_retention_path',
+  help: 'Active snapshot retention scheduler (one-hot path labels)',
+  labelNames: ['path'],
+  registers: [register],
+})
 
 export const http_requests_total = new Counter({
   name: 'http_requests_total',

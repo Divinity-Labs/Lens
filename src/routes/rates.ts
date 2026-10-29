@@ -4,6 +4,7 @@ import { pgPool, getLatestLendingRates } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 const RatesQuerySchema = z.object({
   asset: z.string().optional(),
   poolId: z.string().optional(),
@@ -77,7 +78,7 @@ export async function registerRateRoutes(app: FastifyInstance) {
   }>('/rates', async (req, reply) => {
     const parsed = RatesQuerySchema.safeParse(req.query)
     if (!parsed.success) {
-      return reply.status(400).send({ error: parsed.error.issues[0].message || 'Invalid parameters' })
+      return reply.status(400).send(apiError('invalid_parameter', parsed.error.issues[0].message || 'Invalid parameters'))
     }
     const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
     const rows = await getLatestLendingRates(network, {
@@ -117,7 +118,7 @@ export async function registerRateRoutes(app: FastifyInstance) {
   }>('/rates/:asset', async (req, reply) => {
     const { asset } = req.params
     if (!asset) {
-      return reply.status(400).send({ error: 'Asset parameter is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'Asset parameter is required'))
     }
     const assetCode = asset.toUpperCase()
 
@@ -126,7 +127,7 @@ export async function registerRateRoutes(app: FastifyInstance) {
     // rather than silently falling back.
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = (requested as NetworkName) ?? activeNetwork
 
@@ -200,7 +201,7 @@ export async function registerRateRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply
         .status(500)
-        .send({ error: `Rate lookup failed: ${(err as Error).message}` })
+        .send(apiError('internal_error', `Rate lookup failed: ${(err as Error).message}`))
     }
   })
 }

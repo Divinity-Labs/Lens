@@ -66,3 +66,11 @@ print("getTwap", res.status_code, res.json())
 # getVwap: GET /v1/price/vwap/XLM/USDC (x402-gated)
 res = requests.get(BASE_URL + "/v1/price/vwap/XLM/USDC", params=[["network","testnet"]], headers={"X-PAYMENT": PAYMENT}, timeout=30)
 print("getVwap", res.status_code, res.json())
+
+# listAssets: GET /v1/assets
+res = requests.get(BASE_URL + "/v1/assets", params=[["network","testnet"]], headers={}, timeout=30)
+print("listAssets", res.status_code, res.json())
+
+# getAsset: GET /v1/assets/USDC
+res = requests.get(BASE_URL + "/v1/assets/USDC", params=[["network","testnet"]], headers={}, timeout=30)
+print("getAsset", res.status_code, res.json())

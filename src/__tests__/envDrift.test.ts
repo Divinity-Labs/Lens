@@ -62,8 +62,8 @@ export const UNDOCUMENTED_ENV_ALLOW_LIST: Record<string, string> = {
     'Legacy unsuffixed fallback for testnet; FACILITATOR_FEE_STROOPS_TESTNET and FACILITATOR_FEE_STROOPS_MAINNET are documented in .env.example.',
   API_KEY_LAST_USED_THROTTLE_SECONDS:
     'Optional alias fallback; primary variable KEY_LAST_USED_THROTTLE_SECONDS is documented in .env.example.',
-  API_KEY_LAST_USED_THROTTLE_SECONDS:
-    'Optional alias fallback; primary variable KEY_LAST_USED_THROTTLE_SECONDS is documented in .env.example.',
+  STALENESS_BOUND_SECONDS:
+    'Optional alias fallback; primary variable PRICE_STALE_THRESHOLD_SECONDS is documented in .env.example.',
 }
 
 /**

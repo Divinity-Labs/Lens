@@ -8,6 +8,7 @@ import { getHorizonServer } from '../network/clients'
 import { aggregateBookLevels, generateAmmBookLevels, type AmmBookPool, type RawBookLevel } from '../pricing/book'
 import { bookResponseSchema } from '../api/schemas'
 
+import { apiError } from '../errors'
 const BookQuerySchema = z.object({
   depth: z.coerce.number().min(0).max(0.5).default(0.1),
   step: z.coerce.number().min(0.001).max(0.1).default(0.01),
@@ -138,7 +139,7 @@ export async function registerBookRoutes(app: FastifyInstance) {
   }>('/book/:assetA/:assetB', { config: { scope: 'read:prices' }, schema: { response: { 200: bookResponseSchema, 503: bookResponseSchema } } }, async (req, reply) => {
     const parsedQuery = BookQuerySchema.safeParse(req.query)
     if (!parsedQuery.success) {
-      return reply.status(400).send({ error: parsedQuery.error.issues[0]?.message ?? 'Invalid book parameters' })
+      return reply.status(400).send(apiError('invalid_parameter', parsedQuery.error.issues[0]?.message ?? 'Invalid book parameters'))
     }
 
     let assetA: ParsedAsset
@@ -148,7 +149,7 @@ export async function registerBookRoutes(app: FastifyInstance) {
       assetB = parseAsset(req.params.assetB)
       if (assetA.canonical === assetB.canonical) throw new Error('Assets must be different')
     } catch (err) {
-      return reply.status(400).send({ error: (err as Error).message })
+      return reply.status(400).send(apiError('invalid_parameter', (err as Error).message))
     }
 
     const network: NetworkName = req.network ?? activeNetwork

@@ -3,6 +3,7 @@ import { activeNetwork, type NetworkName } from '../config'
 import { queryDispersionHistory } from '../reconciliation/dispersion'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 export async function registerDispersionRoutes(app: FastifyInstance) {
   // GET /dispersion/:assetA/:assetB — query dispersion history and outlier attribution for a pair
   app.get<{
@@ -12,12 +13,12 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
     const { assetA, assetB } = req.params
 
     if (!assetA || !assetB) {
-      return reply.status(400).send({ error: 'assetA and assetB are required' })
+      return reply.status(400).send(apiError('missing_parameter', 'assetA and assetB are required'))
     }
 
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = (requested as NetworkName) ?? req.network ?? activeNetwork
 
@@ -29,20 +30,20 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
     if (req.query.from) {
       from = new Date(req.query.from)
       if (isNaN(from.getTime())) {
-        return reply.status(400).send({ error: 'from must be a valid ISO 8601 date' })
+        return reply.status(400).send(apiError('invalid_parameter', 'from must be a valid ISO 8601 date'))
       }
     }
 
     if (req.query.to) {
       to = new Date(req.query.to)
       if (isNaN(to.getTime())) {
-        return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
+        return reply.status(400).send(apiError('invalid_parameter', 'to must be a valid ISO 8601 date'))
       }
     }
 
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50
     if (isNaN(limit) || limit <= 0) {
-      return reply.status(400).send({ error: 'limit must be a positive integer' })
+      return reply.status(400).send(apiError('invalid_parameter', 'limit must be a positive integer'))
     }
 
     try {
@@ -63,7 +64,7 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       req.log.error({ err }, 'dispersion query failed')
-      return reply.status(500).send({ error: 'Dispersion query failed' })
+      return reply.status(500).send(apiError('internal_error', 'Dispersion query failed'))
     }
   })
 
@@ -73,7 +74,7 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
   }>('/dispersion', async (req, reply) => {
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = (requested as NetworkName) ?? req.network ?? activeNetwork
 
@@ -83,20 +84,20 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
     if (req.query.from) {
       from = new Date(req.query.from)
       if (isNaN(from.getTime())) {
-        return reply.status(400).send({ error: 'from must be a valid ISO 8601 date' })
+        return reply.status(400).send(apiError('invalid_parameter', 'from must be a valid ISO 8601 date'))
       }
     }
 
     if (req.query.to) {
       to = new Date(req.query.to)
       if (isNaN(to.getTime())) {
-        return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
+        return reply.status(400).send(apiError('invalid_parameter', 'to must be a valid ISO 8601 date'))
       }
     }
 
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50
     if (isNaN(limit) || limit <= 0) {
-      return reply.status(400).send({ error: 'limit must be a positive integer' })
+      return reply.status(400).send(apiError('invalid_parameter', 'limit must be a positive integer'))
     }
 
     try {
@@ -116,7 +117,7 @@ export async function registerDispersionRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       req.log.error({ err }, 'dispersion query failed')
-      return reply.status(500).send({ error: 'Dispersion query failed' })
+      return reply.status(500).send(apiError('internal_error', 'Dispersion query failed'))
     }
   })
 }

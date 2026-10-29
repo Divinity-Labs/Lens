@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total } from '../metrics'
-import { graphql_errors_total, graphql_resolver_duration_seconds, graphql_operations_total, active_subscriptions } from '../metrics'
+import { price_requests_total, active_subscriptions, api_key_auth_failures_total, graphql_errors_total, graphql_resolver_duration_seconds, graphql_operations_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
-import { GraphQLError, type ExecutionResult } from 'graphql'
+import {
+  GraphQLError,
+  type ExecutionResult,
+  type DocumentNode,
+  type OperationDefinitionNode,
+  type FragmentDefinitionNode,
+} from 'graphql'
+import { hasScope, extractBearer, lookupApiKey } from './auth'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -65,6 +71,7 @@ const USER_FACING_CODES = new Set([
   'PAIR_NOT_FOUND',
   'UNAUTHORIZED',
   'UNSUPPORTED_PARAMETER',
+  'insufficient_scope',
 ])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
@@ -148,7 +155,15 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
     })
   })
 
-  return defaultErrorFormatter({ ...execution, errors }, ctx)
+  const hasInsufficientScope = errors.some(
+    e => ((e.originalError as any)?.extensions?.code ?? e.extensions?.code) === 'insufficient_scope'
+  )
+  if (hasInsufficientScope && ctx?.reply) {
+    ctx.reply.status(403)
+  }
+  const statusCode = hasInsufficientScope ? 403 : (execution as any).statusCode
+
+  return defaultErrorFormatter({ ...execution, errors, statusCode } as any, ctx)
 }
 
 export const schema = `
@@ -538,9 +553,93 @@ function asInvalidInput(err: unknown): never {
   throw err
 }
 
-const resolvers = {
+/**
+ * Required scope for each GraphQL operation field, matching its REST equivalent route (#618).
+ * Every query, mutation and subscription field declares the scope it needs.
+ */
+export const FIELD_SCOPES: Record<string, string> = {
+  getPrice: 'read:prices',
+  getBestRoute: 'read:prices',
+  getPriceHistory: 'read:history',
+  listPairs: 'read:prices',
+  pairs: 'read:prices',
+  oracle: 'read:prices',
+  screener: 'read:prices',
+  volumes: 'read:prices',
+  spreads: 'read:prices',
+  priceUpdated: 'subscribe',
+}
+
+/**
+ * Wraps a resolver function to attach its required scope and enforce it if invoked directly.
+ */
+export function withScope<T extends Function>(scope: string, fn: T): T & { _scope: string } {
+  const wrapped = async function (this: any, ...args: any[]) {
+    const ctx = args[2] as MercuriusContext | undefined
+    const apiKey = (ctx as any)?.apiKey ?? (ctx?.reply?.request as any)?.apiKey ?? (ctx as any)?.request?.apiKey
+    if (apiKey && !hasScope(apiKey, scope)) {
+      api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+      throw new ErrorWithProps(`Missing required scope: ${scope}`, {
+        code: 'insufficient_scope',
+        requiredScope: scope,
+        scope,
+        statusCode: 403,
+      })
+    }
+    return fn.apply(this, args)
+  }
+  ;(wrapped as any)._scope = scope
+  return wrapped as unknown as T & { _scope: string }
+}
+
+/**
+ * Extracts root operation field names from a parsed GraphQL document.
+ * Handles operation selection, fragment spreads, and inline fragments.
+ * Introspection fields (__schema, __type, etc.) are excluded.
+ */
+export function getRootFieldNames(document: DocumentNode, operationName?: string): string[] {
+  const operations = document.definitions.filter(
+    (d): d is OperationDefinitionNode => d.kind === 'OperationDefinition'
+  )
+  const fragments = new Map<string, FragmentDefinitionNode>(
+    document.definitions
+      .filter((d): d is FragmentDefinitionNode => d.kind === 'FragmentDefinition')
+      .map(f => [f.name.value, f])
+  )
+
+  let op = operations[0]
+  if (operationName) {
+    op = operations.find(o => o.name?.value === operationName) ?? op
+  }
+  if (!op || !op.selectionSet) return []
+
+  const fieldNames = new Set<string>()
+
+  function collect(selectionSet: { selections: readonly any[] }) {
+    for (const sel of selectionSet.selections) {
+      if (sel.kind === 'Field') {
+        const name = sel.name.value
+        if (!name.startsWith('__')) {
+          fieldNames.add(name)
+        }
+      } else if (sel.kind === 'InlineFragment' && sel.selectionSet) {
+        collect(sel.selectionSet)
+      } else if (sel.kind === 'FragmentSpread') {
+        const frag = fragments.get(sel.name.value)
+        if (frag?.selectionSet) {
+          collect(frag.selectionSet)
+        }
+      }
+    }
+  }
+
+  collect(op.selectionSet)
+  return Array.from(fieldNames)
+}
+
+export const resolvers = {
   Query: {
-    getPrice: instrumentResolver('getPrice', async (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) => {
+    getPrice: instrumentResolver('getPrice', withScope('read:prices', async function (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
       for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
         if (!parseAssetStr(value)) {
@@ -579,23 +678,23 @@ const resolvers = {
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
       }
-    }),
+    })),
 
     getBestRoute: instrumentResolver(
       'getBestRoute',
-      async (
+      withScope('read:prices', async function (
         _: unknown,
         { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
-      ) => {
+      ) {
         const pair = findPair(assetA, assetB)
         if (!pair) return null
         return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
-      },
+      }),
     ),
 
     getPriceHistory: instrumentResolver(
       'getPriceHistory',
-      async (
+      withScope('read:history', async function (
         _: unknown,
         {
           assetA,
@@ -612,7 +711,7 @@ const resolvers = {
           from?: string
           to?: string
         }
-      ) => {
+      ) {
         let fromDate: Date | undefined
         let toDate: Date | undefined
 
@@ -688,14 +787,14 @@ const resolvers = {
           high: formatPrice(r.high_price),
           low: formatPrice(r.low_price),
         }))
-      },
+      }),
     ),
 
-    listPairs() {
+    listPairs: withScope('read:prices', function () {
       return getActivePairs().map(p => p.pairKey)
-    },
+    }),
 
-    async pairs() {
+    pairs: withScope('read:prices', async function () {
       const activePairs = getActivePairs()
       if (activePairs.length === 0) {
         return []
@@ -734,9 +833,9 @@ const resolvers = {
           lastUpdated: latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp.toISOString() : new Date(latest.timestamp).toISOString()) : null,
         }
       })
-    },
+    }),
 
-    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
+    oracle: withScope('read:prices', async function (_: unknown, { asset, network }: { asset: string; network?: string | null }) {
       if (network != null && network !== 'testnet' && network !== 'mainnet') {
         throw new ErrorWithProps('network must be one of: testnet, mainnet', {
           code: 'INVALID_INPUT',
@@ -753,9 +852,9 @@ const resolvers = {
         ...comparison,
         oracles: comparison.oracles.map(o => ({ ...o, status: o.status.toUpperCase() })),
       }
-    },
+    }),
 
-    async screener(
+    screener: withScope('read:prices', async function (
       _: unknown,
       {
         filters,
@@ -846,9 +945,9 @@ const resolvers = {
         }
         throw error
       }
-    },
+    }),
 
-    async volumes(
+    volumes: withScope('read:prices', async function (
       _: unknown,
       { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
     ) {
@@ -866,9 +965,9 @@ const resolvers = {
           aggregator: isAggregatorVenue(venue),
         })),
       }
-    },
+    }),
 
-    async spreads(
+    spreads: withScope('read:prices', async function (
       _: unknown,
       { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
     ) {
@@ -879,7 +978,7 @@ const resolvers = {
       // The REST route's own computation (src/routes/spreads.ts), returned as is.
       return computeSpreads(asset, window ?? undefined, network ?? undefined)
         .catch(asInvalidInput)
-    },
+    }),
   },
 
   Subscription: {
@@ -890,7 +989,7 @@ const resolvers = {
       // addresses one topic per known network for the pair, and because the
       // message carries its own `network` field the subscriber can still tell
       // them apart.
-      subscribe: (
+      subscribe: withScope('subscribe', (
         _root: unknown,
         { pair, network }: { pair: string; network?: string | null },
         { pubsub }: MercuriusContext,
@@ -931,7 +1030,7 @@ const resolvers = {
             release()
             throw err
           })
-      },
+      }),
     },
   },
 }
@@ -977,7 +1076,29 @@ export async function registerGraphQL(app: FastifyInstance) {
     cache: false,
     validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
     path: '/graphql',
-    subscription: true,
+    subscription: {
+      // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
+      // library) rather than the legacy `subscriptions-transport-ws`.
+      fullWsTransport: true,
+      wsDefaultSubprotocol: 'graphql-transport-ws',
+      context: async (_socket, req) => {
+        return {
+          apiKey: (req as any)?.apiKey,
+        }
+      },
+      onConnect: async (data: any) => {
+        if (!data?.payload) return {}
+        const auth = data.payload.authorization ?? data.payload.Authorization ?? data.payload.apiKey
+        if (typeof auth === 'string') {
+          const token = extractBearer(auth) ?? auth
+          const keyCtx = await lookupApiKey(token)
+          if (keyCtx) {
+            return { apiKey: keyCtx }
+          }
+        }
+        return data.payload
+      },
+    },
     graphiqlEndpoint: '/graphql',
     errorFormatter: formatGraphQLErrors,
     // Count every operation by a safe name and type. The label values are
@@ -999,6 +1120,46 @@ export async function registerGraphQL(app: FastifyInstance) {
       ;(ctx.reply.request as unknown as Record<symbol, string>)[GRAPHQL_OPERATION] =
         operationLabel(name, type)
     },
+  })
+
+  // Enforce per-route scopes for GraphQL queries (#618)
+  app.graphql.addHook('preExecution', async (_schema, document, context, variables) => {
+    const apiKey = (context as any)?.apiKey ?? (context?.reply?.request as any)?.apiKey ?? (context as any)?.request?.apiKey
+    if (!apiKey) return
+
+    const fieldNames = getRootFieldNames(document, (variables as any)?.operationName)
+    for (const fieldName of fieldNames) {
+      const requiredScope = FIELD_SCOPES[fieldName]
+      if (requiredScope && !hasScope(apiKey, requiredScope)) {
+        api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+        throw new ErrorWithProps(`Missing required scope: ${requiredScope}`, {
+          code: 'insufficient_scope',
+          requiredScope,
+          scope: requiredScope,
+          statusCode: 403,
+        })
+      }
+    }
+  })
+
+  // Enforce per-route scopes for GraphQL subscriptions (#618)
+  app.graphql.addHook('preSubscriptionExecution', async (_schema, document, context) => {
+    const apiKey = (context as any)?.apiKey ?? (context?.reply?.request as any)?.apiKey ?? (context as any)?.request?.apiKey
+    if (!apiKey) return
+
+    const fieldNames = getRootFieldNames(document)
+    for (const fieldName of fieldNames) {
+      const requiredScope = FIELD_SCOPES[fieldName]
+      if (requiredScope && !hasScope(apiKey, requiredScope)) {
+        api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+        throw new ErrorWithProps(`Missing required scope: ${requiredScope}`, {
+          code: 'insufficient_scope',
+          requiredScope,
+          scope: requiredScope,
+          statusCode: 403,
+        })
+      }
+    }
   })
 
   // Bridge: forward every price the ingesters emit onto the GraphQL pubsub

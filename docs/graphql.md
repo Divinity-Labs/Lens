@@ -7,21 +7,22 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
 ## Table of Contents
 
 1. [Endpoints & Access](#endpoints--access)
-2. [Schema & Types](#schema--types)
-3. [Queries & Runnable Examples](#queries--runnable-examples)
+2. [Authentication & Scopes](#authentication--scopes)
+3. [Query depth limit](#query-depth-limit)
+4. [Schema & Types](#schema--types)
+5. [Queries & Runnable Examples](#queries--runnable-examples)
    - [`getPrice`](#1-getprice)
-   - [`etBestRoute`](#2-getbestroute)
+   - [`getBestRoute`](#2-getbestroute)
    - [`getPriceHistory`](#3-getpricehistory)
    - [`listPairs`](#4-listpairs)
    - [`screener`](#5-screener)
    - [`volumes` and `spreads`](#6-volumes-and-spreads)
-4. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
+6. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
    - [Runnable Client Example (Raw WebSocket & Handshake)](#runnable-client-example-raw-websocket---handshake)
    - [Runnable Client Example (`graphql-ws` Library)](#runnable-client-example-graphql-ws-library)
-5. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
-6. [Query depth limit](#query-depth-limit)
+7. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
 
 ---
 
@@ -35,6 +36,69 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
 
 > [!IMPORTANT]
 > **WebSocket Subprotocol Requirement**: The subscription server requires the modern **@graphql-transport-ws** subprotocol (the standard implemented by [`graphql-ws`](https://github.com/enisdenjo/graphql-ws)). Legacy Apollo `subscriptions-transport-ws` is **not** supported and will be rejected during connection initialization.
+
+## Authentication & Scopes
+
+GraphQL operations on Lens enforce the same fine-grained per-route scopes required by their REST equivalents. If an authenticated API key lacks the required scope for any requested root field, the entire operation is rejected with **HTTP 403 Forbidden** before any resolver is executed.
+
+### Operation Field Scopes
+
+| Operation Field | Operation Type | Required Scope | REST Equivalent |
+|---|---|---|---|
+| `getPrice` | `Query` | `read:prices` | `GET /price/:assetA/:assetB` |
+| `getBestRoute` | `Query` | `read:prices` | `GET /route/:assetA/:assetB` |
+| `getPriceHistory` | `Query` | `read:history` | `GET /prices/history` |
+| `listPairs` | `Query` | `read:prices` | `GET /pairs` |
+| `pairs` | `Query` | `read:prices` | `GET /pairs` |
+| `oracle` | `Query` | `read:prices` | `GET /oracle` |
+| `screener` | `Query` | `read:prices` | `GET /screener` |
+| `volumes` | `Query` | `read:prices` | `GET /volumes/:asset` |
+| `spreads` | `Query` | `read:prices` | `GET /spreads/:asset` |
+| `priceUpdated` | `Subscription` | `subscribe` | WebSocket `/ws/prices` |
+
+### Multi-Field Queries & Scope Union
+
+A single GraphQL document querying multiple root fields (including fields selected via inline fragments, fragment spreads, or aliases) requires the **union** of all scopes needed by those fields.
+
+For example, a query requesting both `getPrice` and `getPriceHistory` requires an API key that possesses **both** `read:prices` and `read:history`. If the key only has `read:prices`, the request is refused with HTTP 403 and no resolver runs:
+
+```json
+{
+  "data": null,
+  "errors": [
+    {
+      "message": "Missing required scope: read:history",
+      "extensions": {
+        "code": "insufficient_scope",
+        "requiredScope": "read:history",
+        "scope": "read:history",
+        "statusCode": 403
+      }
+    }
+  ]
+}
+```
+
+### Passing Authentication
+
+- **HTTP Queries**: Pass the API key in the `Authorization` header:
+  ```http
+  Authorization: Bearer <api_key>
+  ```
+- **WebSocket Subscriptions**: Pass the API key in the `connection_init` payload during the protocol handshake:
+  ```json
+  {
+    "type": "connection_init",
+    "payload": {
+      "authorization": "Bearer <api_key>"
+    }
+  }
+  ```
+  Or as an `Authorization` header in the initial WebSocket upgrade request.
+
+Legacy unscoped API keys (`scopes: []`) and keys configured with wildcard access (`scopes: ['*']`) satisfy all operation scopes.
+
+---
 
 ## Query depth limit
 
