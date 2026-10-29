@@ -3,6 +3,7 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 // Supported windows -> lookback in hours.
 const WINDOW_HOURS = {
   '1h': 1,
@@ -55,13 +56,13 @@ export async function registerMoversRoutes(app: FastifyInstance) {
     if (!(rawWindow in WINDOW_HOURS)) {
       return reply
         .status(400)
-        .send({ error: `window must be one of: ${WINDOWS.join(', ')}` })
+        .send(apiError('bad_window', `window must be one of: ${WINDOWS.join(', ')}`))
     }
     const window = rawWindow as MoversWindow
 
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = req.network ?? (requested as NetworkName) ?? activeNetwork
 
@@ -186,7 +187,7 @@ export async function registerMoversRoutes(app: FastifyInstance) {
       return response
     } catch (err) {
       req.log.error(err, '[movers] Movers aggregation failed')
-      return reply.status(500).send({ error: 'Internal server error' })
+      return reply.status(500).send(apiError('internal_error', 'Internal server error'))
     }
   })
 }

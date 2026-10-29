@@ -279,7 +279,7 @@ describe('GET /movers', () => {
     const res = await app.inject({ method: 'GET', url: '/movers' })
 
     expect(res.statusCode).toBe(500)
-    expect(res.json()).toEqual({ error: 'Internal server error' })
+    expect(res.json()).toEqual({ error: 'Internal server error', code: 'internal_error' })
     expect(res.body).not.toMatch(/secret/)
 
     await app.close()

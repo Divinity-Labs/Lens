@@ -48,6 +48,10 @@ paths:
     get:
       operationId: getVenueRegistry
       summary: List registered venues and their network liveness
+      x-question: "Which venue adapters (order books, AMMs, oracles) are registered and live?"
+      x-example: "GET /venues/registry?network=testnet"
+      x-order: 41
+      x-category: "System Health & Venue Infrastructure"
       description: Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.
       security: []
       parameters:
@@ -90,6 +94,10 @@ paths:
 
   /v1/venues:
     get:
+      x-question: "Which venue is actually carrying the trading volume?"
+      x-example: "GET /venues?window=24h&network=testnet"
+      x-order: 14
+      x-category: "Market Overview & Liquidity Pools"
       operationId: getVenueVolumeShare
       summary: Venue Share of Volume
       description: >-
@@ -133,6 +141,10 @@ paths:
 
   /v1/live:
     get:
+      x-question: "Is the service process alive at all?"
+      x-example: "GET /live"
+      x-order: 42
+      x-category: "System Health & Venue Infrastructure"
       operationId: getLive
       summary: Liveness probe
       description: >-
@@ -147,6 +159,10 @@ paths:
           description: Process is alive.
   /v1/tvl:
     get:
+      x-question: "How much value is locked across Stellar DeFi, and in which venues?"
+      x-example: "GET /tvl?network=testnet"
+      x-order: 13
+      x-category: "Market Overview & Liquidity Pools"
       operationId: getTvl
       summary: Total Value Locked across Stellar DeFi venues
       description: >-
@@ -194,6 +210,10 @@ paths:
 
   /v1/ready:
     get:
+      x-question: "Is it safe to send traffic yet, or are dependencies still starting?"
+      x-example: "GET /ready"
+      x-order: 43
+      x-category: "System Health & Venue Infrastructure"
       operationId: getReady
       summary: Readiness probe
       description: >-
@@ -254,6 +274,10 @@ paths:
     get:
       operationId: getStatus
       summary: Get API status and indexer state
+      x-question: "Is the Lens indexer healthy, up to date, and what is the latest processed ledger?"
+      x-example: "GET /status?network=testnet"
+      x-order: 40
+      x-category: "System Health & Venue Infrastructure"
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
@@ -321,6 +345,15 @@ paths:
                   ingestLagSeconds:
                     type: integer
                     nullable: true
+                  retentionPath:
+                    type: string
+                    enum: [starting, redis_queue, in_process]
+                    description: >-
+                      Which scheduler is pruning snapshots. `redis_queue` is the
+                      normal path; `in_process` means Redis was unreachable at
+                      boot and an hourly in-process timer took over, with a
+                      retry still running. Reported so that fallback is visible
+                      rather than inferred from the absence of queue activity.
                   adminConfigured:
                     type: boolean
                     description: >-
@@ -357,6 +390,10 @@ paths:
 
   /v1/snapshot:
     get:
+      x-question: "Can I get the whole market in one request instead of ten?"
+      x-example: "GET /snapshot?network=testnet"
+      x-order: 15
+      x-category: "Market Overview & Liquidity Pools"
       operationId: getSnapshot
       summary: Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness)
       description: >-
@@ -401,6 +438,10 @@ paths:
     get:
       operationId: getPrice
       summary: Get aggregated price for a pair
+      x-question: "What is the current market price and 24-hour volume for an asset pair?"
+      x-example: "GET /price/XLM/USDC?network=testnet"
+      x-order: 1
+      x-category: "Core Pricing & Trade Execution"
       security:
         - x402: []
       parameters:
@@ -416,6 +457,13 @@ paths:
           schema:
             type: string
           example: USDC
+        - name: staleThreshold
+          in: query
+          required: false
+          description: Max age in seconds before the price is marked stale (overrides default staleness bound).
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/NetworkQuery'
         - $ref: '#/components/parameters/DecimalFormatHeader'
       responses:
@@ -435,10 +483,72 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /v1/premium/{assetA}/{assetB}:
+    get:
+      x-question: "Is this pair trading above or below the centralised exchanges?"
+      x-example: "GET /premium/XLM/USDC?network=testnet"
+      x-order: 29
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: getPremium
+      summary: Get on-chain vs CEX price premium and spread
+      description: >-
+        Returns the on-chain price, the best CEX price, the spread in basis
+        points, both sources, and both timestamps. Refuses to answer with a 400
+        when either side is older than the configured staleness bound.
+      security: []
+      parameters:
+        - name: assetA
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - name: assetB
+          in: path
+          required: true
+          schema:
+            type: string
+          example: USDC
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Premium and spread calculation
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PremiumResponse'
+        '400':
+          description: Stale price data or unrecognised network
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PremiumErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /v1/price/{assetA}/{assetB}/route:
     get:
       operationId: getBestRoute
       summary: Get best swap route for a pair and amount
+      x-question: "Where can I execute a swap for the best return at a given trade size?"
+      x-example: "GET /price/XLM/USDC/route?amount=1000&network=testnet"
+      x-order: 2
+      x-category: "Core Pricing & Trade Execution"
       security:
         - x402: []
       parameters:
@@ -479,6 +589,10 @@ paths:
 
   /v1/price/{asset}/fiat:
     get:
+      x-question: "What is this asset worth in my local currency, such as naira?"
+      x-example: "GET /price/XLM/fiat?currency=NGN&network=testnet"
+      x-order: 6
+      x-category: "Core Pricing & Trade Execution"
       operationId: getFiatPrice
       summary: Convert asset price to fiat currency with NGN support (#290)
       security: []
@@ -513,8 +627,13 @@ paths:
       operationId: getPriceHistory
       summary: Get price history buckets
       description: >-
-        Returns price aggregate buckets (1m, 5m, 1h, 24h). Prices are serialized up to 18
-        decimal places and volumes up to 7 decimal places matching Stellar stroop precision.
+        Returns price aggregate buckets (1m, 5m, 1h, 24h). Buckets are aggregated with
+        exact numeric arithmetic in the database, so a sum does not depend on the order
+        rows were summed in; values are narrowed to JSON numbers at the edge.
+      x-question: "What were the historical price buckets for a pair over a recent window?"
+      x-example: "GET /price/XLM/USDC/history?window=1h&network=testnet"
+      x-order: 34
+      x-category: "Historical Trends & Robust Averages"
       security: []
       parameters:
         - name: assetA
@@ -563,6 +682,12 @@ paths:
                     enum: [testnet, mainnet]
                   window:
                     type: string
+                  incomplete:
+                    type: boolean
+                  gaps:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DataGap'
                   buckets:
                     type: array
                     items:
@@ -580,6 +705,10 @@ paths:
         Latest snapshot per pool for one network. Paginated with the shared
         keyset convention: ordered by pool_id ascending, default limit 50,
         maximum 200.
+      x-question: "Which AMM liquidity pools are being watched, and what are their reserves?"
+      x-example: "GET /pools?network=testnet"
+      x-order: 9
+      x-category: "Market Overview & Liquidity Pools"
       security:
         - x402: []
       parameters:
@@ -634,6 +763,37 @@ paths:
                         timestamp:
                           type: string
                           format: date-time
+                        window:
+                          type: string
+                          enum: [24h]
+                          description: The window every estimate below is measured over.
+                        feeAprPct:
+                          type: number
+                          nullable: true
+                          description: >-
+                            24h fee return annualised by 365. Null when the pool
+                            has no value or no AMM volume in the window, which is
+                            an unknown return rather than a zero one.
+                        impermanentLossPct:
+                          type: number
+                          nullable: true
+                          description: >-
+                            Constant-product divergence loss over the window,
+                            already signed: zero when the price has not moved and
+                            negative otherwise. Null when the window has no
+                            opening price.
+                        netReturn24hPct:
+                          type: number
+                          nullable: true
+                          description: >-
+                            24h fee return plus the (negative) divergence loss.
+                            Null when either part is unknown.
+                        estimate:
+                          type: boolean
+                          description: >-
+                            Always true. These are floating-point estimates, not
+                            settled values, and are not affected by
+                            ?decimalFormat=string.
                   nextCursor:
                     type: string
                     nullable: true
@@ -656,6 +816,10 @@ paths:
         were summed in; values are narrowed to JSON numbers at the edge.
         Paginated with the shared keyset convention: ordered by bucket start
         time ascending, default limit 500, maximum 5000.
+      x-question: "What are the historical OHLCV candlestick bars for a trading pair?"
+      x-example: "GET /candles/XLM/USDC?interval=1h&network=testnet"
+      x-order: 33
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -759,6 +923,12 @@ paths:
                     nullable: true
                   hasMore:
                     type: boolean
+                  incomplete:
+                    type: boolean
+                  gaps:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DataGap'
         '400':
           description: Invalid parameters
         '402':
@@ -770,6 +940,10 @@ paths:
     get:
       operationId: getPriceSnapshots
       summary: Get historical 1-minute price snapshots
+      x-question: "Where can I query raw 1-minute historical snapshots or export them as CSV?"
+      x-example: "GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet"
+      x-order: 35
+      x-category: "Historical Trends & Robust Averages"
       description: >-
         Returns minute-resolution price snapshots for a pair over [from, to],
         optionally aggregated into 5m or 1h buckets, with exact numeric
@@ -885,6 +1059,12 @@ paths:
                   to:
                     type: string
                     format: date-time
+                  incomplete:
+                    type: boolean
+                  gaps:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DataGap'
                   count:
                     type: integer
                     description: Number of points in this page (not the total across pages).
@@ -920,6 +1100,10 @@ paths:
         Active trading pairs with their latest price metadata. Paginated with
         the shared keyset convention: ordered by pairKey ascending, default
         limit 50, maximum 200.
+      x-question: "Which trading pairs are currently tracked by Lens on the active network?"
+      x-example: "GET /pairs?network=testnet"
+      x-order: 7
+      x-category: "Market Overview & Liquidity Pools"
       security: []
       parameters:
         - $ref: '#/components/parameters/NetworkQuery'
@@ -975,6 +1159,10 @@ paths:
     post:
       operationId: addPair
       summary: Add a new trading pair (Admin only)
+      x-question: "How do I configure Lens to track a new trading pair?"
+      x-example: "POST /pairs"
+      x-order: 8
+      x-category: "Market Overview & Liquidity Pools"
       security:
         - adminAuth: []
       requestBody:
@@ -1006,6 +1194,10 @@ paths:
     get:
       operationId: getDepth
       summary: Get order-book depth and execution slippage for a pair
+      x-question: "What is the simulated order-book depth and expected slippage for a trade size?"
+      x-example: "GET /price/XLM/USDC/depth?amount=1000&network=testnet"
+      x-order: 4
+      x-category: "Core Pricing & Trade Execution"
       description: >-
         Simulates an order of `amount` units of assetA and returns the price
         ladder plus the execution price and slippage versus the spot price.
@@ -1055,6 +1247,10 @@ paths:
     get:
       operationId: getBook
       summary: Get the aggregated SDEX and AMM price ladder for a pair
+      x-question: "What does the combined order book look like across SDEX and AMM liquidity pools?"
+      x-example: "GET /book/XLM/USDC?depth=0.1&step=0.01&network=testnet"
+      x-order: 3
+      x-category: "Core Pricing & Trade Execution"
       description: >-
         Returns asks and bids as cumulative assetA size at each price. Live
         SDEX levels are reported as observed; AMM levels are synthetic,
@@ -1117,6 +1313,10 @@ paths:
 
   /v1/impact/{assetA}/{assetB}:
     get:
+      x-question: "How does slippage grow as my trade size increases?"
+      x-example: "GET /impact/XLM/USDC?network=testnet"
+      x-order: 5
+      x-category: "Core Pricing & Trade Execution"
       operationId: getImpact
       summary: Get an adaptive slippage impact curve for a pair
       description: >-
@@ -1174,6 +1374,10 @@ paths:
     get:
       operationId: getTwap
       summary: Get a manipulation-resistant time-weighted average price
+      x-question: "What is the manipulation-resistant time-weighted average price (TWAP) for settlement?"
+      x-example: "GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet"
+      x-order: 36
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -1214,6 +1418,13 @@ paths:
             type: string
             enum: [iqr, modified_zscore]
             default: iqr
+        - name: staleThreshold
+          in: query
+          required: false
+          description: Max age in seconds before the price is marked stale (overrides default staleness bound).
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/NetworkQuery'
         - $ref: '#/components/parameters/DecimalFormatHeader'
       responses:
@@ -1239,6 +1450,10 @@ paths:
     get:
       operationId: getVwap
       summary: Get a volume-weighted average price
+      x-question: "What is the volume-weighted average price (VWAP) across venues for a pair?"
+      x-example: "GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet"
+      x-order: 37
+      x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
       parameters:
@@ -1302,6 +1517,10 @@ paths:
     get:
       operationId: getVolumes
       summary: Get cross-venue traded volume for an asset
+      x-question: "What is the total cross-venue trading volume for an asset over time?"
+      x-example: "GET /volumes/XLM?window=24h&network=testnet"
+      x-order: 12
+      x-category: "Market Overview & Liquidity Pools"
       description: >-
         Sums traded volume for `asset` across every pair and venue it appears
         in, measured in the asset's own units, with a per-venue breakdown and
@@ -1355,10 +1574,92 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
+  /v1/coverage:
+    get:
+      x-question: "How much of the market can Lens actually see?"
+      x-example: "GET /coverage?network=testnet"
+      x-order: 31
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: getOverallCoverage
+      summary: Get overall market coverage ratio and cross-venue activity
+      description: >-
+        Compares indexed trade activity in Lens across all tracked assets against
+        total network activity from Horizon over a time window.
+      security: []
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 24h
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Overall coverage metrics across all tracked assets
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverallCoverageResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/coverage/{asset}:
+    get:
+      x-question: "For one asset, which venues is Lens watching and how much do they cover?"
+      x-example: "GET /coverage/XLM?network=testnet"
+      x-order: 32
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: getAssetCoverage
+      summary: Get market coverage ratio and venue breakdown for a specific asset
+      description: >-
+        Compares indexed trade volume and count for a specific asset against
+        total network activity from Horizon over a time window.
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: USDC
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 24h
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Market coverage metrics for the requested asset
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetCoverageResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /v1/spreads/{asset}:
     get:
       operationId: getSpreads
       summary: Get the tightest per-venue bid/ask spread for an asset
+      x-question: "Which venues offer the tightest bid/ask spread for an asset right now?"
+      x-example: "GET /spreads/XLM?window=5m&network=testnet"
+      x-order: 18
+      x-category: "Comparative Analytics & Market Quality"
       description: >-
         Reports, for every (venue, pair) that quoted `asset` inside the window,
         the observed low, high and spread in basis points, tightest first.
@@ -1403,6 +1704,10 @@ paths:
 
   /v1/rates/{asset}:
     get:
+      x-question: "What are the supply and borrow rates for one asset on each lending venue?"
+      x-example: "GET /rates/USDC?network=testnet"
+      x-order: 17
+      x-category: "Market Overview & Liquidity Pools"
       operationId: getLendingRates
       summary: Get supply and borrow rates for an asset across lending venues
       description: >-
@@ -1439,6 +1744,10 @@ paths:
 
   /v1/dispersion/{assetA}/{assetB}:
     get:
+      x-question: "The venues disagree on this pair — which one is the outlier?"
+      x-example: "GET /dispersion/XLM/USDC?network=testnet"
+      x-order: 28
+      x-category: "Comparative Analytics & Market Quality"
       operationId: getPairDispersion
       summary: Get venue price dispersion and outlier attribution for a pair
       description: >-
@@ -1515,6 +1824,10 @@ paths:
 
   /v1/dispersion:
     get:
+      x-question: "Which pairs disagree most across venues right now?"
+      x-example: "GET /dispersion?network=testnet"
+      x-order: 27
+      x-category: "Comparative Analytics & Market Quality"
       operationId: listDispersion
       summary: List cross-venue dispersion across watched pairs
       description: >-
@@ -1584,6 +1897,10 @@ paths:
         "minor_deviation", "major_deviation" and "partial" (one source only).
         The response includes both the legacy `reflector` field for backward
         compatibility and an `oracles` array listing every configured source.
+      x-question: "How do Lens aggregated prices compare against external oracles?"
+      x-example: "GET /compare/XLM?network=testnet"
+      x-order: 22
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -1606,10 +1923,170 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /v1/compare/{asset}/history:
+    get:
+      x-question: "How has the gap between an oracle and the market moved over time?"
+      x-example: "GET /compare/XLM/history?window=7d&network=testnet"
+      x-order: 24
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: compareAssetHistory
+      summary: Query historical oracle comparison series and window summary statistics
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: oracle
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to comparisons for a specific oracle adapter
+          example: reflector
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [5m, 15m, 1h, 24h, 7d, 30d]
+          description: Lookback window ending now (ignored if both from and to are specified)
+          example: 24h
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start of the query window (ISO 8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End of the query window (ISO 8601)
+        - name: band
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            default: 1.0
+          description: Deviation percentage threshold for outside-band duration calculation
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+          description: Maximum number of history points to return
+      responses:
+        '200':
+          description: Historical oracle comparison points and window summary statistics
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleComparisonHistoryResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/compare/{asset}/summary:
+    get:
+      x-question: "Over the past week, which oracle tracked the market most closely?"
+      x-example: "GET /compare/XLM/summary?window=7d&network=testnet"
+      x-order: 23
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: compareAssetSummary
+      summary: Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band)
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+          example: XLM
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: oracle
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to comparisons for a specific oracle adapter
+          example: reflector
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [5m, 15m, 1h, 24h, 7d, 30d]
+          description: Lookback window ending now (ignored if both from and to are specified)
+          example: 24h
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start of the query window (ISO 8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End of the query window (ISO 8601)
+        - name: band
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            default: 1.0
+          description: Deviation percentage threshold for outside-band duration calculation
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+          description: Maximum number of comparisons evaluated
+      responses:
+        '200':
+          description: Oracle summary statistics over the window
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleComparisonSummaryResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /v1/screener:
     get:
       operationId: screenPairs
       summary: Screen pairs by volume, change, liquidity and price
+      x-question: "Which pairs currently have the highest volume, price changes, or liquidity?"
+      x-example: "GET /screener?sortBy=volume&order=desc&limit=20&network=testnet"
+      x-order: 19
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: volume
@@ -1691,6 +2168,10 @@ paths:
 
   /v1/movers:
     get:
+      x-question: "What moved most today, up, down, or by volume?"
+      x-example: "GET /movers?window=24h&limit=10&network=testnet"
+      x-order: 20
+      x-category: "Comparative Analytics & Market Quality"
       operationId: getMovers
       summary: Get biggest gainers, biggest losers, and volume movers
       description: >-
@@ -1724,6 +2205,10 @@ paths:
     get:
       operationId: getBenchmark
       summary: Get peg-deviation statistics for an asset against a target
+      x-question: "How closely is a pegged or wrapped asset tracking its peg target?"
+      x-example: "GET /benchmark/USDC?target=USD&network=testnet"
+      x-order: 21
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -1759,6 +2244,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalErrorResponse'
 
+  /v1/pegs:
+    get:
+      x-question: "Is this stablecoin still holding its peg?"
+      x-example: "GET /pegs?network=testnet"
+      x-order: 30
+      x-category: "Comparative Analytics & Market Quality"
+      operationId: getPegs
+      summary: Get peg deviation and window statistics for all configured pegged assets
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: List of configured pegged assets and their peg deviations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PegsResponse'
+        '400':
+          description: Invalid network parameter
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Internal server error
+
   /v1/basket:
     get:
       operationId: getBasket
@@ -1768,6 +2278,10 @@ paths:
         response body will contain an `error` field listing the missing assets
         and `reason: "missing_price_data"` rather than computing a partial
         basket price. A 404 would imply the assets themselves are invalid.
+      x-question: "What is the weighted price of a custom portfolio basket of assets?"
+      x-example: "GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet"
+      x-order: 25
+      x-category: "Comparative Analytics & Market Quality"
       security: []
       parameters:
         - name: asset
@@ -1809,6 +2323,10 @@ paths:
 
   /v1/correlation:
     get:
+      x-question: "Do these assets move together, or are they genuinely diversified?"
+      x-example: "GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet"
+      x-order: 26
+      x-category: "Comparative Analytics & Market Quality"
       operationId: getCorrelation
       summary: Compute price correlation matrix across a basket of assets over a window
       security: []
@@ -1851,6 +2369,10 @@ paths:
     get:
       operationId: listDiscoveryResources
       summary: Browse the x402 Bazaar catalog of discoverable resources
+      x-question: "What payable endpoints and datasets are discoverable in the x402 Bazaar catalog?"
+      x-example: "GET /discovery/resources?network=testnet"
+      x-order: 46
+      x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
         - name: type
@@ -1909,6 +2431,10 @@ paths:
 
   /v1/discovery/search:
     get:
+      x-question: "Can I find the right endpoint by describing what I want in plain language?"
+      x-example: "GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5"
+      x-order: 47
+      x-category: "Automation, Discovery & Payments"
       operationId: searchDiscoveryResources
       summary: Natural language search with ranking and quality evaluation for discoverable resources
       parameters:
@@ -1943,6 +2469,10 @@ paths:
     post:
       operationId: createWebhook
       summary: Subscribe to a price-threshold webhook
+      x-question: "How can my application receive push alerts when a price crosses a threshold?"
+      x-example: "POST /webhooks"
+      x-order: 51
+      x-category: "Automation, Discovery & Payments"
       description: >-
         Registers an HTTPS endpoint to be called when the pair's price crosses
         `threshold` in the given `direction`. The response contains the signing
@@ -1987,6 +2517,10 @@ paths:
     delete:
       operationId: deleteWebhook
       summary: Delete a webhook subscription
+      x-question: "How do I cancel an existing price threshold alert webhook?"
+      x-example: "DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet"
+      x-order: 52
+      x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
         - name: id
@@ -2004,6 +2538,10 @@ paths:
     get:
       operationId: getMyUsage
       summary: Get usage and quota for the calling API key
+      x-question: "How many requests have I made and what is my remaining API key quota?"
+      x-example: "GET /usage/me"
+      x-order: 44
+      x-category: "System Health & Venue Infrastructure"
       security:
         - apiKeyAuth: []
       responses:
@@ -2023,6 +2561,10 @@ paths:
 
   /v1/usage:
     get:
+      x-question: "How much of my API quota have I used?"
+      x-example: "GET /usage"
+      x-order: 45
+      x-category: "System Health & Venue Infrastructure"
       operationId: getCallerUsage
       summary: Get usage and quota for the calling API key (alias for /usage/me)
       security:
@@ -2046,6 +2588,10 @@ paths:
     get:
       operationId: getSupported
       summary: List the payment kinds and extensions this facilitator supports
+      x-question: "Which payment schemes and token mechanisms does this x402 facilitator support?"
+      x-example: "GET /supported"
+      x-order: 48
+      x-category: "Automation, Discovery & Payments"
       security: []
       responses:
         '200':
@@ -2062,6 +2608,10 @@ paths:
     post:
       operationId: verifyPayment
       summary: Verify an x402 payment payload
+      x-question: "How do I verify a signed x402 payment payload before fulfilling a service?"
+      x-example: "POST /verify"
+      x-order: 49
+      x-category: "Automation, Discovery & Payments"
       security: []
       requestBody:
         required: true
@@ -2093,6 +2643,10 @@ paths:
     post:
       operationId: settlePayment
       summary: Settle an x402 payment (idempotent)
+      x-question: "How do I submit and settle an x402 payment on the Stellar network?"
+      x-example: "POST /settle"
+      x-order: 50
+      x-category: "Automation, Discovery & Payments"
       description: >-
         Submits the payment transaction and records the attempt keyed on its
         transaction hash. Retrying the same payload replays the stored answer
@@ -2122,6 +2676,10 @@ paths:
     get:
       operationId: graphqlGet
       summary: Execute a GraphQL query over HTTP GET
+      x-question: "How do I query multiple prices, routes, and analytics in a single GET request?"
+      x-example: "GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D"
+      x-order: 38
+      x-category: "Multi-Query & Streaming"
       security: []
       parameters:
         - name: query
@@ -2153,6 +2711,10 @@ paths:
     post:
       operationId: graphqlPost
       summary: Execute a GraphQL query, mutation or subscription handshake
+      x-question: "How do I execute complex GraphQL operations or initiate WebSocket subscriptions?"
+      x-example: "POST /graphql"
+      x-order: 39
+      x-category: "Multi-Query & Streaming"
       security:
         - x402: []
       requestBody:
@@ -2181,6 +2743,10 @@ paths:
 
   /v1/rates:
     get:
+      x-question: "What can I earn lending, and what does borrowing cost, across venues?"
+      x-example: "GET /rates?network=testnet"
+      x-order: 16
+      x-category: "Market Overview & Liquidity Pools"
       operationId: getLendingRates
       summary: Query latest lending and borrow rates across pools
       description: Returns the latest supply and borrow rates, utilisation, and reserves for lending markets.
@@ -2224,6 +2790,84 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /v1/assets:
+    get:
+      x-question: "Which assets does Lens track, and which issuers are verified?"
+      x-example: "GET /assets?network=testnet"
+      x-order: 10
+      x-category: "Market Overview & Liquidity Pools"
+      operationId: listAssets
+      summary: List tracked assets with metadata and verification status
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/NetworkQuery'
+        - name: code
+          in: query
+          required: false
+          description: Filter assets by asset code (case-insensitive).
+          schema:
+            type: string
+        - name: verified
+          in: query
+          required: false
+          description: Filter assets by verification status.
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of tracked assets with metadata and verification status
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetsResponse'
+        '400':
+          description: Invalid request parameters
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/assets/{code}:
+    get:
+      x-question: "Who issues this asset, and can I trust that issuer?"
+      x-example: "GET /assets/USDC?network=testnet"
+      x-order: 11
+      x-category: "Market Overview & Liquidity Pools"
+      operationId: getAsset
+      summary: Get metadata and verification status for a specific asset
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: Asset code (e.g. XLM, USDC) or canonical identifier (CODE:ISSUER).
+          schema:
+            type: string
+          example: USDC
+        - name: issuer
+          in: query
+          required: false
+          description: Full 56-character Stellar issuer account address (e.g. GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN).
+          schema:
+            type: string
+        - $ref: '#/components/parameters/NetworkQuery'
+      responses:
+        '200':
+          description: Asset metadata with verification status and date checked
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetDetailResponse'
+        '400':
+          description: Invalid asset code or parameters
+        '404':
+          description: Asset not found on the specified network
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 components:
   securitySchemes:
     x402:
@@ -2365,6 +3009,53 @@ components:
         example: 'public, max-age=300'
 
   schemas:
+    ErrorCode:
+      type: string
+      description: Stable machine-readable error code. Branch on this, never on `error`, which is human-readable.
+      enum:
+        - missing_parameter
+        - invalid_parameter
+        - bad_network
+        - bad_interval
+        - bad_window
+        - unsupported
+        - unknown_pair
+        - unwatched_pair
+        - pair_already_watched
+        - unauthorized
+        - not_found
+        - upstream_unavailable
+        - internal_error
+        - rate_limited
+        - payment_required
+        - payment_invalid
+        - payment_verification_failed
+        - quota_exceeded
+        - admin_not_configured
+        - admin_unauthorized
+        - missing
+        - malformed
+        - unknown
+        - revoked
+        - expired
+        - insufficient_scope
+        - discovery_database_unavailable
+        - VALIDATION_ERROR
+        - UNSUPPORTED_PARAMETER
+        - INVALID_NETWORK
+        - STALE_DATA
+        - INVALID_PRICE
+        - INTERNAL_ERROR
+        - DB_POOL_EXHAUSTED
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message. Do not branch on it.
+        code:
+          $ref: '#/components/schemas/ErrorCode'
     LendingRateEntry:
       type: object
       required: [id, venue, source, network, poolId, asset, supplyApy, borrowApy, timestamp]
@@ -2929,6 +3620,20 @@ components:
         lastTradeAgeSeconds:
           type: integer
           nullable: true
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
 
     RouteHop:
       type: object
@@ -3311,7 +4016,7 @@ components:
 
     TwapResponse:
       type: object
-      required: [assetA, assetB, pairKey, network, twap, windowMinutes, sampleIntervalSeconds, startTime, endTime, sampleCount, outlierRejected, filterMethod]
+      required: [assetA, assetB, pairKey, network, twap, windowMinutes, sampleIntervalSeconds, startTime, endTime, sampleCount, outlierRejected, filterMethod, newestInputObservedAt, inputCount, stalenessThresholdSeconds, stale]
       additionalProperties: false
       properties:
         assetA:
@@ -3344,10 +4049,30 @@ components:
         filterMethod:
           type: string
           enum: [iqr, modified_zscore]
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
+        incomplete:
+          type: boolean
+        gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataGap'
 
     VwapResponse:
       type: object
-      required: [assetA, assetB, pairKey, network, vwap, windowMinutes, source, startTime, endTime, sampleCount, volumeTotal, outlierRejected, filterMethod]
+      required: [assetA, assetB, pairKey, network, vwap, windowMinutes, source, startTime, endTime, sampleCount, volumeTotal, outlierRejected, filterMethod, newestInputObservedAt, inputCount, stalenessThresholdSeconds, stale]
       additionalProperties: false
       properties:
         assetA:
@@ -3384,6 +4109,43 @@ components:
         filterMethod:
           type: string
           enum: [iqr, modified_zscore]
+        newestInputObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Observation timestamp of the newest input data point used.
+        inputCount:
+          type: integer
+          description: Count of input data points used in the calculation.
+        stalenessThresholdSeconds:
+          type: integer
+          description: Configured staleness threshold in seconds for this response.
+        stale:
+          type: boolean
+          description: True if the time elapsed since newestInputObservedAt exceeds stalenessThresholdSeconds.
+        incomplete:
+          type: boolean
+        gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataGap'
+
+    DataGap:
+      type: object
+      required: [source, start, end, status]
+      additionalProperties: false
+      properties:
+        source:
+          type: string
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [open, permanent]
 
     VolumeTotals:
       type: object
@@ -3504,6 +4266,202 @@ components:
             dataAgeSeconds:
               type: integer
               nullable: true
+
+    OverallCoverageResponse:
+      type: object
+      required: [network, window, startTime, endTime, overall, assets, provenance, methodology]
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          enum: [24h, 7d, 30d]
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        overall:
+          type: object
+          required: [tradeCoverageRatio, totalIndexedTrades, totalNetworkTrades, assetsTracked, assetsWithActivity, status, venues]
+          properties:
+            tradeCoverageRatio:
+              type: number
+              nullable: true
+            volumeCoverageRatio:
+              type: number
+              nullable: true
+            totalIndexedTrades:
+              type: integer
+            totalNetworkTrades:
+              type: integer
+            assetsTracked:
+              type: integer
+            assetsWithActivity:
+              type: integer
+            status:
+              type: string
+              enum: [computed, unanswerable]
+            reason:
+              type: string
+              nullable: true
+            venues:
+              type: array
+              items:
+                type: string
+        assets:
+          type: array
+          items:
+            type: object
+            required: [asset, coverageRatio, indexedVolume, networkVolume, indexedTradeCount, networkTradeCount, status, byVenue, venues]
+            properties:
+              asset:
+                type: string
+              coverageRatio:
+                type: number
+                nullable: true
+              indexedVolume:
+                type: number
+              networkVolume:
+                type: number
+              indexedTradeCount:
+                type: integer
+              networkTradeCount:
+                type: integer
+              status:
+                type: string
+                enum: [computed, unanswerable]
+              reason:
+                type: string
+                nullable: true
+              byVenue:
+                type: object
+                additionalProperties:
+                  type: number
+              venues:
+                type: array
+                items:
+                  type: string
+              lastIndexedTrade:
+                type: string
+                format: date-time
+                nullable: true
+        provenance:
+          type: object
+          required: [venues, indexedSampleCount, networkSampleCount, asOf, horizonUrl, window, startTime, endTime]
+          properties:
+            venues:
+              type: array
+              items:
+                type: string
+            indexedSampleCount:
+              type: integer
+            networkSampleCount:
+              type: integer
+            asOf:
+              type: string
+              format: date-time
+            horizonUrl:
+              type: string
+            window:
+              type: string
+            startTime:
+              type: string
+              format: date-time
+            endTime:
+              type: string
+              format: date-time
+        methodology:
+          type: string
+
+    AssetCoverageResponse:
+      type: object
+      required: [asset, network, window, startTime, endTime, coverageRatio, status, indexed, provenance, methodology]
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          enum: [24h, 7d, 30d]
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        coverageRatio:
+          type: number
+          nullable: true
+        status:
+          type: string
+          enum: [computed, unanswerable]
+        reason:
+          type: string
+          nullable: true
+        indexed:
+          type: object
+          required: [totalVolume, tradeCount, byVenue, venues]
+          properties:
+            totalVolume:
+              type: number
+            tradeCount:
+              type: integer
+            byVenue:
+              type: object
+              additionalProperties:
+                type: number
+            venues:
+              type: array
+              items:
+                type: string
+        networkActivity:
+          type: object
+          nullable: true
+          properties:
+            totalVolume:
+              type: number
+            tradeCount:
+              type: integer
+            source:
+              type: string
+            horizonUrl:
+              type: string
+        tradeCoverageRatio:
+          type: number
+          nullable: true
+        provenance:
+          type: object
+          required: [venues, indexedSampleCount, networkSampleCount, hasGap, asOf, horizonUrl]
+          properties:
+            venues:
+              type: array
+              items:
+                type: string
+            indexedSampleCount:
+              type: integer
+            networkSampleCount:
+              type: integer
+            lastIndexedTrade:
+              type: string
+              format: date-time
+              nullable: true
+            dataAgeSeconds:
+              type: number
+              nullable: true
+            hasGap:
+              type: boolean
+            asOf:
+              type: string
+              format: date-time
+            horizonUrl:
+              type: string
+        methodology:
+          type: string
 
     SpreadVenue:
       type: object
@@ -3666,6 +4624,151 @@ components:
               ageSeconds:
                 type: integer
                 nullable: true
+
+    OracleComparisonPoint:
+      type: object
+      required: [timestamp, oracle, lensPrice, oraclePrice, deviationPct, status, venues, sampleCount, oracleTimestamp, ageSeconds]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        oracle:
+          type: string
+        lensPrice:
+          type: number
+          nullable: true
+        oraclePrice:
+          type: number
+          nullable: true
+        deviationPct:
+          type: number
+          nullable: true
+        status:
+          type: string
+        venues:
+          type: array
+          items:
+            type: string
+          description: Venues that contributed to the Lens VWAP calculation
+        sampleCount:
+          type: integer
+          description: Number of trade observations in the Lens VWAP window
+        oracleTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+        ageSeconds:
+          type: integer
+          nullable: true
+
+    OracleSummaryStatistic:
+      type: object
+      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, bandPct, samples, venues, freshestComparison, oldestComparison, status]
+      additionalProperties: true
+      properties:
+        oracle:
+          type: string
+        meanDeviationPct:
+          type: number
+          nullable: true
+          description: Mean percentage deviation from Lens VWAP across valid samples
+        worstDeviationPct:
+          type: number
+          nullable: true
+          description: Maximum observed percentage deviation from Lens VWAP in the window
+        timeOutsideBandSeconds:
+          type: integer
+          nullable: true
+          description: Total seconds in the window where the oracle deviated beyond bandPct
+        outsideBandSeconds:
+          type: integer
+          nullable: true
+          description: Alias for timeOutsideBandSeconds
+        outsideBandPct:
+          type: number
+          nullable: true
+          description: Percentage of window duration spent outside bandPct
+        bandPct:
+          type: number
+          description: Deviation percentage threshold applied for outside-band calculations
+        samples:
+          type: integer
+          description: Number of comparison samples in the window
+        venues:
+          type: array
+          items:
+            type: string
+          description: Distinct venues that contributed to Lens VWAPs across all samples
+        freshestComparison:
+          type: string
+          format: date-time
+          nullable: true
+        oldestComparison:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          description: Latest status or alignment health
+
+    OracleComparisonHistoryResponse:
+      type: object
+      required: [asset, network, from, to, band, points, summary]
+      additionalProperties: true
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          nullable: true
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        band:
+          type: number
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleComparisonPoint'
+        summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleSummaryStatistic'
+
+    OracleComparisonSummaryResponse:
+      type: object
+      required: [asset, network, from, to, band, summary]
+      additionalProperties: true
+      properties:
+        asset:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        window:
+          type: string
+          nullable: true
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        band:
+          type: number
+        summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/OracleSummaryStatistic'
 
     ScreenerRow:
       type: object
@@ -4127,3 +5230,317 @@ components:
             properties:
               message:
                 type: string
+
+    PremiumPricePoint:
+      type: object
+      required: [price, source, timestamp]
+      properties:
+        price:
+          type: number
+        source:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    PremiumResponse:
+      type: object
+      required: [assetA, assetB, network, onChain, cex, spreadBps]
+      properties:
+        assetA:
+          type: string
+        assetB:
+          type: string
+        network:
+          type: string
+        onChain:
+          $ref: '#/components/schemas/PremiumPricePoint'
+        cex:
+          $ref: '#/components/schemas/PremiumPricePoint'
+        spreadBps:
+          type: number
+
+    PremiumErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        stale:
+          type: string
+          enum: [onChain, cex, both]
+        ageSeconds:
+          type: integer
+          nullable: true
+        onChainAgeSeconds:
+          type: integer
+          nullable: true
+        cexAgeSeconds:
+          type: integer
+          nullable: true
+
+    PegReport:
+      type: object
+      required:
+        - asset
+        - code
+        - issuer
+        - target
+        - targetPrice
+        - pairKey
+        - currentPrice
+        - currentDeviationBps
+        - worstDeviationBps
+        - window
+        - provenance
+      additionalProperties: false
+      properties:
+        asset:
+          type: string
+        code:
+          type: string
+        issuer:
+          type: string
+          nullable: true
+        target:
+          type: string
+        targetPrice:
+          type: number
+        pairKey:
+          type: string
+          nullable: true
+        currentPrice:
+          type: number
+          nullable: true
+        currentDeviationBps:
+          type: number
+          nullable: true
+        worstDeviationBps:
+          type: number
+          nullable: true
+        window:
+          type: string
+        provenance:
+          type: object
+          required:
+            - venues
+            - sampleCount
+            - freshnessSeconds
+            - lastSampleTimestamp
+          additionalProperties: false
+          properties:
+            venues:
+              type: array
+              items:
+                type: string
+            sampleCount:
+              type: integer
+            freshnessSeconds:
+              type: integer
+              nullable: true
+            lastSampleTimestamp:
+              type: string
+              format: date-time
+              nullable: true
+
+    PegsResponse:
+      type: object
+      required: [network, pegs]
+      additionalProperties: false
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        pegs:
+          type: array
+          items:
+            $ref: '#/components/schemas/PegReport'
+
+    AssetMetadata:
+      type: object
+      required:
+        - code
+        - issuer
+        - name
+        - homeDomain
+        - domain
+        - decimals
+        - status
+        - verified
+        - checkedAt
+        - dateChecked
+      properties:
+        code:
+          type: string
+          example: USDC
+        issuer:
+          type: string
+          nullable: true
+          example: GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+        name:
+          type: string
+          nullable: true
+          example: USD Coin
+        homeDomain:
+          type: string
+          nullable: true
+          example: circle.com
+        domain:
+          type: string
+          nullable: true
+          example: circle.com
+        decimals:
+          type: integer
+          example: 7
+        displayDecimals:
+          type: integer
+          nullable: true
+          example: 2
+        status:
+          type: string
+          enum: [verified, unverified]
+          example: verified
+        verified:
+          type: boolean
+          example: true
+        checkedAt:
+          type: string
+          format: date-time
+        dateChecked:
+          type: string
+          format: date-time
+        contractId:
+          type: string
+          nullable: true
+          example: CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75
+        tomlUrl:
+          type: string
+          nullable: true
+          example: https://circle.com/.well-known/stellar.toml
+        verification:
+          type: object
+          required: [status, verified, checkedAt, tomlUrl]
+          properties:
+            status:
+              type: string
+              enum: [verified, unverified]
+            verified:
+              type: boolean
+            checkedAt:
+              type: string
+              format: date-time
+            tomlUrl:
+              type: string
+              nullable: true
+        provenance:
+          type: object
+          required: [source, checkedAt, tomlUrl, verified]
+          properties:
+            source:
+              type: string
+            checkedAt:
+              type: string
+              format: date-time
+            tomlUrl:
+              type: string
+              nullable: true
+            verified:
+              type: boolean
+
+    AssetsResponse:
+      type: object
+      required: [network, assets]
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetMetadata'
+
+    AssetDetailResponse:
+      type: object
+      required:
+        - network
+        - code
+        - issuer
+        - name
+        - homeDomain
+        - domain
+        - decimals
+        - status
+        - verified
+        - checkedAt
+        - dateChecked
+      properties:
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        code:
+          type: string
+        issuer:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        homeDomain:
+          type: string
+          nullable: true
+        domain:
+          type: string
+          nullable: true
+        decimals:
+          type: integer
+        displayDecimals:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [verified, unverified]
+        verified:
+          type: boolean
+        checkedAt:
+          type: string
+          format: date-time
+        dateChecked:
+          type: string
+          format: date-time
+        contractId:
+          type: string
+          nullable: true
+        tomlUrl:
+          type: string
+          nullable: true
+        verification:
+          type: object
+          required: [status, verified, checkedAt, tomlUrl]
+          properties:
+            status:
+              type: string
+              enum: [verified, unverified]
+            verified:
+              type: boolean
+            checkedAt:
+              type: string
+              format: date-time
+            tomlUrl:
+              type: string
+              nullable: true
+        provenance:
+          type: object
+          required: [source, checkedAt, tomlUrl, verified]
+          properties:
+            source:
+              type: string
+            checkedAt:
+              type: string
+              format: date-time
+            tomlUrl:
+              type: string
+              nullable: true
+            verified:
+              type: boolean

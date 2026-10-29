@@ -9,6 +9,7 @@ import { registerGraphQL } from './api/graphql'
 import { registerWebhookRoutes } from './routes/webhooks'
 import { registerCandleRoutes } from './routes/candles'
 import { registerPairsRoutes } from './routes/pairs'
+import { registerPoolsRoutes } from './routes/pools'
 import { registerScreenerRoutes } from './routes/screener'
 import { registerMoversRoutes } from './routes/movers'
 import { registerHistoryRoutes } from './api/history'
@@ -22,17 +23,21 @@ import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
 import { registerFacilitatorRoutes } from './api/facilitator'
 import { registerPriceRoutes } from './routes/price'
+import { registerPremiumRoutes } from './routes/premium'
 import { registerVolumeRoutes } from './routes/volumes'
+import { registerCoverageRoutes } from './routes/coverage'
 import { registerBookRoutes } from './routes/book'
 import { registerSpreadsRoutes } from './routes/spreads'
 import { registerRateRoutes } from './routes/rates'
 import { registerBenchmarkRoutes } from './routes/benchmark'
+import { registerPegsRoutes } from './routes/pegs'
 import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerCorrelationRoutes } from './routes/correlation'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
+import { registerAssetRoutes } from './routes/assets'
 import { registerSettleRoute } from './routes/facilitator'
 import { registerApiVersioning, rewriteVersionedApiUrl } from './api/versioning'
 import { registerDispersionRoutes } from './routes/dispersion'
@@ -237,15 +242,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerWebhookRoutes(app)
   await registerCandleRoutes(app)
   await registerPairsRoutes(app)
+  await registerPoolsRoutes(app)
   await registerScreenerRoutes(app)
   await registerMoversRoutes(app)
   await registerHistoryRoutes(app)
   await registerPriceRoutes(app)
+  await registerPremiumRoutes(app)
   await registerVolumeRoutes(app)
+  await registerCoverageRoutes(app)
   await registerBookRoutes(app)
   await registerSpreadsRoutes(app)
   await registerRateRoutes(app)
   await registerBenchmarkRoutes(app)
+  await registerPegsRoutes(app)
   await registerOracleRoutes(app)
   await registerBasketRoutes(app)
   await registerCorrelationRoutes(app)
@@ -253,6 +262,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSnapshotRoutes(app)
   await registerVenueRoutes(app)
   await registerFiatRoutes(app)
+  await registerAssetRoutes(app)
   await registerSettleRoute(app)
   await registerDispersionRoutes(app)
   await registerHealthRoutes(app)

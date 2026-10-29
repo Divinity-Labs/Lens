@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
-import { sendInternalError } from '../errors'
+import { sendInternalError, apiError } from '../errors'
 import { isAggregatorVenue } from '../ingest/venues'
 
 // Supported windows → lookback in hours.
@@ -46,7 +46,7 @@ export async function registerVolumeRoutes(app: FastifyInstance) {
       return await computeVolumes(asset, req.query.window, req.query.network, req.network)
     } catch (err) {
       if (err instanceof VolumesInputError) {
-        return reply.status(400).send({ error: err.message })
+        return reply.status(400).send(apiError('invalid_parameter', err.message))
       }
       return sendInternalError(reply, req, err, 'Volume aggregation failed')
     }

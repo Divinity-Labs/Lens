@@ -7,6 +7,7 @@ import { prisma } from '../db'
 import { config } from '../config'
 import { api_key_auth_failures_total, admin_auth_failures_total, api_key_cache_lookups_total } from '../metrics'
 
+import { apiError } from '../errors'
 const log = createLogger('auth')
 
 type ApiKeyAuthFailureReason = 'missing' | 'malformed' | 'unknown' | 'revoked' | 'expired' | 'insufficient_scope'
@@ -518,7 +519,7 @@ async function apiKeyAuthPlugin(app: FastifyInstance) {
         reply.header('Retry-After', retryAfterSec)
         return reply.status(429).send({
           statusCode: 429,
-          error: 'Too Many Requests',
+          ...apiError('rate_limited', 'Too Many Requests'),
           message: `Daily rate limit of ${keyContext.ratePerDay} requests exceeded for this API key. Quota resets at UTC midnight.`,
           retryAfter: retryAfterSec,
         })
