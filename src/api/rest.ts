@@ -37,7 +37,7 @@ export const HISTORY_MAX_LIMIT = 1000
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
- * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
+ * outright — `a.split(':')[0]' — so every asset called USDC was the same asset,
  * and a request for Circle's mainnet USDC was answered with testnet USDC's
  * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
  *
@@ -76,8 +76,8 @@ function findPair(assetA: string, assetB: string, network: NetworkName) {
 
 export async function registerRESTRoutes(app: FastifyInstance) {
   // Validate every response against its declared schema in dev/test (no-op in
-  // production). Must run before the routes below are registered so they pick
-  // up the validating serializer.
+  // production). Must run before the routes below are registered so they pick up
+  // the validating serializer.
   installResponseValidation(app)
 
   /**
@@ -236,14 +236,11 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         reply.header('x-decimal-format', 'string')
       }
 
-      // Cache key is network-scoped and format-isolated so number and string payloads never collide,
-      // and scoped to staleThreshold if customized.
-      const cacheParts = [network, pair.pairKey]
-      if (decimalFormat === 'string') cacheParts.push('decimals_string')
-      if (staleThreshold !== undefined) cacheParts.push(`stale_${staleThreshold}`)
-      const cacheKey = cacheParts.join(':')
-
-      const cached = await getCachedPrice(cacheKey)
+      // The cache key is owned entirely by the redis helpers, which take
+      // (network, pairKey) and apply the `price:` prefix internally. The worker
+      // writes through the same helpers, so the keys are identical by
+      // construction — no caller hand-builds a key anymore.
+      const cached = await getCachedPrice(network, pair.pairKey)
       if (cached) {
         try {
           reply.header('X-Cache', 'HIT')
@@ -263,7 +260,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         lastUpdated: new Date().toISOString(),
       }
 
-      await setCachedPrice(cacheKey, result, config.cache.priceTtl)
+      await setCachedPrice(network, pair.pairKey, result, config.cache.priceTtl)
       reply.header('X-Cache', 'MISS')
       return result
     }
