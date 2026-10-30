@@ -760,6 +760,8 @@ paths:
                             - type: string
                         fee_bp:
                           type: integer
+                        venue:
+                          type: string
                         timestamp:
                           type: string
                           format: date-time
