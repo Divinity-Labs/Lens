@@ -25,6 +25,18 @@ vi.mock('../redis', () => ({
   },
 }))
 
+// `fanout.ts` reads `config.pairs` once at module load to build the bounded
+// label domain. The test environment configures no pairs, so stub one here —
+// otherwise the watched-pair branch is unreachable and the assertion below
+// would pass for the wrong reason.
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>()
+  return {
+    ...actual,
+    config: { ...actual.config, pairs: [{ pairKey: 'XLM/USDC' }] },
+  }
+})
+
 vi.mock('../events', () => ({
   priceEmitter: {
     on: vi.fn(),
@@ -67,6 +79,12 @@ vi.mock('prom-client', () => {
 
 import { fanOutManager } from '../ws/fanout'
 
+// The pair this deployment "watches" for the purposes of these tests. A real
+// deployment gets this from configuration; the test environment configures no
+// pairs at all, so without a stub the watched-pair branch below would never be
+// exercised and would silently rot.
+const WATCHED_PAIR = 'XLM/USDC'
+
 describe('FanOutManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -102,6 +120,55 @@ describe('FanOutManager', () => {
     unsubscribe()
   })
 
+  it('cleans up both internal maps on unregister', () => {
+    const mockSocket = {
+      id: 'client-3',
+      send: vi.fn(),
+      close: vi.fn(),
+    }
+
+    expect(fanOutManager.getClientCount()).toBe(0)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(0)
+
+    const unsubscribe = fanOutManager.register('XLM/USDC', mockSocket)
+    expect(fanOutManager.getClientCount()).toBe(1)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(1)
+    expect(fanOutManager.hasClient('client-3')).toBe(true)
+    expect(fanOutManager.hasPairClient('XLM/USDC', 'client-3')).toBe(true)
+
+    unsubscribe()
+
+    expect(fanOutManager.getClientCount()).toBe(0)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(0)
+    expect(fanOutManager.hasClient('client-3')).toBe(false)
+    expect(fanOutManager.hasPairClient('XLM/USDC', 'client-3')).toBe(false)
+  })
+
+  it('unregisters client and leaves remaining clients in pairClients correctly', () => {
+    const clientA = { id: 'client-a', send: vi.fn(), close: vi.fn() }
+    const clientB = { id: 'client-b', send: vi.fn(), close: vi.fn() }
+
+    const unsubA = fanOutManager.register('XLM/USDC', clientA)
+    const unsubB = fanOutManager.register('XLM/USDC', clientB)
+
+    expect(fanOutManager.getClientCount()).toBe(2)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(2)
+
+    unsubA()
+
+    expect(fanOutManager.getClientCount()).toBe(1)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(1)
+    expect(fanOutManager.hasClient('client-a')).toBe(false)
+    expect(fanOutManager.hasClient('client-b')).toBe(true)
+    expect(fanOutManager.hasPairClient('XLM/USDC', 'client-a')).toBe(false)
+    expect(fanOutManager.hasPairClient('XLM/USDC', 'client-b')).toBe(true)
+
+    unsubB()
+
+    expect(fanOutManager.getClientCount()).toBe(0)
+    expect(fanOutManager.getPairClientCount('XLM/USDC')).toBe(0)
+  })
+
   it('multiple clients on different pairs register correctly', () => {
     const client1 = { id: 'client-5', send: vi.fn(), close: vi.fn() }
     const client2 = { id: 'client-6', send: vi.fn(), close: vi.fn() }
@@ -133,6 +200,26 @@ describe('FanOutManager', () => {
     unsubscribers.forEach(unsubscribe => unsubscribe())
   })
 
+  it('keeps a watched pair as its own label, so per-pair subscribers stay visible', () => {
+    // `config.pairs` is operator-defined and fixed for the process, so it is a
+    // bounded label domain. Collapsing it into `other` would be safe but would
+    // make "which pair has subscribers" unanswerable on the dashboard.
+    const unsubscribe = fanOutManager.register(WATCHED_PAIR, {
+      id: 'watched-pair-client',
+      send: vi.fn(),
+      close: vi.fn(),
+    })
+
+    const clientLabels = metricLabelValues
+      .filter(({ metric }) => metric === 'ws_clients_total')
+      .map(({ value }) => value)
+
+    expect(clientLabels).toContain(WATCHED_PAIR)
+    expect(clientLabels).not.toContain('other')
+
+    unsubscribe()
+  })
+
   it('counts a wildcard subscriber once in the aggregate series', () => {
     fanOutManager.register('*', { id: 'wildcard-client', send: vi.fn(), close: vi.fn() })
 
@@ -141,7 +228,7 @@ describe('FanOutManager', () => {
     )).toHaveLength(1)
   })
 
-  it('destroy cleans up all state', async () => {
+  it('destroy cleans up all state idempotently', async () => {
     const mockSocket = {
       id: 'client-cleanup',
       send: vi.fn(),
@@ -150,7 +237,33 @@ describe('FanOutManager', () => {
 
     fanOutManager.register('XLM/USDC', mockSocket)
     await fanOutManager.destroy()
-    await fanOutManager.destroy()
+    await fanOutManager.destroy() // Idempotent second call
+    expect(mockSocket.close).toHaveBeenCalledWith(1001, 'Server shutting down')
+  })
+
+  it('sends deliberate close code 1001 to all connected clients on shutdown (#347)', async () => {
+    const socketA = { id: 'client-a', send: vi.fn(), close: vi.fn() }
+    const socketB = { id: 'client-b', send: vi.fn(), close: vi.fn() }
+
+    fanOutManager.register('XLM/USDC', socketA)
+    fanOutManager.register('BTC/USDC', socketB)
+
+    await fanOutManager.destroy(1001, 'Server shutting down')
+
+    expect(socketA.close).toHaveBeenCalledWith(1001, 'Server shutting down')
+    expect(socketB.close).toHaveBeenCalledWith(1001, 'Server shutting down')
+  })
+
+  it('respects flush window during shutdown before closing clients (#347)', async () => {
+    const socket = { id: 'flush-client', send: vi.fn(), close: vi.fn() }
+    fanOutManager.register('XLM/USDC', socket)
+
+    const start = Date.now()
+    await fanOutManager.destroy(1001, 'Server shutting down', 50)
+    const elapsed = Date.now() - start
+
+    expect(elapsed).toBeGreaterThanOrEqual(40)
+    expect(socket.close).toHaveBeenCalledWith(1001, 'Server shutting down')
   })
 })
 

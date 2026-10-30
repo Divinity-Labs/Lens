@@ -1,3 +1,17 @@
+type Asset {
+  code: String!
+  issuer: String
+}
+
+type Pair {
+  pairKey: String!
+  network: String!
+  assetA: Asset!
+  assetB: Asset!
+  latestPrice: Float
+  lastUpdated: String
+}
+
 type AggregatedPrice {
   assetA: String!
   assetB: String!
@@ -27,6 +41,7 @@ type RouteInfo {
   estimatedOutput: Float!
   slippagePct: Float!
   recommendation: String!
+  network: String
 }
 
 type PriceBucket {
@@ -84,6 +99,167 @@ type OracleComparison {
   oracles: [OracleSource!]!
 }
 
+"""Sort order for the `screener` query."""
+enum ScreenerSortOrder {
+  ASC
+  DESC
+}
+
+"""
+Filters for the `screener` query — the same filters REST GET /screener
+accepts. Every field is optional; an omitted field does not filter.
+
+`marketCap` is declared only so it can be rejected with an explanation,
+mirroring the REST route: Lens has no circulating supply data to compute a
+market cap from. Passing it fails the query with UNSUPPORTED_PARAMETER
+rather than being silently ignored.
+"""
+input ScreenerFilters {
+  volume: Float
+  change24hMin: Float
+  change24hMax: Float
+  priceMin: Float
+  priceMax: Float
+  liquidity: Float
+  marketCap: Float
+}
+
+"""
+One row of screener results. `liquidityUnit` is the quote asset of
+`pairKey`; liquidity is summed AMM reserve value denominated in it.
+"""
+type ScreenerRow {
+  pairKey: String!
+  volume: Float!
+  price: Float!
+  change24h: Float!
+  liquidity: Float!
+  liquidityUnit: String!
+}
+
+"""
+One page of screener results, cursor-paginated exactly like REST
+GET /screener: pass `nextCursor` back as `cursor` for the following page;
+it is null on the last page. `hasMore` reports whether another page exists.
+"""
+type ScreenerPage {
+  network: String!
+  rows: [ScreenerRow!]!
+  nextCursor: String
+  hasMore: Boolean!
+}
+
+"""
+One venue's figures in a `volumes` or `spreads` result. Both queries
+return venues as a list of this type so a caller can select only the fields
+it wants per venue.
+
+Which fields are set depends on the query, and mirrors the matching REST
+route field for field:
+
+- `volumes`: `venue`, `volume` (the asset's traded volume on that venue,
+  in the asset's own units, summed across every pair) and `aggregator`.
+  The spread fields are null.
+- `spreads`: one entry per (venue, pair): `venue`, `pairKey`, `bid`,
+  `ask`, `mid`, `spreadBps`, `spreadPct`, `observations`,
+  `lastSeen`. `volume` is null.
+"""
+type VenueQuote {
+  venue: String!
+
+  """
+  Whether the venue is an aggregator re-reporting primary-market trades (volumes only).
+  """
+  aggregator: Boolean
+
+  """Traded volume in the asset's own units over the window (volumes only)."""
+  volume: Float
+
+  """
+  The pair this quote is for (spreads only): two pairs on one venue are different books.
+  """
+  pairKey: String
+
+  """Lowest print in the window (spreads only)."""
+  bid: Float
+
+  """Highest print in the window (spreads only)."""
+  ask: Float
+  mid: Float
+
+  """(ask - bid) / mid * 10000 (spreads only)."""
+  spreadBps: Float
+
+  """spreadBps / 100 (spreads only)."""
+  spreadPct: Float
+  observations: Int
+  lastSeen: String
+}
+
+"""
+Labelled net (primary markets only) and gross (including aggregators) volume.
+"""
+type VolumeTotals {
+  net: Float!
+  gross: Float!
+}
+
+type VolumeProvenance {
+  venues: [String!]!
+  sampleCount: Int!
+  observedSampleCount: Int!
+  latestTradeAt: String
+  dataAgeSeconds: Int
+}
+
+"""
+Cross-venue traded volume for an asset: the same figures as REST
+GET /volumes/:asset, with the per-venue breakdown (`byVenue` on REST) as a
+typed `venues` list.
+"""
+type VolumeReport {
+  asset: String!
+  network: String!
+  window: String!
+  startTime: String!
+  endTime: String!
+  totals: VolumeTotals!
+  netVolume: Float!
+  grossVolume: Float!
+
+  """Alias for netVolume, as on REST."""
+  totalVolume: Float!
+
+  """Per-venue volume, ordered by venue name like REST's `venues`."""
+  venues: [VenueQuote!]!
+  tradeCount: Int!
+  netTradeCount: Int!
+  grossTradeCount: Int!
+  medianTradeSize: Float
+  topTradeVolumeShare: Float
+  volumeConcentration: Float
+  concentrationMeasure: String!
+
+  """ok, no_trades or no_positive_volume."""
+  status: String!
+  provenance: VolumeProvenance!
+}
+
+"""
+Per-(venue, pair) spreads for an asset: the same figures as REST
+GET /spreads/:asset. `venues` is tightest first; `tightest` is null when no
+venue quoted the asset in the window.
+"""
+type SpreadReport {
+  asset: String!
+  network: String!
+  window: String!
+  startTime: String!
+  endTime: String!
+  venues: [VenueQuote!]!
+  tightest: VenueQuote
+}
+
 type Query {
   """
   Aggregated price for a pair. Three outcomes are kept distinct:
@@ -109,13 +285,44 @@ type Query {
   return the boundary bucket at t1 in both results.
   """
   getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int, from: String, to: String): [PriceBucket]
-  listPairs: [String]!
+  listPairs: [String]! @deprecated(reason: "Use 'pairs' instead")
+  pairs: [Pair!]!
 
   """
   Compares the Lens price for an asset against every configured oracle.
   The network argument defaults to the active network.
   """
   oracle(asset: String!, network: String): OracleComparison
+
+  """
+  The pair screener: filter, sort and cursor-paginate tracked pairs. Shares
+  its implementation, filters, sort fields and cursor pagination with REST
+  GET /screener, and resolves against the active network.
+  
+  - `sortBy` accepts the REST route's fields: volume, change_24h, price,
+    liquidity. Sorting on `market_cap` fails with the same explanation REST
+    gives (UNSUPPORTED_PARAMETER is reserved for the `marketCap` filter):
+    Lens has no circulating supply data to compute it from.
+  - `limit` is clamped to [1, 100] like REST, never
+    rejected.
+  """
+  screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
+
+  """
+  Cross-venue traded volume for an asset. Shares its implementation with
+  REST GET /volumes/:asset: same windows (24h, 7d, 30d; default 24h), same
+  figures. `network` (testnet or mainnet) defaults to the active network;
+  any other value fails with INVALID_INPUT, as REST answers 400.
+  """
+  volumes(asset: String!, window: String, network: String): VolumeReport!
+
+  """
+  Per-(venue, pair) bid/ask spreads for an asset. Shares its implementation
+  with REST GET /spreads/:asset: same windows (5m, 15m, 1h, 24h; default 5m),
+  same figures. `network` (testnet or mainnet) defaults to the active
+  network; any other value fails with INVALID_INPUT, as REST answers 400.
+  """
+  spreads(asset: String!, window: String, network: String): SpreadReport!
 }
 
 type Subscription {

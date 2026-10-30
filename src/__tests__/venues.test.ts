@@ -25,6 +25,7 @@ vi.mock('../config', async (importOriginal) => {
 import { registerVenueRoutes } from '../routes/venues'
 import { venueAdapters, type VenueAdapter } from '../ingest/venues'
 import { registerNetworkSelector } from '../middleware/network'
+import { calculateVenueVolumeShare } from '../services/venueVolume'
 
 const testAdapter: VenueAdapter = {
   name: 'test-adapter',
@@ -84,6 +85,135 @@ describe('GET /venues/registry', () => {
     expect(response.json().venues).toContainEqual(expect.objectContaining({
       id: 'test-adapter', kind: 'amm', network: 'mainnet', enabled: true, liveness: 'stale', lastSeenAt: null,
     }))
+    await app.close()
+  })
+})
+
+describe('GET /venues?window= — Venue Share of Volume', () => {
+  async function buildVenueApp() {
+    const app = Fastify({ logger: false })
+    await app.register(registerNetworkSelector)
+    await registerVenueRoutes(app)
+    await app.ready()
+    return app
+  }
+
+  const sdexVolumeRows = [
+    { source: 'SDEX', samples: 10, base_volume: 1000, counter_volume: 2000, last_seen: new Date() },
+  ]
+  const ammVolumeRows = [
+    { source: 'AMM', samples: 5, base_volume: 500, counter_volume: 1000, last_seen: new Date() },
+  ]
+  const emptyRows = []
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('calculates volume share across multiple active venues with shares summing to 100%', async () => {
+    // Both SDEX and AMM have data in the current 24h window
+    const combinedVolumeRows = [
+      { source: 'SDEX', samples: 10, base_volume: 1000, counter_volume: 2000, last_seen: new Date() },
+      { source: 'AMM', samples: 5, base_volume: 500, counter_volume: 1000, last_seen: new Date() },
+    ]
+    mockQuery
+      .mockResolvedValueOnce({ rows: combinedVolumeRows })  // currentQuery
+      .mockResolvedValueOnce({ rows: [] })  // previousQuery
+
+    const app = await buildVenueApp()
+
+    const response = await app.inject({ method: 'GET', url: '/venues?window=24h' })
+
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.network).toBe('testnet')
+    expect(body.window).toBe('24h')
+    expect(body.venues.length).toBe(4)
+
+    const sdex = body.venues.find((v: any) => v.venue === 'SDEX')
+    const amm = body.venues.find((v: any) => v.venue === 'AMM')
+    const soroswap = body.venues.find((v: any) => v.venue === 'soroswap_amm')
+    const aquarius = body.venues.find((v: any) => v.venue === 'aquarius_amm')
+    expect(sdex.baseVolume).toBe(1000)
+    expect(amm.baseVolume).toBe(500)
+    expect(soroswap.baseVolume).toBe(0)
+    expect(aquarius.baseVolume).toBe(0)
+
+// Shares must sum to ~100%
+    const totalShare = sdex.marketShare + amm.marketShare + soroswap.marketShare + aquarius.marketShare
+    expect(totalShare).toBeGreaterThanOrEqual(99.99)
+    expect(totalShare).toBeLessThanOrEqual(100.01)
+
+    expect(body.excludedVenues.sort()).toEqual(['aquarius_amm', 'soroswap_amm'])
+    expect(body.periodOverPeriodPctChange).toBeDefined()
+
+    await app.close()
+  })
+
+  it('accepts window values 24h, 7d, 30d', async () => {
+    mockQuery.mockResolvedValue({ rows: emptyRows })
+
+    for (const window of ['24h', '7d', '30d']) {
+      const app = await buildVenueApp()
+      const response = await app.inject({ method: 'GET', url: `/venues?window=${window}` })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().window).toBe(window)
+      await app.close()
+    }
+  })
+
+  it('rejects invalid window with 400', async () => {
+    mockQuery.mockResolvedValue({ rows: emptyRows })
+
+    const app = await buildVenueApp()
+    await app.ready()
+
+    const response = await app.inject({ method: 'GET', url: '/venues?window=1y' })
+    expect(response.statusCode).toBe(400)
+
+    await app.close()
+  })
+
+  it('handles zero-trade venue gracefully (no zero-division) and reports staleness', async () => {
+    // SDEX has trades, AMM has none → AMM is excluded/stale
+    const sdexRows = [
+      { source: 'SDEX', samples: 10, base_volume: 1000, counter_volume: 2000, last_seen: new Date() },
+    ]
+    mockQuery
+      .mockResolvedValueOnce({ rows: sdexRows })  // currentQuery
+      .mockResolvedValueOnce({ rows: [] })  // previousQuery
+
+    const app = await buildVenueApp()
+
+    const response = await app.inject({ method: 'GET', url: '/venues?window=24h' })
+
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+
+    const amm = body.venues.find((v: any) => v.venue === 'AMM')
+    expect(amm.baseVolume).toBe(0)
+    expect(amm.marketShare).toBe(0)
+
+    // SDEX should have ~100% share since it's the only one with volume
+    const sdex = body.venues.find((v: any) => v.venue === 'SDEX')
+    expect(sdex.marketShare).toBeCloseTo(100, 1)
+
+    // AMM should be listed as excluded due to zero samples
+    expect(body.excludedVenues).toContain('AMM')
+
+    await app.close()
+  })
+
+  it('defaults to 24h when window is omitted', async () => {
+    mockQuery.mockResolvedValue({ rows: emptyRows })
+
+    const app = await buildVenueApp()
+    await app.ready()
+
+    const response = await app.inject({ method: 'GET', url: '/venues' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().window).toBe('24h')
+
     await app.close()
   })
 })
