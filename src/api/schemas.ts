@@ -245,6 +245,7 @@ export const poolsResponseSchema = {
           reserve_b: { type: ['number', 'null'] },
           spot_price: { type: ['number', 'null'] },
           fee_bp: { type: ['integer', 'null'] },
+          venue: { type: 'string' },
         },
       },
     },

@@ -9,7 +9,7 @@
  * Issue: #103, #218
  */
 
-import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
+import { config, activeNetwork, type NetworkName } from '../../config'
 import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
@@ -21,7 +21,9 @@ import {
 } from './runner'
 import { fetchWithTimeout } from '../../fetch'
 
-const log = createLogger('ingester:Phoenix')
+const log = createLogger('ingester:phoenix')
+
+const DEFAULT_PHOENIX_API_URL = 'https://api.phoenix.stellar.org'
 
 export function _resetLastPrice(): void {
   resetLastPrice('Phoenix')
@@ -43,7 +45,7 @@ export interface PhoenixListResponse {
 
 export async function fetchPhoenixPools(
   pair: WatchedPair,
-  apiUrl: string = config.Phoenix.apiUrl
+  apiUrl: string = DEFAULT_PHOENIX_API_URL
 ): Promise<PhoenixPool[]> {
   try {
     const assetAStr = pair.assetA.issuer
@@ -100,7 +102,7 @@ export async function ingestPhoenixPair(
   pair: WatchedPair,
   network: NetworkName = activeNetwork
 ): Promise<void> {
-  const pools = await fetchPhoenixPools(pair, getNetworkConfig(network).Phoenix.apiUrl)
+  const pools = await fetchPhoenixPools(pair, DEFAULT_PHOENIX_API_URL)
   if (pools.length === 0) return
 
   const points = derivePhoenixPricePoints(pools, pair)
@@ -109,21 +111,21 @@ export async function ingestPhoenixPair(
   await writeVenuePricePoints('Phoenix', points, pair, network)
 }
 
-export const PhoenixAdapter: VenueAdapter<PhoenixPool[], PhoenixPool[]> = {
+export const phoenixAdapter: VenueAdapter<PhoenixPool[], PhoenixPool[]> = {
   name: 'Phoenix',
   kind: 'amm',
   source: 'Phoenix_amm',
 
-  isEnabled(network: NetworkName): boolean {
-    return getNetworkConfig(network).Phoenix.enabled
+  isEnabled(_network: NetworkName): boolean {
+    return false
   },
 
   getPollIntervalMs(_network: NetworkName): number {
     return config.indexer.pollIntervalMs
   },
 
-  async discover(pair: WatchedPair, network: NetworkName): Promise<PhoenixPool[][]> {
-    const pools = await fetchPhoenixPools(pair, getNetworkConfig(network).Phoenix.apiUrl)
+  async discover(pair: WatchedPair, _network: NetworkName): Promise<PhoenixPool[][]> {
+    const pools = await fetchPhoenixPools(pair, DEFAULT_PHOENIX_API_URL)
     return pools.length > 0 ? [pools] : []
   },
 
@@ -147,7 +149,8 @@ export const PhoenixAdapter: VenueAdapter<PhoenixPool[], PhoenixPool[]> = {
   _getLastPrice,
 }
 
-export async function startPhoenixIngester(network: NetworkName = activeNetwork): Promise<void> {
-  await startVenueAdapter(PhoenixAdapter, network)
-}
+export const PhoenixAdapter = phoenixAdapter
 
+export async function startPhoenixIngester(network: NetworkName = activeNetwork): Promise<void> {
+  await startVenueAdapter(phoenixAdapter, network)
+}
