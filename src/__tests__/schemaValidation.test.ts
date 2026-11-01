@@ -24,6 +24,10 @@ vi.mock('../aggregator/bestRoute', () => ({
   getBestRoute: mockGetBestRoute,
 }))
 
+vi.mock('../aggregator/splitRoute', () => ({
+  getSplitRecommendation: mockGetSplitRecommendation,
+}))
+
 vi.mock('../aggregator/vwap', () => ({
   getAggregatedPrice: mockGetAggregatedPrice,
 }))
@@ -55,7 +59,7 @@ vi.mock('../config', () => ({
 }))
 
 import { registerRESTRoutes } from '../api/rest'
-import { priceResponseSchema } from '../api/schemas'
+import { priceResponseSchema, splitResponseSchema } from '../api/schemas'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
