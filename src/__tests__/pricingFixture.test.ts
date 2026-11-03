@@ -22,7 +22,7 @@ function installFixtureQuery() {
       const sorted = [...rows].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       const prices = sorted.map(row => row.price)
       return { rows: [{
-        open: prices[0], high: Math.max(...prices), low: Math.min(...prices), close: prices[prices.length - 1],
+        open: String(prices[0]), high: String(Math.max(...prices)), low: String(Math.min(...prices)), close: String(prices[prices.length - 1]),
         volume: String(sorted.reduce((sum, row) => sum + row.baseVolume, 0)), trade_count: String(sorted.length),
       }] }
     }

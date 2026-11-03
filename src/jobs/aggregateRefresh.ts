@@ -1,8 +1,10 @@
 import { Queue, Worker } from 'bullmq'
+import { Prisma } from '@prisma/client'
 import { config, getNetworkConfig, type NetworkName } from '../config'
 import { prisma } from '../db'
 import { setCachedPrice } from '../redis'
-import { calculateVWAP, calculateOHLCV, getAggregatedPrice } from '../aggregator/vwap'
+import { calculateVWAPExact, calculateOHLCVExact, getAggregatedPrice } from '../aggregator/vwap'
+import { withExactPriceFields } from '../aggregator/priceFields'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { createLogger } from '../logger'
 
@@ -35,7 +37,7 @@ export function startAggregateWorker(network: NetworkName) {
     async (job) => {
       const { pairKey, pair } = job.data
       try {
-        const agg = await getAggregatedPrice(pairKey, network)
+        const agg = await getAggregatedPrice(pairKey, network, { decimalFormat: 'string' })
         const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, network)
 
         const result = {
@@ -46,7 +48,7 @@ export function startAggregateWorker(network: NetworkName) {
           // the payload has to carry the same network the route stamps — a
           // cache hit is served verbatim, network field included.
           network,
-          ...agg,
+          ...withExactPriceFields(agg),
           bestRoute: route.route,
           lastUpdated: new Date(),
         }
@@ -69,27 +71,33 @@ export function startAggregateWorker(network: NetworkName) {
 
         for (const w of windows) {
           const [vwap, sdexVwap, ammVwap, ohlcv] = await Promise.all([
-            calculateVWAP(pairKey, w.minutes, network),
-            calculateVWAP(pairKey, w.minutes, network, 'SDEX'),
-            calculateVWAP(pairKey, w.minutes, network, 'AMM'),
-            calculateOHLCV(pairKey, w.minutes, network),
+            calculateVWAPExact(pairKey, w.minutes, network),
+            calculateVWAPExact(pairKey, w.minutes, network, 'SDEX'),
+            calculateVWAPExact(pairKey, w.minutes, network, 'AMM'),
+            calculateOHLCVExact(pairKey, w.minutes, network),
           ])
 
-          if (vwap === 0) continue
+          if (!/[1-9]/.test(vwap)) continue
+
+          // Prisma Decimal fields use Decimal.js values. Construct them from
+          // the PostgreSQL numeric text so no JavaScript Number rounding is
+          // introduced on the history persistence path.
+          const decimal = (value: string) => new Prisma.Decimal(value)
+          const optionalDecimal = (value: string) => /[1-9]/.test(value) ? decimal(value) : null
 
           await prisma.priceAggregate.upsert({
             where: { network_pairKey_window_bucket: { network, pairKey, window: w.key, bucket } },
             create: {
               network, pairKey, window: w.key, bucket,
-              vwap, sdexVwap: sdexVwap || null, ammVwap: ammVwap || null,
-              volume: ohlcv.volume, tradeCount: ohlcv.tradeCount,
-              openPrice: ohlcv.open || null, closePrice: ohlcv.close || null,
-              highPrice: ohlcv.high || null, lowPrice: ohlcv.low || null,
+              vwap: decimal(vwap), sdexVwap: optionalDecimal(sdexVwap), ammVwap: optionalDecimal(ammVwap),
+              volume: decimal(ohlcv.volume), tradeCount: ohlcv.tradeCount,
+              openPrice: optionalDecimal(ohlcv.open), closePrice: optionalDecimal(ohlcv.close),
+              highPrice: optionalDecimal(ohlcv.high), lowPrice: optionalDecimal(ohlcv.low),
             },
             update: {
-              vwap, sdexVwap: sdexVwap || null, ammVwap: ammVwap || null,
-              volume: ohlcv.volume, tradeCount: ohlcv.tradeCount,
-              closePrice: ohlcv.close || null, highPrice: ohlcv.high || null, lowPrice: ohlcv.low || null,
+              vwap: decimal(vwap), sdexVwap: optionalDecimal(sdexVwap), ammVwap: optionalDecimal(ammVwap),
+              volume: decimal(ohlcv.volume), tradeCount: ohlcv.tradeCount,
+              closePrice: optionalDecimal(ohlcv.close), highPrice: optionalDecimal(ohlcv.high), lowPrice: optionalDecimal(ohlcv.low),
             },
           })
         }

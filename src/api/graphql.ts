@@ -3,7 +3,9 @@ import { ErrorWithProps } from 'mercurius'
 import { price_requests_total, active_subscriptions, api_key_auth_failures_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
 import {
+  GraphQLScalarType,
   GraphQLError,
+  Kind,
   type ExecutionResult,
   type DocumentNode,
   type OperationDefinitionNode,
@@ -13,6 +15,7 @@ import { hasScope, extractBearer, lookupApiKey } from './auth'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
+import { withExactPriceFields } from '../aggregator/priceFields'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
 import { config, activeNetwork, type NetworkName } from '../config'
@@ -115,6 +118,8 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
 }
 
 export const schema = `
+  scalar Decimal
+
   type Asset {
     code: String!
     issuer: String
@@ -133,18 +138,29 @@ export const schema = `
     assetA: String!
     assetB: String!
     pairKey: String!
-    price: Float!
-    sdexPrice: Float!
-    ammPrice: Float!
+    price: Float! @deprecated(reason: "Use priceExact to preserve decimal precision")
+    priceExact: Decimal!
+    sdexPrice: Float! @deprecated(reason: "Use sdexPriceExact to preserve decimal precision")
+    sdexPriceExact: Decimal!
+    ammPrice: Float! @deprecated(reason: "Use ammPriceExact to preserve decimal precision")
+    ammPriceExact: Decimal!
     bestRoute: String!
-    volume24h: Float!
-    sdexVolume24h: Float!
-    ammVolume24h: Float!
-    vwap1m: Float!
-    vwap5m: Float!
-    vwap1h: Float!
-    vwap24h: Float!
-    priceChange24h: Float!
+    volume24h: Float! @deprecated(reason: "Use volume24hExact to preserve decimal precision")
+    volume24hExact: Decimal!
+    sdexVolume24h: Float! @deprecated(reason: "Use sdexVolume24hExact to preserve decimal precision")
+    sdexVolume24hExact: Decimal!
+    ammVolume24h: Float! @deprecated(reason: "Use ammVolume24hExact to preserve decimal precision")
+    ammVolume24hExact: Decimal!
+    vwap1m: Float! @deprecated(reason: "Use vwap1mExact to preserve decimal precision")
+    vwap1mExact: Decimal!
+    vwap5m: Float! @deprecated(reason: "Use vwap5mExact to preserve decimal precision")
+    vwap5mExact: Decimal!
+    vwap1h: Float! @deprecated(reason: "Use vwap1hExact to preserve decimal precision")
+    vwap1hExact: Decimal!
+    vwap24h: Float! @deprecated(reason: "Use vwap24hExact to preserve decimal precision")
+    vwap24hExact: Decimal!
+    priceChange24h: Float! @deprecated(reason: "Use priceChange24hExact to preserve decimal precision")
+    priceChange24hExact: Decimal!
     lastUpdated: String!
     sources: Int!
     confidence: String!
@@ -164,15 +180,23 @@ export const schema = `
   type PriceBucket {
     bucket: String!
     window: String!
-    vwap: Float!
-    sdexVwap: Float
-    ammVwap: Float
-    volume: Float!
+    vwap: Float! @deprecated(reason: "Use vwapExact to preserve decimal precision")
+    vwapExact: Decimal!
+    sdexVwap: Float @deprecated(reason: "Use sdexVwapExact to preserve decimal precision")
+    sdexVwapExact: Decimal
+    ammVwap: Float @deprecated(reason: "Use ammVwapExact to preserve decimal precision")
+    ammVwapExact: Decimal
+    volume: Float! @deprecated(reason: "Use volumeExact to preserve decimal precision")
+    volumeExact: Decimal!
     tradeCount: Int!
-    open: Float
-    close: Float
-    high: Float
-    low: Float
+    open: Float @deprecated(reason: "Use openExact to preserve decimal precision")
+    openExact: Decimal
+    close: Float @deprecated(reason: "Use closeExact to preserve decimal precision")
+    closeExact: Decimal
+    high: Float @deprecated(reason: "Use highExact to preserve decimal precision")
+    highExact: Decimal
+    low: Float @deprecated(reason: "Use lowExact to preserve decimal precision")
+    lowExact: Decimal
   }
 
   type PriceUpdate {
@@ -568,6 +592,27 @@ export function getRootFieldNames(document: DocumentNode, operationName?: string
 }
 
 export const resolvers = {
+  Decimal: new GraphQLScalarType({
+    name: 'Decimal',
+    serialize(value) {
+      if (typeof value !== 'string' || !/^-?(?:\d+\.?\d*|\.\d+)$/.test(value)) {
+        throw new TypeError('Decimal values must be PostgreSQL decimal text')
+      }
+      return value
+    },
+    parseValue(value) {
+      if (typeof value !== 'string' || !/^-?(?:\d+\.?\d*|\.\d+)$/.test(value)) {
+        throw new TypeError('Decimal inputs must be strings')
+      }
+      return value
+    },
+    parseLiteral(ast) {
+      if (ast.kind !== Kind.STRING || !/^-?(?:\d+\.?\d*|\.\d+)$/.test(ast.value)) {
+        throw new TypeError('Decimal literals must be strings')
+      }
+      return ast.value
+    },
+  }),
   Query: {
     getPrice: withScope('read:prices', async function (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
@@ -598,10 +643,20 @@ export const resolvers = {
       const cacheKey = `${activeNetwork}:${pairKey}`
       const cached = await getCachedPrice(cacheKey)
       if (cached) {
-        try { return JSON.parse(cached) } catch { /* fall through */ }
+        try {
+          const parsed = JSON.parse(cached)
+          const exactFields = [
+            'priceExact', 'sdexPriceExact', 'ammPriceExact', 'volume24hExact',
+            'sdexVolume24hExact', 'ammVolume24hExact', 'vwap1mExact', 'vwap5mExact',
+            'vwap1hExact', 'vwap24hExact', 'priceChange24hExact',
+          ]
+          if (exactFields.every(field => typeof parsed[field] === 'string')) return parsed
+        } catch { /* fall through */ }
       }
 
-      const agg = await getAggregatedPrice(pairKey, activeNetwork)
+      const agg = withExactPriceFields(
+        await getAggregatedPrice(pairKey, activeNetwork, { decimalFormat: 'string' })
+      )
       const route = await getBestRoute(pair.assetA, pair.assetB, pairKey, 1000, activeNetwork)
       return {
         assetA, assetB, pairKey, ...agg,
@@ -702,15 +757,23 @@ export const resolvers = {
       return result.rows.map(r => ({
         bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
         window: r.window,
-        vwap: formatPrice(r.vwap),
-        sdexVwap: formatPrice(r.sdex_vwap),
-        ammVwap: formatPrice(r.amm_vwap),
-        volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
-        tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
-        open: formatPrice(r.open_price),
-        close: formatPrice(r.close_price),
-        high: formatPrice(r.high_price),
-        low: formatPrice(r.low_price),
+        vwap: Number(r.vwap),
+        vwapExact: r.vwap,
+        sdexVwap: r.sdex_vwap === null ? null : Number(r.sdex_vwap),
+        sdexVwapExact: r.sdex_vwap,
+        ammVwap: r.amm_vwap === null ? null : Number(r.amm_vwap),
+        ammVwapExact: r.amm_vwap,
+        volume: Number(r.volume),
+        volumeExact: r.volume,
+        tradeCount: r.trade_count,
+        open: r.open_price === null ? null : Number(r.open_price),
+        openExact: r.open_price,
+        close: r.close_price === null ? null : Number(r.close_price),
+        closeExact: r.close_price,
+        high: r.high_price === null ? null : Number(r.high_price),
+        highExact: r.high_price,
+        low: r.low_price === null ? null : Number(r.low_price),
+        lowExact: r.low_price,
       }))
     }),
 

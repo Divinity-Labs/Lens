@@ -6,7 +6,7 @@ vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
 
-import { calculateVWAP, calculateOHLCV, getPriceChange24h, getAggregatedPrice } from '../aggregator/vwap'
+import { calculateVWAP, calculateVWAPExact, calculateOHLCV, getPriceChange24h, getAggregatedPrice } from '../aggregator/vwap'
 import type { NetworkName } from '../config'
 
 // ── A seeded stand-in for the two `price_points`/`pool_snapshots` tables ──────
@@ -179,6 +179,11 @@ describe('aggregator network scoping', () => {
   beforeEach(() => {
     mockQuery.mockReset()
     installSeededDb()
+  })
+
+  it('keeps PostgreSQL decimal text intact for the exact VWAP path', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ vwap: '0.123456789012345678' }] })
+    await expect(calculateVWAPExact(PAIR, 60, 'testnet')).resolves.toBe('0.123456789012345678')
   })
 
   it('calculateVWAP returns a different price per network for the same pairKey', async () => {
