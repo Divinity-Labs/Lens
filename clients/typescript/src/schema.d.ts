@@ -198,6 +198,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/price/{assetA}/{assetB}/median": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get staleness-aware median price across fresh sources with priority fallback */
+        get: operations["getMedianPrice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/price/{asset}/fiat": {
         parameters: {
             query?: never;
@@ -2594,6 +2611,54 @@ export interface operations {
                 };
             };
             402: components["responses"]["PaymentRequired"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getMedianPrice: {
+        parameters: {
+            query?: {
+                /** @description Freshness threshold in seconds (default: 300, valid range: 5 to 86400) */
+                freshness?: number;
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: {
+                /** @description Formatting for decimal quantities (prices, volumes, reserves). Set to `string` to serialize high-precision `Decimal(36,18)` quantities as exact strings, preventing IEEE-754 floating-point precision loss. Defaults to `number`. Can also be negotiated via `Accept: application/json; decimals=strings` or query parameter `?decimals=strings`. */
+                "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
+            };
+            path: {
+                /** @example XLM */
+                assetA: string;
+                /** @example USDC */
+                assetB: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Staleness-aware median price result with included and excluded sources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Invalid parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pair not watched or no price data available */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             429: components["responses"]["TooManyRequests"];
         };
     };

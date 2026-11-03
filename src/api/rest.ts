@@ -23,6 +23,11 @@ import {
 } from './schemas'
 import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
+import {
+  getStalenessAwareMedianPrice,
+  MIN_FRESHNESS_THRESHOLD_SECONDS,
+  MAX_FRESHNESS_THRESHOLD_SECONDS,
+} from '../pricing/median'
 import { getRetentionPath } from '../jobs/retentionStatus'
 
 import { apiError } from '../errors'
@@ -266,6 +271,89 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       await setCachedPrice(cacheKey, result, config.cache.priceTtl)
       reply.header('X-Cache', 'MISS')
       return result
+    }
+  )
+
+  // GET /price/:assetA/:assetB/median
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: {
+      freshness?: string
+      freshnessSec?: string
+      staleThresholdSeconds?: string
+      decimals?: string
+      decimalFormat?: string
+    }
+  }>(
+    '/price/:assetA/:assetB/median',
+    { config: { scope: 'read:prices' } },
+    async (req, reply) => {
+      price_requests_total.inc()
+      const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
+
+      const rawFreshness =
+        req.query?.freshness ?? req.query?.freshnessSec ?? req.query?.staleThresholdSeconds
+      let freshnessThresholdSeconds: number | undefined
+      if (rawFreshness !== undefined) {
+        const parsed = Number(rawFreshness)
+        if (
+          !Number.isInteger(parsed) ||
+          parsed < MIN_FRESHNESS_THRESHOLD_SECONDS ||
+          parsed > MAX_FRESHNESS_THRESHOLD_SECONDS
+        ) {
+          return reply
+            .status(400)
+            .send(
+              apiError(
+                'invalid_parameter',
+                `freshness must be an integer between ${MIN_FRESHNESS_THRESHOLD_SECONDS} and ${MAX_FRESHNESS_THRESHOLD_SECONDS} seconds`
+              )
+            )
+        }
+        freshnessThresholdSeconds = parsed
+      }
+
+      const pair = findPair(assetA, assetB, network)
+      if (!pair) {
+        return reply
+          .status(404)
+          .send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      }
+
+      const decimalFormat = resolveDecimalFormat(req)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+      }
+
+      const medianResult = await getStalenessAwareMedianPrice(pair.pairKey, network, {
+        freshnessThresholdSeconds,
+      })
+
+      if (medianResult.medianPrice === null) {
+        return reply.status(404).send({
+          ...medianResult,
+          error: `No price data available for pair ${pair.pairKey} on ${network}`,
+          code: 'NOT_FOUND',
+          assetA: pair.assetA.code,
+          assetB: pair.assetB.code,
+          pairKey: pair.pairKey,
+          network,
+        })
+      }
+
+      return {
+        ...medianResult,
+        medianPrice:
+          decimalFormat === 'string'
+            ? formatDecimal(medianResult.medianPrice, decimalFormat)
+            : medianResult.medianPrice,
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        pairKey: pair.pairKey,
+        network,
+        lastUpdated: new Date().toISOString(),
+      }
     }
   )
 

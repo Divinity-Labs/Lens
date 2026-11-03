@@ -791,6 +791,76 @@
         }
       }
     },
+    "/v1/price/{assetA}/{assetB}/median": {
+      "get": {
+        "operationId": "getMedianPrice",
+        "summary": "Get staleness-aware median price across fresh sources with priority fallback",
+        "x-question": "What is the staleness-aware median price across venues, and which sources were included or excluded?",
+        "x-example": "GET /price/XLM/USDC/median?freshness=300&network=testnet",
+        "x-order": 53,
+        "x-category": "Core Pricing & Trade Execution",
+        "security": [],
+        "parameters": [
+          {
+            "name": "assetA",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "XLM"
+          },
+          {
+            "name": "assetB",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "USDC"
+          },
+          {
+            "name": "freshness",
+            "in": "query",
+            "required": false,
+            "description": "Freshness threshold in seconds (default: 300, valid range: 5 to 86400)",
+            "schema": {
+              "type": "integer",
+              "default": 300,
+              "minimum": 5,
+              "maximum": 86400
+            }
+          },
+          {
+            "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "$ref": "#/components/parameters/DecimalFormatHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Staleness-aware median price result with included and excluded sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters"
+          },
+          "404": {
+            "description": "Pair not watched or no price data available"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/v1/price/{asset}/fiat": {
       "get": {
         "x-question": "What is this asset worth in my local currency, such as naira?",
