@@ -26,7 +26,13 @@ import {
 } from './config.js';
 import { SpendBudget } from './budget.js';
 import { PaymentLedger } from './ledger.js';
-import { getMetrics, register } from '../metrics.js';
+import {
+  getMetrics,
+  register,
+  mcp_tool_calls_total,
+  mcp_tool_duration_seconds,
+  mcp_errors_total,
+} from '../metrics.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
 import { LENS_PRICE_TOOL_NAME, lensPriceToolDefinition, readLensPrice, type LensPriceQueries } from './priceTool.js';
 import {
@@ -100,6 +106,21 @@ function hostOf(url: string): string {
 
 export const VALID_TOOL_NAMES = ['bazaar_search', 'paid_call'] as const;
 export type ValidToolName = (typeof VALID_TOOL_NAMES)[number];
+
+export const KNOWN_MCP_TOOL_NAMES = [
+  'bazaar_search',
+  'paid_call',
+  'payment_budget',
+  LENS_PRICE_TOOL_NAME,
+] as const;
+export type KnownMcpToolName = (typeof KNOWN_MCP_TOOL_NAMES)[number];
+
+export function normalizeMcpToolLabel(name: unknown): string {
+  if (typeof name === 'string' && (KNOWN_MCP_TOOL_NAMES as readonly string[]).includes(name)) {
+    return name;
+  }
+  return 'unknown';
+}
 
 export interface McpServerConfig {
   fetchWithPayment?: typeof fetch;
@@ -467,7 +488,32 @@ export class BazaarMcpServer {
     });
 
     target.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === LENS_PRICE_TOOL_NAME) {
+      const toolLabel = normalizeMcpToolLabel(request?.params?.name);
+      const stopTimer = mcp_tool_duration_seconds.startTimer({ tool: toolLabel });
+      let outcome: 'success' | 'failure' = 'failure';
+
+      try {
+        const result = await this.executeToolCall(request);
+        const hasError = Boolean(
+          result && typeof result === 'object' && 'isError' in result && (result as { isError?: unknown }).isError
+        );
+        if (!hasError) {
+          outcome = 'success';
+        }
+        return result;
+      } catch (err) {
+        outcome = 'failure';
+        mcp_errors_total.inc({ code: MCP_ERROR_CODES.ERR_INTERNAL_FAILURE });
+        throw err;
+      } finally {
+        mcp_tool_calls_total.inc({ tool: toolLabel, outcome });
+        stopTimer();
+      }
+    });
+  }
+
+  private async executeToolCall(request: any) {
+    if (request.params.name === LENS_PRICE_TOOL_NAME) {
         if (!this.priceQueries) {
           return this.createErrorResponse(
             'ERR_INTERNAL_FAILURE',
@@ -774,7 +820,6 @@ export class BazaarMcpServer {
         'ERR_UNKNOWN_TOOL',
         `Unknown tool '${boundedName}'. Valid tools are: ${VALID_TOOL_NAMES.join(', ')}.`
       );
-    });
   }
 
   /**
@@ -875,10 +920,12 @@ export class BazaarMcpServer {
   }
 
   private createErrorResponse(code: McpErrorCode, reason: string, details?: Record<string, unknown>) {
+    const validCode = (code in MCP_ERROR_CODES) ? code : MCP_ERROR_CODES.ERR_INTERNAL_FAILURE;
+    mcp_errors_total.inc({ code: validCode });
     // For MCP, returning isError: true with a JSON payload is the standard way to return tool errors.
     const payload = {
       isError: true,
-      code,
+      code: validCode,
       reason,
       ...(details ? { details } : {}),
     };
@@ -952,6 +999,7 @@ export class BazaarMcpServer {
     settings: { authToken: string; path: string }
   ): Promise<void> {
     if (!hasValidBearerToken(req.headers.authorization, settings.authToken)) {
+      mcp_errors_total.inc({ code: MCP_ERROR_CODES.ERR_UNAUTHORIZED });
       sendJsonRpcError(
         res,
         401,
