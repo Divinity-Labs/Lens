@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total, active_subscriptions, api_key_auth_failures_total } from '../metrics'
+import { price_requests_total, active_subscriptions, api_key_auth_failures_total, graphql_errors_total, graphql_resolver_duration_seconds, graphql_operations_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
 import {
   GraphQLError,
@@ -75,6 +75,53 @@ const USER_FACING_CODES = new Set([
 ])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
+// Operation names come from the client and are therefore unbounded. Any
+// name that is not one of the known operations below folds into a single
+// constant label value so the cardinality of graphql_operations_total stays
+// bounded regardless of what clients send.
+const UNKNOWN_OPERATION_NAME = 'unknown'
+const UNKNOWN_OPERATION_TYPE = 'unknown'
+const KNOWN_OPERATION_NAMES = new Set([
+  'getPrice',
+  'getBestRoute',
+  'getPriceHistory',
+  'listPairs',
+  'priceUpdated',
+])
+const KNOWN_OPERATION_TYPES = new Set(['query', 'mutation', 'subscription'])
+
+// Error categories are a fixed enum so the error counter cannot grow with
+// client input. The category is derived from the error code the resolver chose
+// or from the shape of the failure, never from a raw client string.
+type GraphQLErrorCategory =
+  | 'invalid_input'
+  | 'pair_not_found'
+  | 'unauthorized'
+  | 'validation'
+  | 'resolver_error'
+  | 'internal'
+
+function categorizeGraphQLError(err: GraphQLError): GraphQLErrorCategory {
+  const original = err.originalError as { extensions?: { code?: unknown }; errors?: unknown } | undefined
+  // No originalError means graphql-js itself rejected the document (syntax or
+  // validation), which is the caller's own query and not a resolver failure.
+  if (!original) return 'validation'
+  if (Array.isArray(original.errors)) return 'validation'
+  const code = original.extensions?.code
+  if (code === 'INVALID_INPUT') return 'invalid_input'
+  if (code === 'PAIR_NOT_FOUND') return 'pair_not_found'
+  if (code === 'UNAUTHORIZED') return 'unauthorized'
+  if (typeof code === 'string' && USER_FACING_CODES.has(code)) return 'resolver_error'
+  return 'internal'
+}
+
+function recordGraphQLErrors(errors: readonly GraphQLError[] | undefined) {
+  if (!errors) return
+  for (const err of errors) {
+    graphql_errors_total.inc({ category: categorizeGraphQLError(err) })
+  }
+}
+
 function isUserFacing(err: GraphQLError): boolean {
   // No originalError means graphql-js itself rejected the document (syntax or
   // validation), which only describes the caller's own query.
@@ -93,6 +140,11 @@ function isUserFacing(err: GraphQLError): boolean {
 export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusContext) {
   const requestId = String(ctx?.reply?.request?.id ?? randomUUID())
   const log = ctx?.reply?.log ?? ctx?.app?.log
+
+  // Count every error the execution produced, categorized by a bounded set of
+  // categories. This happens before masking so the category reflects the real
+  // failure, not the masked INTERNAL_SERVER_ERROR that clients see.
+  recordGraphQLErrors(execution.errors)
 
   const errors = (execution.errors ?? []).map(err => {
     if (isUserFacing(err)) return err
@@ -179,7 +231,7 @@ export const schema = `
     pair: String!
     price: Float!
     ts: String!
-    """Which chain the price came from — testnet or mainnet."""
+    """Uhich chain the price came from — testnet or mainnet."""
     network: String!
   }
 
@@ -473,6 +525,24 @@ function findPair(assetA: string, assetB: string) {
   })
 }
 
+// Time a single resolver and record its duration in the histogram, labelled
+// by the GraphQL field name. The field name is fixed by the schema above, so
+// this label is bounded. Errors are recorded by the error formatter, not here.
+function instrumentResolver<T extends (...args: any[]) => unknown>(
+  field: string,
+  resolver: T,
+): T {
+  const wrapped = async function (this: unknown, ...args: any[]) {
+    const end = graphql_resolver_duration_seconds.startTimer({ field })
+    try {
+      return await (resolver as (...a: any[]) => unknown).apply(this, args)
+    } finally {
+      end()
+    }
+  }
+  return wrapped as unknown as T
+}
+
 const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
 
 /** Maps a shared REST/GraphQL validation failure onto the GraphQL INVALID_INPUT error. */
@@ -569,7 +639,7 @@ export function getRootFieldNames(document: DocumentNode, operationName?: string
 
 export const resolvers = {
   Query: {
-    getPrice: withScope('read:prices', async function (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
+    getPrice: instrumentResolver('getPrice', withScope('read:prices', async function (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
       for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
         if (!parseAssetStr(value)) {
@@ -608,111 +678,117 @@ export const resolvers = {
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
       }
-    }),
+    })),
 
-    getBestRoute: withScope('read:prices', async function (
-      _: unknown,
-      { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
-    ) {
-      const pair = findPair(assetA, assetB)
-      if (!pair) return null
-      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
-    }),
+    getBestRoute: instrumentResolver(
+      'getBestRoute',
+      withScope('read:prices', async function (
+        _: unknown,
+        { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
+      ) {
+        const pair = findPair(assetA, assetB)
+        if (!pair) return null
+        return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
+      }),
+    ),
 
-    getPriceHistory: withScope('read:history', async function (
-      _: unknown,
-      {
-        assetA,
-        assetB,
-        window,
-        limit = 100,
-        from,
-        to,
-      }: {
-        assetA: string
-        assetB: string
-        window: string
-        limit?: number
-        from?: string
-        to?: string
-      }
-    ) {
-      let fromDate: Date | undefined
-      let toDate: Date | undefined
-
-      if (from !== undefined && from !== null) {
-        fromDate = new Date(from)
-        if (isNaN(fromDate.getTime())) {
-          throw new ErrorWithProps('from must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+    getPriceHistory: instrumentResolver(
+      'getPriceHistory',
+      withScope('read:history', async function (
+        _: unknown,
+        {
+          assetA,
+          assetB,
+          window,
+          limit = 100,
+          from,
+          to,
+        }: {
+          assetA: string
+          assetB: string
+          window: string
+          limit?: number
+          from?: string
+          to?: string
         }
-      }
+      ) {
+        let fromDate: Date | undefined
+        let toDate: Date | undefined
 
-      if (to !== undefined && to !== null) {
-        toDate = new Date(to)
-        if (isNaN(toDate.getTime())) {
-          throw new ErrorWithProps('to must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+        if (from !== undefined && from !== null) {
+          fromDate = new Date(from)
+          if (isNaN(fromDate.getTime())) {
+            throw new ErrorWithProps('from must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+          }
         }
-      }
 
-      if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
-        throw new ErrorWithProps('from must be before to', { code: 'INVALID_INPUT' })
-      }
-
-      const intervalSecs = WINDOW_SECONDS[window] ?? HISTORY_INTERVAL_SECONDS[window] ?? 60
-
-      if (fromDate || toDate) {
-        const effectiveTo = toDate ?? new Date()
-        const effectiveFrom = fromDate ?? new Date(effectiveTo.getTime() - 24 * 60 * 60 * 1000)
-        const spanSecs = (effectiveTo.getTime() - effectiveFrom.getTime()) / 1000
-        if (spanSecs / intervalSecs > MAX_HISTORY_POINTS) {
-          throw new ErrorWithProps(
-            `requested window is too large for interval=${window} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`,
-            { code: 'INVALID_INPUT' }
-          )
+        if (to !== undefined && to !== null) {
+          toDate = new Date(to)
+          if (isNaN(toDate.getTime())) {
+            throw new ErrorWithProps('to must be a valid ISO 8601 date', { code: 'INVALID_INPUT' })
+          }
         }
-      }
 
-      const pairKey = makePairKey(assetA, assetB)
-      const conditions: string[] = ['pair_key = $1', 'window = $2']
-      const params: any[] = [pairKey, window]
+        if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+          throw new ErrorWithProps('from must be before to', { code: 'INVALID_INPUT' })
+        }
 
-      if (fromDate) {
-        params.push(fromDate)
-        conditions.push(`bucket >= $${params.length}`)
-      }
+        const intervalSecs = WINDOW_SECONDS[window] ?? HISTORY_INTERVAL_SECONDS[window] ?? 60
 
-      if (toDate) {
-        params.push(toDate)
-        conditions.push(`bucket <= $${params.length}`)
-      }
+        if (fromDate || toDate) {
+          const effectiveTo = toDate ?? new Date()
+          const effectiveFrom = fromDate ?? new Date(effectiveTo.getTime() - 24 * 60 * 60 * 1000)
+          const spanSecs = (effectiveTo.getTime() - effectiveFrom.getTime()) / 1000
+          if (spanSecs / intervalSecs > MAX_HISTORY_POINTS) {
+            throw new ErrorWithProps(
+              `requested window is too large for interval=${window} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`,
+              { code: 'INVALID_INPUT' }
+            )
+          }
+        }
 
-      params.push(Math.min(limit, 1000))
-      const limitParam = `$${params.length}`
+        const pairKey = makePairKey(assetA, assetB)
+        const conditions: string[] = ['pair_key = $1', 'window = $2']
+        const params: any[] = [pairKey, window]
 
-      const result = await pgPool.query(
-        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
-                volume, trade_count, open_price, close_price,
-                high_price, low_price
-         FROM price_aggregates
-         WHERE ${conditions.join(' AND ')}
-         ORDER BY bucket DESC
-         LIMIT ${limitParam}`,
-        params
-      )
-      return result.rows.map(r => ({
-        bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
-        window: r.window,
-        vwap: formatPrice(r.vwap),
-        sdexVwap: formatPrice(r.sdex_vwap),
-        ammVwap: formatPrice(r.amm_vwap),
-        volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
-        tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
-        open: formatPrice(r.open_price),
-        close: formatPrice(r.close_price),
-        high: formatPrice(r.high_price),
-        low: formatPrice(r.low_price),
-      }))
-    }),
+        if (fromDate) {
+          params.push(fromDate)
+          conditions.push(`bucket >= $${params.length}`)
+        }
+
+        if (toDate) {
+          params.push(toDate)
+          conditions.push(`bucket <= $${params.length}`)
+        }
+
+        params.push(Math.min(limit, 1000))
+        const limitParam = `$${params.length}`
+
+        const result = await pgPool.query(
+          `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
+                  volume, trade_count, open_price, close_price,
+                  high_price, low_price
+           FROM price_aggregates
+           WHERE ${conditions.join(' AND ')}
+           ORDER BY bucket DESC
+           LIMIT ${limitParam}`,
+          params
+        )
+        return result.rows.map(r => ({
+          bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
+          window: r.window,
+          vwap: formatPrice(r.vwap),
+          sdexVwap: formatPrice(r.sdex_vwap),
+          ammVwap: formatPrice(r.amm_vwap),
+          volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
+          tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
+          open: formatPrice(r.open_price),
+          close: formatPrice(r.close_price),
+          high: formatPrice(r.high_price),
+          low: formatPrice(r.low_price),
+        }))
+      }),
+    ),
 
     listPairs: withScope('read:prices', function () {
       return getActivePairs().map(p => p.pairKey)
@@ -959,6 +1035,32 @@ export const resolvers = {
   },
 }
 
+// Bridge the in-process `priceEmitter` onto the Mercurius pubsub topic. This
+// listener is app-level and is attached once per Fastify instance in the plugin
+// below. It forwards every price event as-is; the per-subscriber filter in
+// `priceUpdated` decides whether the client sees it.
+function bridgePriceEvents(app: FastifyInstance) {
+  const on = (event: PricePublishedEvent) => {
+    void app.pubsub.publish({ topic: PRICE_TOPIC, payload: event })
+  }
+  priceEmitter.on(PRICE_PUBLISHED, on)
+  app.addHook('onClose', async () => {
+    priceEmitter.off(PRICE_PUBLISHED, on)
+  })
+}
+
+// Record a bounded operation label for the current request so the HTTP metrics
+// middleware can break `POST /graphql` traffic down by operation name and type.
+// The label is always drawn from the fixed sets above, never from the raw
+// client string.
+function operationLabel(name: string | null | undefined, type: string | null | undefined): string {
+  const safeName = name && KNOWN_OPERATION_NAMES.has(name) ? name : UNKNOWN_OPERATION_NAME
+  const safeType = type && KNOWN_OPERATION_TYPES.has(type) ? (
+    type === 'mutation' ? 'mutation' : type === 'subscription' ? 'subscription' : 'query'
+  ) : UNKNOWN_OPERATION_TYPE
+  return `${safeType}:${safeName}`
+}
+
 export async function registerGraphQL(app: FastifyInstance) {
   const maxQueryDepth = getMaxGraphQLQueryDepth()
 
@@ -973,7 +1075,6 @@ export async function registerGraphQL(app: FastifyInstance) {
     // than weakening the operation-aware validation policy.
     cache: false,
     validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
-    errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
       // Speak the `graphql-transport-ws` subprotocol (the modern `graphql-ws`
@@ -997,6 +1098,27 @@ export async function registerGraphQL(app: FastifyInstance) {
         }
         return data.payload
       },
+    },
+    graphiqlEndpoint: '/graphql',
+    errorFormatter: formatGraphQLErrors,
+    // Count every operation by a safe name and type. The label values are
+    // folded to the fixed sets in this file, so a client sending a new
+    // operation name on every request cannot grow the series count.
+    onExecution: async (execution, ctx) => {
+      const op = ctx.reply.request.body as unknown
+      const body = Array.isArray(op) ? op[0] : op
+      const name = (body as { operationName?: string } | undefined)?.operationName
+      const type = (body as { operationType?: string } | undefined)?.operationType
+      graphql_operations_total.inc({
+        operation_name: name && KNOWN_OPERATION_NAMES.has(name) ? name : UNKNOWN_OPERATION_NAME,
+        operation_type: type && KNOWN_OPERATION_TYPES.has(type) ? type : UNKNOWN_OPERATION_TYPE,
+      })
+      // Hand the bounded label to the HTTP metrics middleware via the symbol
+      // it exports, so `POST /graphql` splits by operation instead of
+      // collapsing into one series.
+      const { GRAPHQL_OPERATION } = await import('../middleware/httpMetrics')
+      ;(ctx.reply.request as unknown as Record<symbol, string>)[GRAPHQL_OPERATION] =
+        operationLabel(name, type)
     },
   })
 
@@ -1044,7 +1166,7 @@ export async function registerGraphQL(app: FastifyInstance) {
   // topic for its pair and network. Mercurius wraps the payload under the
   // subscription field name so resolvers receive `{ priceUpdated: <event> }`.
   const onPricePublished = (event: PricePublishedEvent) => {
-    app.graphql.pubsub.publish({
+    (app as unknown as { pubsub: { publish(args: { topic: string; payload: unknown }): unknown } }).pubsub.publish({
       topic: priceTopic(event.pair, event.network),
       payload: { priceUpdated: event },
     })
