@@ -19,7 +19,7 @@ datasource db {
 /// eventId is nullable, and Postgres treats NULLs as distinct in a unique
 /// index, so the constraint only binds "where eventId exists". That is why
 /// upsertPricePoints (src/db.ts) never stores a null: venues that hand back a
-/// natural id (SDEX/AMM trade TOIDs, Horizon trade ids) keep it verbatim, and
+/// natural id (SDEX/AMM trade TOIGs, Horizon trade ids) keep it verbatim, and
 /// sources with none — AMM/Soroswap pool snapshots, Aquarius, anything added
 /// later — get a key synthesized deterministically from the row's content,
 /// never from a clock. See synthesizeEventId in src/db.ts and
@@ -69,14 +69,14 @@ model LendingRate {
   /// Distinct source tag stored on the row, mirroring price_points.source.
   source      String
   /// Contract id of the pool/market the rate came from — never elided.
-  poolId      String   @map("pool_id")
-  poolName    String?  @map("pool_name")
+  poolId       String   @map("pool_id")
+  poolName     String?  @map("pool_name")
   /// APY earned by supplying the asset, as a fraction (0.05 == 5%).
-  supplyRate  Decimal  @map("supply_rate") @db.Decimal(18, 8)
+  supplyRate    Decimal  @map("supply_rate") @db.Decimal(18, 8)
   /// APY charged to borrow the asset, as a fraction (0.07 == 7%).
-  borrowRate  Decimal  @map("borrow_rate") @db.Decimal(18, 8)
-  ledger      Int
-  timestamp   DateTime
+  borrowRate    Decimal  @map("borrow_rate") @db.Decimal(18, 8)
+  ledger        Int
+  timestamp     DateTime
 
   // Reserve state behind the two rates above, written by the Blend ingester.
   // Nullable because a venue that publishes only rates has nothing to put here.
@@ -125,17 +125,17 @@ model QuarantinedPricePoint {
 
 model PoolSnapshot {
   id          String   @default(uuid())
-  network     String   @default("testnet")
+  network      String   @default("testnet")
   poolId      String   @map("pool_id")
-  assetA      String   @map("asset_a")
-  assetB      String   @map("asset_b")
-  reserveA    Decimal  @map("reserve_a") @db.Decimal(36, 7)
-  reserveB    Decimal  @map("reserve_b") @db.Decimal(36, 7)
-  spotPrice   Decimal  @map("spot_price") @db.Decimal(36, 18)
+  assetA       String   @map("asset_a")
+  assetB       String   @map("asset_b")
+  reserveA     Decimal  @map("reserve_a") @db.Decimal(36, 7)
+  reserveB     Decimal  @map("reserve_b") @db.Decimal(36, 7)
+  spotPrice    Decimal  @map("spot_price") @db.Decimal(36, 18)
   totalShares Decimal? @map("total_shares") @db.Decimal(36, 7)
-  feeBp       Int      @default(30) @map("fee_bp")
-  ledger      Int
-  timestamp   DateTime
+  feeBp       Int      @default(30)  @map("fee_bp")
+  ledger        Int
+  timestamp     DateTime
 
   @@id([id, timestamp])
   @@index([network, poolId, timestamp(sort: Desc)])
@@ -148,156 +148,62 @@ model PriceAggregate {
   window      String
   bucket      DateTime
   vwap        Decimal  @db.Decimal(36, 18)
-  sdexVwap    Decimal? @map("sdex_vwap") @db.Decimal(36, 18)
-  ammVwap     Decimal? @map("amm_vwap") @db.Decimal(36, 18)
-  volume      Decimal  @default(0) @db.Decimal(36, 7)
-  sdexVolume  Decimal? @default(0) @map("sdex_volume") @db.Decimal(36, 7)
-  ammVolume   Decimal? @default(0) @map("amm_volume") @db.Decimal(36, 7)
+  sdexVwap    Decimal? @map("sdex_vwap")  @db.Decimal(36, 18)
+  ammVwap     Decimal? @map("amm_vwap")   @db.Decimal(36, 18)
+  volume      Decimal  @default(0)  @db.Decimal(36, 7)
+  sdexVolume  Decimal? @default(0) @map("sdex_volume")  @db.Decimal(36, 7)
+  ammVolume   Decimal? @default(0) @map("amm_volume")   @db.Decimal(36, 7)
   tradeCount  Int?     @default(0) @map("trade_count")
-  openPrice   Decimal? @map("open_price") @db.Decimal(36, 18)
+  openPrice   Decimal? @map("open_price")  @db.Decimal(36, 18)
   closePrice  Decimal? @map("close_price") @db.Decimal(36, 18)
-  highPrice   Decimal? @map("high_price") @db.Decimal(36, 18)
-  lowPrice    Decimal? @map("low_price") @db.Decimal(36, 18)
+  highPrice    Decimal? @map("high_price")   @db.Decimal(36, 18)
+  lowPrice     Decimal? @map("low_price")    @db.Decimal(36, 18)
 
   @@id([network, pairKey, window, bucket])
   @@map("price_aggregates")
 }
 
-model PriceSnapshot {
-  pair   String
-  network String   @default("testnet")
-  ts     DateTime
-  price  Decimal  @db.Decimal(36, 18)
-  volume Decimal  @default(0) @db.Decimal(36, 7)
-
-  @@id([network, pair, ts])
-  @@index([network, pair, ts])
-  @@map("price_snapshots")
-}
-
-model IndexerState {
-  id              String
-  network         String   @default("testnet")
-  lastCursor      String?   @map("last_cursor")
-  lastLedger      Int?      @map("last_ledger")
-  lastProcessedAt DateTime? @map("last_processed_at")
-  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
-
-  @@id([network, id])
-  @@map("indexer_state")
-}
-
-model PairConfig {
-  pairKey   String   @map("pair_key")
-  network   String   @default("testnet")
-  assetACode   String   @map("asset_a_code")
-  assetAIssuer String?  @map("asset_a_issuer")
-  assetBCode   String   @map("asset_b_code")
-  assetBIssuer String?  @map("asset_b_issuer")
-  addedAt   DateTime @default(now()) @map("added_at")
-
-  @@id([network, pairKey])
-  @@map("pair_configs")
-}
-
-/// A single x402-discoverable resource in the Bazaar catalog — either an
-/// HTTP endpoint or an MCP tool, per the x402 `bazaar` extension
-/// (specs/extensions/bazaar.md in x402-foundation/x402).
+/// Audit record for one published aggregate (#512).
 ///
-/// HTTP and MCP resources share one table (discriminated by `type`) rather
-/// than two, because a discovery listing is fundamentally "a resource with
-/// payment requirements and a bazaar.info blob" regardless of transport —
-/// splitting them would require the discovery query to UNION two tables on
-/// every filter combination for no benefit, since the two types are never
-/// looked up via different access patterns.
-model BazaarResource {
-  id String @id @default(uuid())
+/// Written in the same transaction as the PriceAggregate upsert, so a
+/// published aggregate and its audit record are always present together. The
+/// inputs array is capped at AUDIT_MAX_INPUTS in src/pricing/audit.ts — the
+/// cap is enforced at write time, not just documented, so storage growth is
+/// bounded per aggregate regardless of source count.
+///
+/// The primary key mirrors PriceAggregate so a past timestamp can be looked
+/// up by (network, pairKey, window, bucket) with the same key the aggregate
+/// itself uses.
+///
+/// Retention: the writer prunes rows older than AUDIT_RETENTION_DAYS (by bucket)
+/// on every flush, so the table is bounded by time as well as by the per-row
+/// input cap. See docs/database-schema.md.
+model PriceAggregateAudit {
+  network       String   @default("testnet")
+  pairKey       String   @map("pair_key")
+  window        String
+  bucket        DateTime
+  /// Aggregation method name (e.g. "vwap-deviation").
+  method        String
+  /// Method parameters (e.g. {"deviationThreshold":0.05}).
+  params        Json     @default("{}")
+  /// Inputs used by the aggregate, capped at AUDIT_MAX_INPUTS at write time.
+  inputs        Json     @default("[]")
+  /// Inputs rejected by the aggregate, each with its reason.
+  rejected      Json     @default("[]")
+  /// Total inputs considered before the cap was applied.
+  inputCount    Int      @map("input_count")
+  /// Total inputs rejected before the cap was applied.
+  rejectedCount Int      @map("rejected_count")
+  /// Whether the inputs array was truncated by the cap.
+  truncated     Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  /// "http" | "mcp" — discriminates which of the two input shapes below applies.
-  type String
-
-  /// Which Stellar network this listing settles on ("mainnet" | "testnet").
-  /// Mirrors config.ts's NetworkName so a listing is never ambiguous about
-  /// which network's payTo/asset it refers to.
-  network String
-
-  /// The protected resource URL (`resource.url` in the spec). For MCP this is
-  /// the MCP server endpoint, not the tool itself — the tool is disambiguated
-  /// by `mcpToolName` below.
-  url String
-
-  /// `resource.description` — human-readable description of the resource.
-  description String?
-
-  /// `resource.mimeType`.
-  mimeType String? @map("mime_type")
-
-  /// Optional service metadata the spec allows on `resource`.
-  serviceName String?  @map("service_name")
-  tags        String[] @default([])
-  iconUrl     String?  @map("icon_url")
-
-  /// MCP tool identifier (`input.toolName`). Null for HTTP resources.
-  /// Per the spec, MCP resources are keyed on the TUPLE of (resource.url,
-  /// input.toolName) since multiple tools multiplex over one server endpoint.
-  /// We additionally scope that tuple by `network` (see @@unique below) —
-  /// a deliberate deviation, called out in the PR: since Lens is
-  /// dual-network, the same (url, toolName) pair can legitimately exist
-  /// once per network with a different payTo/asset in `accepts`, and the
-  /// spec's tuple alone can't express that without collapsing them.
-  mcpToolName String? @map("mcp_tool_name")
-
-  /// HTTP method for HTTP resources (GET/POST/...). Null for MCP resources.
-  httpMethod String? @map("http_method")
-
-  /// Full `accepts[]` payment requirements array (scheme/network/amount/asset/
-  /// payTo/maxTimeoutSeconds/extra), stored verbatim so the discovery response
-  /// can round-trip the exact PaymentRequirements the resource advertised.
-  accepts Json
-
-  /// The `payTo` address extracted from accepts[0] for indexed filtering.
-  /// Denormalized on write because Postgres cannot efficiently index into a
-  /// JSON array element without a functional/GIN index per accepted scheme,
-  /// and payTo is the one field the spec calls out as a top-level filter.
-  payTo String @map("pay_to")
-
-  /// `extensions.bazaar.info` — discovery metadata (input type, params, output).
-  bazaarInfo Json @map("bazaar_info")
-
-  /// `extensions.bazaar.schema` — JSON Schema validating `bazaarInfo`.
-  bazaarSchema Json @map("bazaar_schema")
-
-  /// `extensions.bazaar.routeTemplate` — canonical `:param` pattern for
-  /// dynamic HTTP routes, used by the facilitator to consolidate listings.
-  routeTemplate String? @map("route_template")
-
-  /// Any other declared extension keys beyond "bazaar" (spec's `extensions`
-  /// filter matches on presence of a key here, "bazaar" always included).
-  extensionKeys String[] @default(["bazaar"]) @map("extension_keys")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
-
-  // HTTP resources are keyed on (network, url, httpMethod); MCP resources are
-  // keyed on (network, url, mcpToolName) per the spec's tuple. Postgres
-  // treats NULLs as distinct in a unique index, so these two constraints
-  // don't collide with each other for a row that only populates one side.
-  @@unique([network, url, httpMethod], name: "bazaarHttpIdentity", map: "bazaar_http_identity")
-  @@unique([network, url, mcpToolName], name: "bazaarMcpIdentity", map: "bazaar_mcp_identity")
-  // Covers the six spec filters (type, payTo, network, extensions via
-  // extensionKeys, plus limit/offset) and keeps pagination stable — see
-  // routes/discovery.ts, which always orders by (createdAt, id).
-  @@index([network, type, payTo, createdAt(sort: Desc), id])
-  @@index([extensionKeys], type: Gin)
-  @@map("bazaar_resources")
+  @@id([network, pairKey, window, bucket])
+  @@index([bucket(sort: Desc)])
+  @@map("price_aggregate_audits")
 }
 
-/// One settlement attempt through POST /settle.
-///
-/// Written BEFORE the transaction is submitted, so a resource server that
-/// times out and retries finds a record rather than causing a second payment.
-/// The idempotency key is the inner transaction hash — derived from the
-/// payload, and the same hash the ledger records.
 model SettlementAttempt {
   id String @id @default(uuid())
 
@@ -424,16 +330,9 @@ model VenueDispersion {
 }
 
 /// One value Lens put on chain through its SEP-40 feed (#222).
-///
-/// Rows exist for WRITES, not for decisions: a blocked tick is a log line, and
-/// a table that recorded every "below_deviation" would hold ~2,880 rows per
-/// pair per day and say nothing an operator could not read from the trigger
-/// code in the logs. What this table proves is the opposite direction — every
-/// number a contract was told, with the venues that produced it, which is the
-/// evidence that "a price you cannot source is worse than no price" was
-/// actually enforced.
 model OraclePublication {
-  id      String @id @default(uuid())
+  id String @id @default(uuid())
+
   network String @default("testnet")
 
   /// The Lens pair this came from. Kept alongside the feed asset because one
