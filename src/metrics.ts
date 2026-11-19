@@ -7,6 +7,17 @@ register.setDefaultLabels({
   app: 'lens'
 })
 
+// Process-level defaults: memory, CPU, event-loop lag, GC times, handles.
+// Guarded so repeated imports in tests don't double-register or leak timers.
+let _defaultsCollected = false
+export function ensureDefaultMetrics(): void {
+  if (_defaultsCollected) return
+  _defaultsCollected = true
+  const { collectDefaultMetrics } = require('prom-client')
+  collectDefaultMetrics({ register })
+}
+ensureDefaultMetrics()
+
 // Ingest metrics are network-scoped. One ingester set runs per enabled network
 // against one shared Registry, so without `network` the testnet loop and the
 // mainnet loop write to the SAME series for the same pair — the gauge case
