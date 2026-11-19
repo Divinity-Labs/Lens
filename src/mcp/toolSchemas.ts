@@ -128,6 +128,47 @@ export const LENS_SCREEN_PAIRS_ARGUMENTS_SCHEMA = z
 export type LensScreenPairsArguments = z.infer<typeof LENS_SCREEN_PAIRS_ARGUMENTS_SCHEMA>;
 
 /**
+ * #684 — the market-depth half of the Lens MCP tools: volumes and spreads.
+ * Both take an `asset` (required) plus optional `window` and `network`,
+ * matching the REST query parameters exactly so the tool and the route are
+ * the same call with a different transport.
+ */
+const assetArg = z
+  .string()
+  .min(1, 'asset cannot be empty')
+  .describe(
+    'Asset to query. Use the bare code for XLM (e.g. "XLM") or code:issuer for issued assets ' +
+    '(e.g. "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"). ' +
+    'Never shorten or guess the issuer; copy it from lens_list_pairs.',
+  );
+
+export const LENS_GET_VOLUMES_ARGUMENTS_SCHEMA = z
+  .object({
+    asset: assetArg,
+    window: z
+      .enum(['24h', '7d', '30d'])
+      .optional()
+      .describe('Lookback window (default 24h).'),
+    network: networkArg,
+  })
+  .strict();
+
+export type LensGetVolumesArguments = z.infer<typeof LENS_GET_VOLUMES_ARGUMENTS_SCHEMA>;
+
+export const LENS_GET_SPREADS_ARGUMENTS_SCHEMA = z
+  .object({
+    asset: assetArg,
+    window: z
+      .enum(['5m', '15m', '1h', '24h'])
+      .optional()
+      .describe('Lookback window for price dispersion (default 5m). Spreads measure current liquidity; use a narrow window.'),
+    network: networkArg,
+  })
+  .strict();
+
+export type LensGetSpreadsArguments = z.infer<typeof LENS_GET_SPREADS_ARGUMENTS_SCHEMA>;
+
+/**
  * Converts a Zod object schema into an MCP-compliant JSON schema dictionary.
  * Strips the top-level `$schema` field so it plugs directly into MCP tool `inputSchema`.
  */

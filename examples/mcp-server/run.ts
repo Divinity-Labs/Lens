@@ -10,6 +10,7 @@ import {
 } from '../../src/mcp/config';
 import { SpendBudget, defaultSpendStateFile } from '../../src/mcp/budget';
 import { PaymentLedger, defaultPaymentLedgerFile } from '../../src/mcp/ledger';
+import { createLensDataQueries, createLensMarketQueries } from '../../src/mcp/lensDataQueries';
 
 function formatHttpUrl(host: string, port: number, path: string): string {
   const hostPart = host.includes(':') ? `[${host}]` : host;
@@ -99,6 +100,8 @@ async function main() {
     budget,
     paymentLedger,
     paidCallAllowlist,
+    dataQueries: createLensDataQueries(),
+    marketQueries: createLensMarketQueries(),
   });
 
   for (const item of info) {
