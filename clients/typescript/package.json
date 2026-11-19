@@ -1,0 +1,36 @@
+{
+  "name": "@lens/client",
+  "version": "0.1.0",
+  "description": "Typed TypeScript SDK for the Lens price oracle API",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Divinity-Labs/Lens.git",
+    "directory": "clients/typescript"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "example": "tsx src/example.ts"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.13.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
