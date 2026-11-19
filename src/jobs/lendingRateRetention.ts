@@ -1,5 +1,8 @@
 import { Queue, Worker } from 'bullmq'
-import { pgPool } from '../db'
+// Retention is deliberate long work: longRunningDb runs each statement with
+// DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS (default: no limit) instead of the
+// pool-wide DB_STATEMENT_TIMEOUT_MS that guards request traffic.
+import { longRunningDb } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
 import { createLogger } from '../logger'
@@ -49,7 +52,7 @@ export async function pruneOldRates(
   let batchNumber = 0
 
   while (true) {
-    const result = await pgPool.query(
+    const result = await longRunningDb.query(
       `WITH batch AS (
          SELECT ctid
          FROM lending_rates

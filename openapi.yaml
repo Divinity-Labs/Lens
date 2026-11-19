@@ -3047,6 +3047,7 @@ components:
         - INVALID_PRICE
         - INTERNAL_ERROR
         - DB_POOL_EXHAUSTED
+        - DB_QUERY_TIMEOUT
     Error:
       type: object
       required: [error, code]

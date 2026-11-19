@@ -84,3 +84,11 @@ jobs:
 
       - name: Prove generate / apply / rollback on a clean database
         run: bash scripts/db-migration-cycle.sh
+
+      # The pool's statement_timeout / idle_in_transaction_session_timeout can
+      # only be proven against a real server (pg_sleep). The build job's
+      # `npm test` skips this file because it has no database.
+      - name: Query time limits against a real Postgres
+        env:
+          TEST_DATABASE_URL: postgresql://lens:lens@localhost:5432/lens
+        run: npx vitest run tests/dbStatementTimeout.integration.test.ts

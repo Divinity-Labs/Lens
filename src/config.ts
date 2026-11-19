@@ -164,6 +164,23 @@ function positiveNumber(raw: string | undefined, fallback: number): number {
 }
 
 /**
+ * A Postgres time limit in milliseconds, where 0 means "no limit".
+ *
+ * Unset or blank keeps the default; `0`, `off` and `false` turn the limit off;
+ * a non-negative number is used as-is (floored to whole milliseconds, capped
+ * at Postgres' INT_MAX). Anything else falls back to the default rather than
+ * throwing, so a typo never stops the service from starting.
+ */
+export function dbTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = raw.trim().toLowerCase()
+  if (value === 'off' || value === 'false') return 0
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback
+  return Math.min(Math.floor(parsed), 2_147_483_647)
+}
+
+/**
  * Parse a comma-separated hostname allowlist into a normalized, de-duplicated
  * list. Empty entries and surrounding whitespace are dropped; hostnames are
  * lowercased and any IPv6 brackets / trailing dot are stripped so the stored
@@ -615,6 +632,25 @@ const globalConfig = {
     url: process.env.DATABASE_URL ?? 'postgresql://lens:lens@localhost:5432/lens',
     connectionLimit: parseInt(process.env.DB_POOL_SIZE ?? '10', 10),
     poolTimeoutMs: parseInt(process.env.DB_POOL_TIMEOUT_MS ?? '5000', 10),
+    /**
+     * Server-side time limits for the raw `pgPool` connections (see src/db.ts).
+     * Without them one slow query holds a pooled connection for as long as it
+     * runs, and DB_POOL_SIZE stuck queries stop every route on the instance.
+     *
+     * - `statementTimeoutMs` — Postgres cancels any statement running longer
+     *   than this (SQLSTATE 57014) and the connection stays usable.
+     * - `idleInTransactionTimeoutMs` — Postgres ends a session left idle inside
+     *   an open transaction for longer than this (SQLSTATE 25P03), releasing
+     *   the locks it holds.
+     * - `longRunningStatementTimeoutMs` — the limit for deliberate long work
+     *   (retention deletes, partition maintenance, backfill). 0 = no limit.
+     *
+     * 0, "off" or "false" turns a limit off. An unparsable value falls back to
+     * the default rather than failing start-up.
+     */
+    statementTimeoutMs: dbTimeoutMs(process.env.DB_STATEMENT_TIMEOUT_MS, 30_000),
+    idleInTransactionTimeoutMs: dbTimeoutMs(process.env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 60_000),
+    longRunningStatementTimeoutMs: dbTimeoutMs(process.env.DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS, 0),
   },
   redis: {
     url: process.env.REDIS_URL ?? 'redis://localhost:6379',

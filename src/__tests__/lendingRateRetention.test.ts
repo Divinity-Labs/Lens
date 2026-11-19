@@ -4,7 +4,15 @@ const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
 vi.mock('../db', () => ({
   prisma: {},
-  pgPool: { query: mockQuery },
+  // Retention runs through longRunningDb so the pool-wide statement_timeout
+  // cannot cut it off. The request pool throws, so a regression back to
+  // pgPool fails every test here.
+  longRunningDb: { query: mockQuery },
+  pgPool: {
+    query: () => {
+      throw new Error('retention must use longRunningDb, not pgPool')
+    },
+  },
 }))
 
 vi.mock('bullmq', () => ({

@@ -128,6 +128,8 @@ export const ERROR_CODES = {
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   /** The database connection pool was exhausted. */
   DB_POOL_EXHAUSTED: 'DB_POOL_EXHAUSTED',
+  /** Postgres cancelled the query because it ran past statement_timeout. */
+  DB_QUERY_TIMEOUT: 'DB_QUERY_TIMEOUT',
 } as const
 
 /** A member of {@link ERROR_CODES}. */

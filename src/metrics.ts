@@ -306,6 +306,30 @@ export const db_pool_exhaustion_errors_total = new Counter({
   registers: [register],
 })
 
+/**
+ * Queries Postgres cut off by a server-side time limit (see src/db.ts):
+ * `kind="statement"` for statement_timeout (SQLSTATE 57014),
+ * `kind="idle_in_transaction"` for idle_in_transaction_session_timeout
+ * (SQLSTATE 25P03). Two fixed label values, so cardinality is bounded.
+ */
+export const db_query_timeouts_total = new Counter({
+  name: 'db_query_timeouts_total',
+  help: 'Total number of database statements or sessions cancelled by a Postgres time limit',
+  labelNames: ['kind'],
+  registers: [register],
+})
+
+/**
+ * The statement_timeout new pool connections ask for, in seconds. 0 means no
+ * limit is being requested — either it is configured off, or the server (a
+ * pooler) rejected it and the pool fell back to connecting without it.
+ */
+export const db_statement_timeout_seconds = new Gauge({
+  name: 'db_statement_timeout_seconds',
+  help: 'statement_timeout requested on new pg pool connections in seconds (0 = no limit)',
+  registers: [register],
+})
+
 let _poolMetricsUpdater: (() => void) | null = null
 
 export function setPoolMetricsUpdater(updater: () => void) {

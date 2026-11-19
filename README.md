@@ -377,6 +377,8 @@ Pool utilisation and exhaustion metrics are exposed on `GET /metrics`:
 - `db_pool_connections_idle`: Number of idle connections ready in pool.
 - `db_pool_connections_waiting`: Requests queued waiting for an available connection.
 - `db_pool_exhaustion_errors_total`: Counter incremented whenever connection acquisition times out. Requests encountering pool exhaustion fail with an explicit `503 Service Unavailable` (`DB_POOL_EXHAUSTED`) rather than generic latency or unhandled timeouts.
+- `db_query_timeouts_total{kind}`: Statements Postgres cancelled at `DB_STATEMENT_TIMEOUT_MS` (`kind="statement"`) and sessions it ended at `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (`kind="idle_in_transaction"`). A request whose query is cancelled fails with `503` (`DB_QUERY_TIMEOUT`).
+- `db_statement_timeout_seconds`: The statement limit new pool connections ask for; `0` means none (turned off, or a pooler refused it). Behaviour through a pooler is in `docs/RUNBOOK.md` → "Query time limits".
 
 ### GraphQL Subscriptions (live prices)
 

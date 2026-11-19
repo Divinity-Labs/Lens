@@ -1,5 +1,8 @@
 import { Queue, Worker } from 'bullmq'
-import { pgPool } from '../db'
+// Retention is deliberate long work: longRunningDb runs each statement with
+// DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS (default: no limit) instead of the
+// pool-wide DB_STATEMENT_TIMEOUT_MS that guards request traffic.
+import { longRunningDb } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import { getEnabledNetworks } from '../network/enabledNetworks'
 import {
@@ -79,7 +82,7 @@ export async function rollupOldPricePoints(
     throw new RangeError('Retention days must be a non-negative number')
   }
 
-  const result = await pgPool.query(
+  const result = await longRunningDb.query(
     `WITH points_to_rollup AS (
        SELECT network, pair_key, date_trunc('hour', timestamp) AS bucket,
               price, base_volume, source, timestamp
@@ -183,7 +186,7 @@ export async function pruneOldPricePoints(
   let batchNumber = 0
 
   while (true) {
-    const result = await pgPool.query(
+    const result = await longRunningDb.query(
       `WITH batch AS (
          SELECT ctid
          FROM price_points

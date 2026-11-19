@@ -12,7 +12,7 @@ import 'dotenv/config'
 import { activeNetwork, type NetworkName } from '../src/config'
 import { backfill } from '../src/backfill/backfillService'
 import { detectGaps } from '../src/backfill/gaps'
-import { prisma, pgPool } from '../src/db'
+import { prisma, pgPool, useLongRunningStatementTimeout } from '../src/db'
 
 function parseArgs(argv: string[]): Record<string, string> {
   const args: Record<string, string> = {}
@@ -55,6 +55,10 @@ async function main() {
     printUsage()
     process.exit(args.help ? 0 : 1)
   }
+
+  // A backfill window can be large; use DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS
+  // (default: no limit) rather than the pool-wide DB_STATEMENT_TIMEOUT_MS.
+  useLongRunningStatementTimeout()
 
   const network: NetworkName = (args.network as NetworkName) ?? activeNetwork
   const source = args.source

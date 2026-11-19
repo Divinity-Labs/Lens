@@ -48,7 +48,7 @@ import { registerFiatRoutes } from './routes/fiat'
 import { registerGlobalRateLimit, parseGlobalRateLimit } from './middleware/globalRateLimit'
 import { getMetrics, rate_limit_rejections_total } from './metrics'
 import { loggerOptions, createDestination } from './logger'
-import { isPoolExhaustionError, recordPoolExhaustion } from './db'
+import { databaseErrorReply } from './db'
 import { createCorsDelegator, type CorsConfig } from './cors'
 
 /**
@@ -271,17 +271,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await registerWebSocket(app)
 
-  // Global error handler: catches unhandled errors, ensuring database pool exhaustion
-  // is diagnosed with distinct logging and metric incrementation rather than a generic 500.
+  // Global error handler: database pool exhaustion and Postgres query timeouts
+  // become a distinct 503 with its own code (see databaseErrorReply) rather
+  // than a generic 500.
   app.setErrorHandler((error, req, reply) => {
-    if (isPoolExhaustionError(error)) {
-      recordPoolExhaustion(error, `http:${req.method}:${req.url}`)
-      return reply.status(503).send({
-        error: 'Service Unavailable',
-        message: 'Database connection pool exhausted. Please retry shortly.',
-        code: 'DB_POOL_EXHAUSTED',
-      })
-    }
+    const dbReply = databaseErrorReply(error, `http:${req.method}:${req.url}`)
+    if (dbReply) return reply.status(dbReply.statusCode).send(dbReply.body)
     req.log.error(error)
     return reply.send(error)
   })

@@ -79,8 +79,9 @@ function probeTimeoutMs(): number {
  * once. Without this, every poll opens a connection during exactly the window
  * where connections are hardest to get — and a probe that times out cannot
  * cancel its underlying query, so a slow database would leave one stuck query
- * per poll accumulating against the pool. Caching bounds that to one in flight
- * per interval.
+ * per poll accumulating against the pool until Postgres' statement_timeout
+ * (DB_STATEMENT_TIMEOUT_MS, src/db.ts) cancels it. Caching bounds that to one
+ * in flight per interval.
  */
 function cacheTtlMs(): number {
   return envMs('READINESS_CACHE_MS', DEFAULT_CACHE_TTL_MS)
@@ -125,11 +126,14 @@ export interface ReadinessReport {
 /**
  * Races `work` against a deadline.
  *
- * `node-postgres` has no AbortSignal on `query()`, so the query itself cannot be
- * cancelled — it is left to fail on its own and its connection is reclaimed by
- * the pool. What the race does guarantee is that the *probe* returns promptly,
- * which is what keeps a wedged database from turning into an unbounded pile of
- * hung requests; {@link cacheTtlMs} bounds how many can be outstanding.
+ * `node-postgres` has no AbortSignal on `query()`, so the client cannot cancel
+ * the query — it runs on until the server-side statement_timeout
+ * (DB_STATEMENT_TIMEOUT_MS, src/db.ts) cancels it, after which its connection
+ * goes back to the pool. If that limit is off, nothing bounds it. The race is
+ * still needed: the probe deadline (2 s) is far shorter than the pool-wide
+ * statement limit, and what it guarantees is that the *probe* returns
+ * promptly, which keeps a wedged database from turning into an unbounded pile
+ * of hung requests; {@link cacheTtlMs} bounds how many can be outstanding.
  */
 async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
