@@ -1,3 +1,4 @@
+import { cacheHit, cacheMiss } from '../metrics'
 export interface PoolFee {
   poolId: string
   feeBp: number
@@ -52,6 +53,7 @@ export async function getPoolFee(
 
   const hit = cache.get(key)
   if (hit && hit.expiresAt > now()) {
+    cacheHit('pool_fee')
     return { ok: true, fee: hit.fee, cached: true }
   }
 
@@ -76,5 +78,6 @@ export async function getPoolFee(
 
   const fee: PoolFee = { poolId, feeBp, feeReadAt: new Date(now()).toISOString() }
   cache.set(key, { fee, expiresAt: now() + ttl })
+  cacheMiss('pool_fee')
   return { ok: true, fee, cached: false }
 }
