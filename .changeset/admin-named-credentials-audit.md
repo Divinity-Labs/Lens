@@ -1,0 +1,5 @@
+---
+'lens': minor
+---
+
+Named admin credentials, an audit trail for key operations, and a default lifetime for new API keys. `POST /admin/credentials` mints an `admin_…` credential (shown once, stored hashed) that is accepted anywhere `ADMIN_TOKEN` is, in `X-Admin-Token` or as a bearer token, so each admin action is attributable to one person and one person can be revoked with `DELETE /admin/credentials/:id`. The shared `ADMIN_TOKEN` keeps working (attributed as `legacy-admin`) and remains the bootstrap secret for the first credential. Key creation, rotation and revocation, and rejected admin secrets, are recorded in `audit_logs` and readable at `GET /admin/audit`; a failed audit write is logged and never fails the operation it describes. New keys record `created_by_admin_id` and expire after `API_KEY_DEFAULT_LIFETIME_DAYS` (default 365; `0` disables) unless `expiresAt` is given. Adds migration `20261028000000_add_admin_credentials_and_audit_log`.

@@ -1,29 +1,16 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
-import { admin_auth_failures_total, api_key_auth_failures_total } from '../metrics'
-import { checkAdminAuth } from './auth'
+import { api_key_auth_failures_total } from '../metrics'
+import { authenticateAdmin, sendAdminAuthFailure } from './auth'
 
 export async function registerUsageRoutes(app: FastifyInstance) {
   app.get<{ Params: { keyId: string } }>(
     '/admin/usage/:keyId',
     { config: { admin: true, auth: 'admin' } },
     async (req, reply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      // Accepts the shared ADMIN_TOKEN or a named admin credential.
+      const admin = await authenticateAdmin(req)
+      if (!admin.ok) return sendAdminAuthFailure(reply, admin.reason)
       const { keyId } = req.params
       const summary = await getUsageSummary(keyId)
       return reply.send(summary)
@@ -34,22 +21,9 @@ export async function registerUsageRoutes(app: FastifyInstance) {
     '/admin/usage',
     { config: { admin: true, auth: 'admin' } },
     async (req, reply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      // Accepts the shared ADMIN_TOKEN or a named admin credential.
+      const admin = await authenticateAdmin(req)
+      if (!admin.ok) return sendAdminAuthFailure(reply, admin.reason)
       const summaries = await getAllUsageSummaries()
       return reply.send({ keys: summaries })
     }

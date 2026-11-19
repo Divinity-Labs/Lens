@@ -40,6 +40,13 @@ export const INTERNAL_ROUTES: readonly string[] = [
   '/admin/keys/{id}',
   '/admin/keys/{id}/rotate',
 
+  // Operator-only named admin credentials (individual attribution and revocation)
+  // and the audit log of key operations. Authenticated with the shared ADMIN_TOKEN
+  // or a named admin credential, never a client API key (see src/api/admin.ts).
+  '/admin/credentials',
+  '/admin/credentials/{id}',
+  '/admin/audit',
+
   // Operator-only usage/quota reporting for minted keys.
   '/admin/usage',
   '/admin/usage/{keyId}',
