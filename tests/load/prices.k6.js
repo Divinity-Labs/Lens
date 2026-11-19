@@ -76,7 +76,11 @@ export const options = {
     },
   },
   thresholds: {
-    http_req_duration: ['p(95)<200'],
+    // Per-endpoint p95 thresholds — matches the workflow name claim of 80ms @ 5k RPS
+    'http_req_duration{endpoint:price}': ['p(95)<80'],
+    'twap_duration': ['p(95)<80'],
+    'vwap_duration': ['p(95)<80'],
+    // Global safety nets
     errors: ['rate<0.05'],
     http_req_failed: ['rate<0.01'],
   },
