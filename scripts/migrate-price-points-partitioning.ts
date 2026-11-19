@@ -1,4 +1,4 @@
-import { pgPool } from '../src/db'
+import { pgPool, useLongRunningStatementTimeout } from '../src/db'
 import {
   isPricePointsPartitioned,
   migratePricePointsToPartitioned,
@@ -7,6 +7,11 @@ import {
 } from '../src/partitioning/pricePoints'
 
 async function main() {
+  // Copying price_points and building its indexes can run far longer than the
+  // pool-wide DB_STATEMENT_TIMEOUT_MS. Use DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS
+  // (default: no limit) for every connection this script opens.
+  useLongRunningStatementTimeout()
+
   console.log('[partitioning-migration] Starting price_points partitioning check...')
 
   const already = await isPricePointsPartitioned(pgPool)

@@ -1,5 +1,7 @@
 import { Queue, Worker } from 'bullmq'
-import { pgPool } from '../db'
+// Partition DDL waits on table locks; longRunningDb keeps the pool-wide
+// statement_timeout from cancelling it (see src/db.ts).
+import { longRunningDb } from '../db'
 import { activeNetwork } from '../config'
 import {
   ensurePricePointsPartitions,
@@ -53,7 +55,7 @@ export async function runPricePointsMaintenance(
   precreateDays: number = PRICE_POINTS_PRECREATE_DAYS,
   dropExpired: boolean = PRICE_POINTS_DROP_EXPIRED
 ): Promise<PartitionMaintenanceResult> {
-  const creationRes: PartitionCreationResult = await ensurePricePointsPartitions(pgPool, {
+  const creationRes: PartitionCreationResult = await ensurePricePointsPartitions(longRunningDb, {
     precreateDays,
     daysBack: 1, // ensure today and yesterday are guaranteed
   })
@@ -61,7 +63,7 @@ export async function runPricePointsMaintenance(
   let retentionRes: PartitionRetentionResult = { dropped: [], retained: [] }
   if (dropExpired) {
     retentionRes = await dropExpiredPricePointsPartitions(
-      pgPool,
+      longRunningDb,
       retentionDays
     )
   }

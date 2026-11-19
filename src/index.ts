@@ -9,7 +9,7 @@ import { config, getNetworkConfig, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
-import { pgPool } from './db'
+import { pgPool, connectAndReportTimeLimits } from './db'
 import { assertSchemaValid } from './db/schemaVerify'
 import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
@@ -74,7 +74,9 @@ async function main() {
     log.warn({ err }, 'redis unavailable, continuing without cache')
   }
 
-  await pgPool.connect()
+  // Throws if Postgres is unreachable (fatal, as before). Reading back the
+  // session time limits only ever warns — see connectAndReportTimeLimits.
+  await connectAndReportTimeLimits()
   log.info('postgresql connected')
 
   // Verify database schema matches expected tables and columns (#352)

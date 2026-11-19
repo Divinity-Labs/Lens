@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { mockEnsure, mockDrop } = vi.hoisted(() => ({
+const { mockEnsure, mockDrop, longRunningDb } = vi.hoisted(() => ({
   mockEnsure: vi.fn(),
   mockDrop: vi.fn(),
+  longRunningDb: { query: vi.fn() },
 }))
 
 vi.mock('../db', () => ({
   prisma: {},
   pgPool: {},
+  longRunningDb,
 }))
 
 vi.mock('../partitioning/pricePoints', () => ({
@@ -91,5 +93,15 @@ describe('pricePointsPartitionJob', () => {
       { repeat: { every: 60 * 60 * 1000 }, jobId: 'price-points-partition:maintain' }
     )
     expect(queue.add).toHaveBeenNthCalledWith(2, 'maintain', {})
+  })
+
+  it('runs partition DDL through longRunningDb, not the request pool', async () => {
+    mockEnsure.mockResolvedValueOnce({ created: [], existing: [] })
+    mockDrop.mockResolvedValueOnce({ dropped: [], retained: [] })
+
+    await runPricePointsMaintenance(30, 7, true)
+
+    expect(mockEnsure.mock.calls[0][0]).toBe(longRunningDb)
+    expect(mockDrop.mock.calls[0][0]).toBe(longRunningDb)
   })
 })

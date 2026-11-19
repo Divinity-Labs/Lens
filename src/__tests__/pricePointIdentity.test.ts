@@ -69,8 +69,17 @@ vi.mock('pg', () => ({
   // `on` as well as `query`: src/db.ts subscribes to the pool's 'error' and
   // 'acquire' events at module load to feed the pool metrics, so a double that
   // only answers queries makes this file fail to import rather than fail a
-  // test. A fake should look like the thing it replaces.
+  // test. A fake should look like the thing it replaces. `options` and
+  // `connect` likewise: src/db.ts reads the pool's statement_timeout and wraps
+  // connect() for the pooler fallback at module load.
   Pool: class FakePool {
+    options: Record<string, unknown>
+    constructor(options: Record<string, unknown> = {}) {
+      this.options = { ...options }
+    }
+    connect() {
+      return Promise.reject(new Error('FakePool.connect is not used by these tests'))
+    }
     query() {
       return Promise.resolve({ rows: [] })
     }

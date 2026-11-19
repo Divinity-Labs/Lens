@@ -952,7 +952,7 @@ export interface components {
          * @description Stable machine-readable error code. Branch on this, never on `error`, which is human-readable.
          * @enum {string}
          */
-        ErrorCode: "missing_parameter" | "invalid_parameter" | "bad_network" | "bad_interval" | "bad_window" | "unsupported" | "unknown_pair" | "unwatched_pair" | "pair_already_watched" | "unauthorized" | "not_found" | "upstream_unavailable" | "internal_error" | "rate_limited" | "payment_required" | "payment_invalid" | "payment_verification_failed" | "quota_exceeded" | "admin_not_configured" | "admin_unauthorized" | "missing" | "malformed" | "unknown" | "revoked" | "expired" | "insufficient_scope" | "discovery_database_unavailable" | "VALIDATION_ERROR" | "UNSUPPORTED_PARAMETER" | "INVALID_NETWORK" | "STALE_DATA" | "INVALID_PRICE" | "INTERNAL_ERROR" | "DB_POOL_EXHAUSTED";
+        ErrorCode: "missing_parameter" | "invalid_parameter" | "bad_network" | "bad_interval" | "bad_window" | "unsupported" | "unknown_pair" | "unwatched_pair" | "pair_already_watched" | "unauthorized" | "not_found" | "upstream_unavailable" | "internal_error" | "rate_limited" | "payment_required" | "payment_invalid" | "payment_verification_failed" | "quota_exceeded" | "admin_not_configured" | "admin_unauthorized" | "missing" | "malformed" | "unknown" | "revoked" | "expired" | "insufficient_scope" | "discovery_database_unavailable" | "VALIDATION_ERROR" | "UNSUPPORTED_PARAMETER" | "INVALID_NETWORK" | "STALE_DATA" | "INVALID_PRICE" | "INTERNAL_ERROR" | "DB_POOL_EXHAUSTED" | "DB_QUERY_TIMEOUT";
         Error: {
             /** @description Human-readable error message. Do not branch on it. */
             error: string;

@@ -88,10 +88,92 @@ API keys/usage. It is the source of truth; Redis is only a cache
 
 | | Behaviour |
 |---|---|
-| Down at **boot** | `pgPool.connect()` rejects → `fatal startup error` → **process exits 1**. Nothing serves. |
+| Down at **boot** | `connectAndReportTimeLimits()` (`pgPool.connect()`) rejects → `fatal startup error` → **process exits 1**. Nothing serves. |
 | Down at **runtime** | Queries throw → affected routes return 5xx. `/status` itself queries the DB, so it fails too. |
 | Where you see it | `GET /status` refused/500 **and `GET /ready` → 503 with `checks.postgres.status: "down"`** (the probe also asserts the schema exists via `to_regclass('public.indexer_state')`, so a reachable-but-unmigrated database reports not-ready too); `GET /metrics` → `http_requests_total{status_class="5xx"}` rising, `db_query_duration_seconds` tail; pino error logs. |
 | Recovery | Restore the nightly dump (`docs/backup-restore.md`, produced by `db-backup.yml`), or re-ingest from chain — Lens data is re-derivable by ingesting again (`docs/DEPLOY_MAINNET.md`). |
+
+### Query time limits — `DB_STATEMENT_TIMEOUT_MS`, `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`
+
+`node-postgres` cannot cancel a query from the client, so without a server-side
+limit one slow query holds a pooled connection for as long as it runs, and
+`DB_POOL_SIZE` of them stop every route on the instance. `src/db.ts` sends two
+limits as startup parameters on every new `pgPool` connection:
+
+| Setting | Default | What Postgres does | What Lens sees |
+|---|---|---|---|
+| `DB_STATEMENT_TIMEOUT_MS` | `30000` | Cancels the statement (SQLSTATE `57014`, "canceling statement due to statement timeout"). | `queryTimeoutKind(err) === 'statement'`; counted in `db_query_timeouts_total{kind="statement"}`; an HTTP request gets **503 `DB_QUERY_TIMEOUT`**. The connection is healthy and goes back to the pool. |
+| `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` | `60000` | Ends a session idle inside an open transaction (SQLSTATE `25P03`), releasing its locks. | Counted in `db_query_timeouts_total{kind="idle_in_transaction"}`; the holder's next query fails and the pool discards the dead connection. |
+
+`0`, `off` or `false` turns either one off. An unparsable value falls back to the
+default — it never stops start-up. At boot, the log line
+`postgres session time limits` shows what was requested and what the server
+actually applied (read back from `pg_settings`); a mismatch is logged as a
+warning, never fatal.
+
+**Deliberate long work is exempt.** It uses `DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS`
+(default `0` = no limit; set it to give long work a longer limit instead of none):
+
+- Retention deletes and the price_points rollup (`src/jobs/*Retention.ts`) and
+  partition maintenance (`src/jobs/pricePointsPartitionJob.ts`) run in-process
+  through `longRunningDb`: each statement runs in its own transaction with
+  `set_config('statement_timeout', …, true)` (= `SET LOCAL`), so the limit ends
+  with the transaction and the connection returns to the pool with its normal limit.
+- `scripts/backfill.ts` and `scripts/migrate-price-points-partitioning.ts` call
+  `useLongRunningStatementTimeout()` first, which sets the long-running limit on
+  every connection the script opens. Run scripts on a direct connection (point
+  `DATABASE_URL` at the `DIRECT_DATABASE_URL` value), not through a transaction pooler.
+
+Both overrides also beat a role-level default (below): a session or `SET LOCAL`
+value takes precedence over `ALTER ROLE … SET`.
+
+**Prisma is not covered.** `prisma` opens its own connections from its own URL.
+Its queries are short ORM reads and writes, and adding a startup option to its
+URL has no fallback: a pooler that rejected it would fail every Prisma query at
+once. A role-level default (below) covers Prisma too, if you need it.
+
+**Through a connection pooler.** The limits are startup parameters, and how a
+pooler treats those decides the outcome. PgBouncer only accepts the startup
+parameters it knows (client_encoding, DateStyle, TimeZone,
+standard_conforming_strings, application_name, plus anything in
+`track_extra_parameters`) — in every `pool_mode`:
+
+| Pooler setup | Result |
+|---|---|
+| Direct connection, or a pooler that passes startup parameters through | Limits apply to every session. |
+| PgBouncer, default config | Refuses the connection with `unsupported startup parameter: statement_timeout`. Lens recognises this (`isUnsupportedStartupParameterError`), drops both limits from the pool, logs `database refused statement_timeout/idle_in_transaction_session_timeout as startup parameters`, sets `db_statement_timeout_seconds` to `0`, and reconnects. **The service keeps running with no limit.** |
+| PgBouncer with the parameters in `ignore_startup_parameters` | PgBouncer accepts and silently drops them — **no limit**. The boot warning `postgres did not apply the requested time limit` is the only sign. |
+| PgBouncer `track_extra_parameters` | Not an option: PgBouncer can only track parameters Postgres reports back to the client, and `statement_timeout` is not one of them. |
+
+In transaction pool mode a session-level `SET statement_timeout` is not a fix
+either: the next transaction may run on a different server connection, and the
+setting stays behind on that backend for whichever client gets it next.
+`SET LOCAL` *is* safe, because the pooler pins a client to one server connection
+for the length of a transaction — that is why `longRunningDb` uses it.
+
+**What works through a transaction pooler** is a role-level default, applied by
+Postgres itself whenever the pooler opens a server connection, for every client
+(including Prisma):
+
+```sql
+ALTER ROLE lens SET statement_timeout = '30s';
+ALTER ROLE lens SET idle_in_transaction_session_timeout = '60s';
+```
+
+Then set `DB_STATEMENT_TIMEOUT_MS=0` and `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=0` so
+Lens does not send startup parameters the pooler would refuse. `longRunningDb`
+still lifts the limit per transaction for retention and partition work. Undo with
+`ALTER ROLE lens RESET statement_timeout` (and the same for
+`idle_in_transaction_session_timeout`); both take effect on new connections only.
+
+How this was established: the direct-connection behaviour, the role-level
+default and its overrides were run against Postgres 15
+(`tests/dbStatementTimeout.integration.test.ts`, also run in CI's "Migration
+drift & deploy" job). The PgBouncer rows come from PgBouncer's documented
+handling of startup parameters and were not run against a live PgBouncer. The
+fallback path is unit-tested with the rejection error. Other poolers (e.g.
+Supabase's Supavisor) were not tested: check the boot log line
+`postgres session time limits` after deploying behind one.
 
 ### Redis — `REDIS_URL`
 
@@ -178,6 +260,8 @@ their exact symptoms:
 | `GLOBAL_RATE_LIMIT_MAX` invalid (not a positive integer) | Process never starts | `buildApp` throws → `fatal startup error`, exit 1. Default ceiling when unset: 1000 req/min per instance, with expensive route templates shed at 80% and health probes exempt (`src/middleware/globalRateLimit.ts`) |
 | `READINESS_REDIS_CHECK=false` | Redis dropped from readiness | `GET /ready` no longer fails when Redis is down |
 | Bad `WATCHED_PAIRS` | Process never starts | log `fatal startup error` with the parse error, exit 1 |
+| `DB_STATEMENT_TIMEOUT_MS` too low | Routes return **503 `DB_QUERY_TIMEOUT`** for slow queries | `db_query_timeouts_total{kind="statement"}` rising |
+| Startup parameters refused by a pooler | Runs, **without query time limits** | boot warn `database refused statement_timeout/idle_in_transaction_session_timeout as startup parameters`; `db_statement_timeout_seconds` = 0 |
 
 ---
 
@@ -265,6 +349,8 @@ Public Prometheus exposition (`src/metrics.ts`, route in `src/app.ts`).
 | `http_requests_total{method,route,status_class}` | Rate and 5xx ratio; `route` is the route *template*, `status_class` is `2xx/4xx/5xx` — both deliberately bounded |
 | `http_request_duration_seconds` | Latency histogram with Lens-specific buckets (5 ms … 10 s); p95 recipe in `README.md` and `docs/http-metrics.md` |
 | `db_query_duration_seconds` | Postgres query latency (includes pool wait — the timer wraps `pgPool.query`) |
+| `db_query_timeouts_total{kind}` | Statements cancelled at `DB_STATEMENT_TIMEOUT_MS` (`statement`) / sessions ended at `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (`idle_in_transaction`). A rising `statement` rate means queries are slower than the limit — look at `db_query_duration_seconds` and the slow-query log before raising it |
+| `db_statement_timeout_seconds` | The statement limit new pool connections request; `0` = none (off, or a pooler refused it — see "Query time limits") |
 | `api_key_auth_failures_total{reason}`, `admin_auth_failures_total` | Auth failures by bounded reason (`missing`/`malformed`/`unknown`/`revoked`/`expired`; admin counted separately) |
 | `rate_limit_rejections_total{scope}`, `global_shed_requests_total` | Per-key/IP limiter 429s (`key`/`ip`) and per-instance ceiling sheds (503) |
 | `x402_payments_received_total`, `price_requests_total` | Payment/request counters |

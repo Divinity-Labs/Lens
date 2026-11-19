@@ -1,5 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client'
-import { Pool } from 'pg'
+import { Pool, type PoolClient, type QueryResult } from 'pg'
 import { createHash } from 'node:crypto'
 import {
   db_query_duration_seconds,
@@ -7,6 +7,8 @@ import {
   db_pool_connections_idle,
   db_pool_connections_waiting,
   db_pool_exhaustion_errors_total,
+  db_query_timeouts_total,
+  db_statement_timeout_seconds,
   setPoolMetricsUpdater,
   price_points_accepted_total,
   price_points_quarantined_total,
@@ -74,6 +76,46 @@ export const prisma = globalForPrisma.prisma ?? new PrismaClient({
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 ;(globalThis as any).__lens_prisma = prisma
 
+/**
+ * ── Server-side time limits ───────────────────────────────────────────────────
+ *
+ * `node-postgres` cannot cancel a query from the client (see src/health.ts), so
+ * without a server-side limit one slow query holds its pooled connection for as
+ * long as it runs. Two limits are sent as startup parameters on every new pool
+ * connection, so Postgres applies them to the whole session:
+ *
+ *   - statement_timeout — Postgres cancels the statement (SQLSTATE 57014). The
+ *     connection is still healthy and goes straight back to the pool.
+ *   - idle_in_transaction_session_timeout — Postgres ends a session that sits
+ *     idle inside an open transaction (SQLSTATE 25P03), freeing its locks. The
+ *     connection is dead and the pool discards it.
+ *
+ * Both are counted in `db_query_timeouts_total{kind}` and recognised by
+ * {@link queryTimeoutKind}. Deliberate long work does not use these limits:
+ * in-process jobs go through {@link longRunningDb}, scripts call
+ * {@link useLongRunningStatementTimeout}.
+ *
+ * Poolers: PgBouncer refuses a connection whose startup packet carries a
+ * parameter it does not know ("unsupported startup parameter"). Rather than
+ * let that take the service down, the pool drops the limits on the first such
+ * rejection, logs a warning and reconnects without them
+ * ({@link disableStartupTimeouts}). docs/RUNBOOK.md has the details and the
+ * role-level alternative that does work through a transaction pooler.
+ *
+ * Prisma (`prisma` above) opens its own connections from its own URL and is
+ * NOT covered: its queries are short ORM reads and writes, and its URL has no
+ * fallback if a pooler rejects an extra startup option, so a limit there could
+ * fail every Prisma query at once. A role-level default covers both clients.
+ */
+function startupTimeoutOptions(): { statement_timeout?: number; idle_in_transaction_session_timeout?: number } {
+  const options: { statement_timeout?: number; idle_in_transaction_session_timeout?: number } = {}
+  if (config.db.statementTimeoutMs > 0) options.statement_timeout = config.db.statementTimeoutMs
+  if (config.db.idleInTransactionTimeoutMs > 0) {
+    options.idle_in_transaction_session_timeout = config.db.idleInTransactionTimeoutMs
+  }
+  return options
+}
+
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer
 // (their pooler uses a self-signed cert in the chain — this is safe for Supabase specifically)
@@ -82,22 +124,151 @@ export const pgPool = new Pool({
   max: config.db.connectionLimit,
   connectionTimeoutMillis: config.db.poolTimeoutMs,
   ssl: config.db.url.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
+  ...startupTimeoutOptions(),
 })
 ;(globalThis as any).__lens_pgPool = pgPool
 
-// Instrument raw pg queries
+function requestedStatementTimeoutMs(): number {
+  return Number(pgPool.options.statement_timeout) || 0
+}
+
+db_statement_timeout_seconds.set(requestedStatementTimeoutMs() / 1000)
+
+function errorMessage(err: unknown): string {
+  return typeof err === 'object' && err !== null && 'message' in err ? String(err.message) : String(err)
+}
+
+function errorCode(err: unknown): unknown {
+  return typeof err === 'object' && err !== null && 'code' in err ? (err as { code: unknown }).code : undefined
+}
+
+/**
+ * Whether a connection was refused because the server — in practice a pooler
+ * such as PgBouncer — does not accept a startup parameter we sent.
+ */
+export function isUnsupportedStartupParameterError(err: unknown): boolean {
+  return /unsupported startup parameter/i.test(errorMessage(err))
+}
+
+/**
+ * Stops sending the time limits on new connections. Returns false when there
+ * was nothing to drop, so callers retry at most once.
+ */
+export function disableStartupTimeouts(err: unknown): boolean {
+  const options = pgPool.options as { statement_timeout?: unknown; idle_in_transaction_session_timeout?: unknown }
+  if (options.statement_timeout === undefined && options.idle_in_transaction_session_timeout === undefined) {
+    return false
+  }
+  delete options.statement_timeout
+  delete options.idle_in_transaction_session_timeout
+  db_statement_timeout_seconds.set(0)
+  log.warn(
+    { reason: errorMessage(err) },
+    'database refused statement_timeout/idle_in_transaction_session_timeout as startup parameters ' +
+      '(likely a connection pooler); connecting without server-side time limits — see docs/RUNBOOK.md',
+  )
+  return true
+}
+
+export type QueryTimeoutKind = 'statement' | 'idle_in_transaction'
+
+/**
+ * Classifies an error raised because Postgres enforced one of the time limits,
+ * or returns null. Matches the SQLSTATE where the driver exposes it (pg) and
+ * the server message otherwise (Prisma wraps the same server error).
+ *
+ * 57014 alone is not enough: it is also the code for a cancel requested by a
+ * client or an admin ("canceling statement due to user request").
+ */
+export function queryTimeoutKind(err: unknown): QueryTimeoutKind | null {
+  if (!err) return null
+  const code = errorCode(err)
+  const message = errorMessage(err)
+  if (/canceling statement due to statement timeout/i.test(message)) return 'statement'
+  if (code === '25P03' || /idle-in-transaction timeout/i.test(message)) return 'idle_in_transaction'
+  return null
+}
+
+/** Whether `err` is a statement or idle-in-transaction timeout from Postgres. */
+export function isQueryTimeoutError(err: unknown): boolean {
+  return queryTimeoutKind(err) !== null
+}
+
+/** Counts a Postgres time-limit error in `db_query_timeouts_total` and logs it. */
+export function recordQueryTimeout(err: unknown, source: string = 'database'): void {
+  const kind = queryTimeoutKind(err)
+  if (!kind) return
+  db_query_timeouts_total.inc({ kind })
+  log.warn(
+    {
+      source,
+      kind,
+      code: errorCode(err),
+      statementTimeoutMs: requestedStatementTimeoutMs(),
+      idleInTransactionTimeoutMs: config.db.idleInTransactionTimeoutMs,
+    },
+    kind === 'statement'
+      ? 'database statement cancelled by statement_timeout'
+      : 'database session ended by idle_in_transaction_session_timeout',
+  )
+}
+
+// Instrument raw pg queries.
+//
+// The query runs on a client checked out through pgPool.connect (below), not
+// through pg-pool's own query(), for two reasons: connect carries the pooler
+// fallback, and pg-pool's query() releases the client with the error after ANY
+// failure, which destroys the connection. A statement_timeout leaves the
+// connection perfectly healthy, so it goes back to the pool instead of costing
+// a reconnect (and a TLS handshake) on the next query. Every other error still
+// discards the connection, exactly as pg-pool does.
 const originalQuery = pgPool.query.bind(pgPool)
-pgPool.query = (async (...args: any[]) => {
+pgPool.query = ((...args: any[]) => {
+  // Callback form: nothing in Lens uses it; leave it to pg-pool untouched.
+  if (typeof args[args.length - 1] === 'function') return (originalQuery as any)(...args)
+  return instrumentedQuery(args)
+}) as any
+
+async function instrumentedQuery(args: any[]): Promise<any> {
   const end = db_query_duration_seconds.startTimer()
   try {
-    return await (originalQuery as any)(...args)
+    const client = await pgPool.connect()
+    let discard: Error | undefined
+    try {
+      return await (client.query as any)(...args)
+    } catch (err) {
+      if (queryTimeoutKind(err) !== 'statement') {
+        discard = err instanceof Error ? err : new Error(String(err))
+      }
+      throw err
+    } finally {
+      client.release(discard)
+    }
   } catch (err) {
     if (isPoolExhaustionError(err)) {
       recordPoolExhaustion(err, 'pgPool.query')
+    } else if (isQueryTimeoutError(err)) {
+      recordQueryTimeout(err, 'pgPool.query')
     }
     throw err
   } finally {
     end()
+  }
+}
+
+// A pooler that refuses the time limits: drop them and retry once. Covers both
+// pgPool.query (above) and callers that check out a client themselves. The
+// callback form is pg-pool's internal path and is left alone.
+const originalConnect = pgPool.connect.bind(pgPool)
+pgPool.connect = (async (...args: any[]) => {
+  if (args.length > 0) return (originalConnect as any)(...args)
+  try {
+    return await originalConnect()
+  } catch (err) {
+    if (isUnsupportedStartupParameterError(err) && disableStartupTimeouts(err)) {
+      return await originalConnect()
+    }
+    throw err
   }
 }) as any
 
@@ -105,10 +276,156 @@ pgPool.query = (async (...args: any[]) => {
 pgPool.on('error', (err) => {
   if (isPoolExhaustionError(err)) {
     recordPoolExhaustion(err, 'pgPool.on_error')
-  } else {
+  } else if (!isQueryTimeoutError(err)) {
     log.error({ err }, 'unexpected postgres client error')
   }
 })
+
+// idle_in_transaction_session_timeout ends the session while a caller still
+// holds the client and no query is running, so pg emits the FATAL as an
+// 'error' event on the client. pg-pool only listens while the client is idle
+// in the pool; with no listener a checked-out client's 'error' is thrown as an
+// uncaught exception. This listener stays for the client's lifetime: it counts
+// the timeout, and the caller's next query fails and the pool discards the
+// dead connection on release.
+pgPool.on('connect', (client) => {
+  client.on('error', (err) => {
+    if (isQueryTimeoutError(err)) {
+      recordQueryTimeout(err, 'pgPool.client')
+    } else if (client.listenerCount('error') === 1) {
+      // Checked out (the pool's idle listener is not attached), so nothing
+      // else will report it.
+      log.error({ err }, 'postgres connection error on a checked-out client')
+    }
+  })
+})
+
+/**
+ * Runs `work` on one pooled client inside a transaction whose
+ * statement_timeout is `timeoutMs` (0 = no limit), whatever the session
+ * default is.
+ *
+ * `set_config(..., true)` is SET LOCAL: it ends with the transaction, so the
+ * connection returns to the pool with its normal limit. Being scoped to one
+ * transaction is also what makes it work through a transaction pooler, which
+ * pins a client to a single server connection for exactly that long — a
+ * session-level SET there would land on whichever backend served it.
+ */
+export async function withStatementTimeout<T>(
+  timeoutMs: number,
+  work: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  let client: PoolClient
+  try {
+    client = await pgPool.connect()
+  } catch (err) {
+    if (isPoolExhaustionError(err)) recordPoolExhaustion(err, 'withStatementTimeout')
+    throw err
+  }
+  let discard: Error | undefined
+  try {
+    await client.query('BEGIN')
+    await client.query("SELECT set_config('statement_timeout', $1, true)", [String(Math.max(0, Math.floor(timeoutMs)))])
+    const result = await work(client)
+    await client.query('COMMIT')
+    return result
+  } catch (err) {
+    if (isQueryTimeoutError(err)) recordQueryTimeout(err, 'withStatementTimeout')
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackErr) {
+      // The connection itself is broken; do not hand it back to the pool.
+      discard = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr))
+    }
+    throw err
+  } finally {
+    client.release(discard)
+  }
+}
+
+/**
+ * A `{ query }` handle for deliberate long work — retention deletes and
+ * partition maintenance. Each statement runs in its own transaction with
+ * statement_timeout set to DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS (default 0, no
+ * limit), so the pool-wide limit never cuts it off. Autocommit statements
+ * behave the same inside a one-statement transaction.
+ */
+export const longRunningDb = {
+  query(sql: string, params?: unknown[]): Promise<QueryResult<any>> {
+    return withStatementTimeout(config.db.longRunningStatementTimeoutMs, client => client.query(sql, params))
+  },
+}
+
+let longRunningSessions = false
+
+/**
+ * For one-off scripts (backfill, partition migration): make every connection
+ * this process opens from now on use DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS
+ * instead of DB_STATEMENT_TIMEOUT_MS. Call it before the first query —
+ * connections already open keep the limit they were opened with.
+ *
+ * Set per session on connect rather than as a startup parameter because pg
+ * only sends a non-zero statement_timeout, and "no limit" must still override
+ * a role-level default (`ALTER ROLE ... SET statement_timeout`). pg runs
+ * queries on a client in order, so this lands before the caller's first query.
+ * A session SET is only reliable on a direct (or session-pooled) connection —
+ * run scripts against one, not through a transaction pooler.
+ *
+ * Not for the server process: it would lift the limit for every route.
+ */
+export function useLongRunningStatementTimeout(): void {
+  if (pgPool.totalCount > 0) {
+    log.warn(
+      { open: pgPool.totalCount },
+      'useLongRunningStatementTimeout called after connections were opened; those keep their previous limit',
+    )
+  }
+  delete (pgPool.options as { statement_timeout?: number }).statement_timeout
+  const ms = config.db.longRunningStatementTimeoutMs
+  db_statement_timeout_seconds.set(ms / 1000)
+  if (longRunningSessions) return
+  longRunningSessions = true
+  pgPool.on('connect', (client) => {
+    client
+      .query("SELECT set_config('statement_timeout', $1, false)", [String(config.db.longRunningStatementTimeoutMs)])
+      .catch((err: unknown) => log.warn({ err }, 'could not set the long-running statement_timeout on a new connection'))
+  })
+}
+
+/**
+ * Boot check: proves Postgres is reachable (throws if not, exactly as the bare
+ * `pgPool.connect()` it replaces did) and reports the time limits the server
+ * actually applied. A mismatch — a pooler configured to ignore the startup
+ * parameters — is a warning, never a reason to stop.
+ */
+export async function connectAndReportTimeLimits(): Promise<void> {
+  const client = await pgPool.connect()
+  try {
+    const { rows } = await client.query<{ name: string; setting: string }>(
+      `SELECT name, setting FROM pg_settings
+       WHERE name IN ('statement_timeout', 'idle_in_transaction_session_timeout')`,
+    )
+    const applied = Object.fromEntries(rows.map(r => [r.name, Number(r.setting)]))
+    const requested = {
+      statement_timeout: requestedStatementTimeoutMs(),
+      idle_in_transaction_session_timeout:
+        Number((pgPool.options as { idle_in_transaction_session_timeout?: number }).idle_in_transaction_session_timeout) || 0,
+    }
+    log.info({ requested, applied }, 'postgres session time limits')
+    for (const name of ['statement_timeout', 'idle_in_transaction_session_timeout'] as const) {
+      if (requested[name] > 0 && applied[name] !== requested[name]) {
+        log.warn(
+          { setting: name, requested: requested[name], applied: applied[name] },
+          'postgres did not apply the requested time limit (a pooler may be ignoring startup parameters — see docs/RUNBOOK.md)',
+        )
+      }
+    }
+  } catch (err) {
+    log.warn({ err }, 'could not read postgres session time limits')
+  } finally {
+    client.release()
+  }
+}
 
 /**
  * Periodically or on scrape, export pgPool utilisation metrics through prom-client.
@@ -178,6 +495,43 @@ export function recordPoolExhaustion(err: unknown, source: string = 'database'):
     },
     'database connection pool exhausted: connection acquisition timed out'
   )
+}
+
+/**
+ * The HTTP reply for a database failure the API should name rather than
+ * report as a generic 500, or null for any other error. Used by the global
+ * error handler in src/app.ts.
+ *
+ * - pool exhaustion → 503 `DB_POOL_EXHAUSTED`, counted here.
+ * - statement_timeout / idle-in-transaction timeout → 503 `DB_QUERY_TIMEOUT`.
+ *   Not counted here: the pool wrapper already counted it where it was raised.
+ */
+export function databaseErrorReply(
+  err: unknown,
+  source: string,
+): { statusCode: 503; body: { error: string; message: string; code: 'DB_POOL_EXHAUSTED' | 'DB_QUERY_TIMEOUT' } } | null {
+  if (isPoolExhaustionError(err)) {
+    recordPoolExhaustion(err, source)
+    return {
+      statusCode: 503,
+      body: {
+        error: 'Service Unavailable',
+        message: 'Database connection pool exhausted. Please retry shortly.',
+        code: 'DB_POOL_EXHAUSTED',
+      },
+    }
+  }
+  if (isQueryTimeoutError(err)) {
+    return {
+      statusCode: 503,
+      body: {
+        error: 'Service Unavailable',
+        message: 'Database query took too long and was cancelled. Please retry shortly.',
+        code: 'DB_QUERY_TIMEOUT',
+      },
+    }
+  }
+  return null
 }
 
 /**
