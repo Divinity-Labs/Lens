@@ -214,15 +214,22 @@ export async function upsertPricePoints(points: {
 
   const { accepted, quarantined } = await partitionPricePointsByPlausibility(points as any, network)
 
-  let acceptedCount = 0
+  // Pre-filter rows that already exist so callers receive ONLY genuinely new
+  // points. Without this, duplicate-only writes (e.g. AMM pools nobody traded,
+  // replayed pages after restart) still fired websocket events, webhooks and
+  // freshness metrics for rows that were silently skipped by the DB. (#716)
+  let insertedPoints: typeof accepted = []
   if (accepted.length > 0) {
-    const result = await prisma.pricePoint.createMany({
-      data: accepted.map((p: any) => {
-        const observedAt = p.observedAt ?? p.timestamp ?? new Date()
-        const sourceTime = p.sourceTime !== undefined ? p.sourceTime : null
-        const timestamp = p.timestamp ?? observedAt
-        return {
-          id: p.id ?? (p.eventId ? `${network}:${p.source}:${p.eventId}` : undefined),
+    // Derive the event id each row will carry
+    const rowsWithIds = accepted.map((p: any) => {
+      const observedAt = p.observedAt ?? p.timestamp ?? new Date()
+      const sourceTime = p.sourceTime !== undefined ? p.sourceTime : null
+      const timestamp = p.timestamp ?? observedAt
+      const eventId = p.eventId || synthesizeEventId(network, { ...p, timestamp: p.timestamp })
+      return {
+        point: p,
+        eventData: {
+          id: p.id ?? `${network}:${p.source}:${eventId}`,
           network,
           assetA: p.assetA,
           assetB: p.assetB,
@@ -236,16 +243,47 @@ export async function upsertPricePoints(points: {
           timestamp,
           observedAt,
           sourceTime,
-          eventId: p.eventId || synthesizeEventId(network, { ...p, timestamp: p.timestamp }),
-        }
-      }),
-      skipDuplicates: true,
+          eventId,
+        },
+      }
     })
-    acceptedCount = result.count
-    for (const p of accepted) {
-      price_points_accepted_total.inc({ source: p.source, network })
+
+    // Check which event ids already exist (batched for large pages)
+    const candidateIds = rowsWithIds.map((r) => r.eventData.eventId).filter(Boolean) as string[]
+    let existingIds = new Set<string>()
+    if (candidateIds.length > 0) {
+      const BATCH = 500
+      for (let i = 0; i < candidateIds.length; i += BATCH) {
+        const chunk = candidateIds.slice(i, i + BATCH)
+        const existing = await prisma.pricePoint.findMany({
+          where: { network, eventId: { in: chunk } },
+          select: { eventId: true },
+        })
+        for (const row of existing) existingIds.add(row.eventId!)
+      }
     }
+
+    // Partition into new vs already-seen
+    const freshRows = rowsWithIds.filter((r) => !existingIds.has(r.eventData.eventId))
+    const dupCount = rowsWithIds.length - freshRows.length
+
+    if (freshRows.length > 0) {
+      const result = await prisma.pricePoint.createMany({
+        data: freshRows.map((r) => r.eventData),
+        skipDuplicates: true,   // safety net for races between check and insert
+      })
+      // result.count may be less than freshRows.length under race; treat it as truth
+      const actualInserted = result.count
+      insertedPoints = freshRows.slice(0, actualInserted).map((r) => r.point)
+      for (const p of insertedPoints) {
+        price_points_accepted_total.inc({ source: p.source, network })
+      }
+    }
+    // Duplicates are intentionally silent: no metric, no event.
+    void dupCount  // available for future observability if needed
   }
+
+  const acceptedCount = insertedPoints.length
 
   if (quarantined.length > 0) {
     if ((prisma as any).quarantinedPricePoint?.createMany) {
@@ -277,7 +315,7 @@ export async function upsertPricePoints(points: {
 
   return Object.assign(Object(acceptedCount), {
     count: acceptedCount,
-    acceptedPoints: accepted,
+    acceptedPoints: insertedPoints,
     quarantinedPoints: quarantined,
   })
 }
