@@ -8,16 +8,17 @@ class PriceResponse:
     asset_b: str
     pair_key: str
     price: float
-    source: str
-    timestamp: str
+    best_route: str = ""
+    vwap_1h: Optional[float] = None
+    timestamp: str = ""
 
 
 @dataclass
 class RouteResponse:
-    path: list
-    input_asset: str
-    output_asset: str
-    estimated_output: float
+    route: list
+    sdex_price: Optional[float] = None
+    amm_price: Optional[float] = None
+    best_route: str = ""
 
 
 @dataclass
@@ -28,14 +29,13 @@ class CandleResponse:
     low: float
     close: float
     volume: float
-    timestamp: str
+    timestamp: str = ""
 
 
 @dataclass
 class OracleComparison:
     asset: str
-    lens: Optional[float]
-    reflector: Optional[float]
-    deviation_pct: Optional[float]
-    status: str
-    fetched_at: str
+    lens_price: Optional[float] = None
+    oracle_price: Optional[float] = None
+    deviation_pct: Optional[float] = None
+    oracle: str = ""
