@@ -39,6 +39,14 @@ import {
   type LensDataQueries,
 } from './lensTools.js';
 import {
+  LENS_GET_VOLUMES_TOOL_NAME,
+  LENS_GET_SPREADS_TOOL_NAME,
+  callLensMarketTool,
+  isLensMarketToolName,
+  lensMarketToolDefinitions,
+  type LensMarketQueries,
+} from './marketTools.js';
+import {
   BAZAAR_SEARCH_ARGUMENTS_SCHEMA,
   PAID_CALL_ARGUMENTS_SCHEMA,
   zodToToolInputSchema,
@@ -134,6 +142,13 @@ export interface McpServerConfig {
    * the tools, so an agent is never offered a listing this server cannot produce.
    */
   dataQueries?: LensDataQueries;
+  /**
+   * Lens's own volumes and spreads, for `lens_get_volumes` and
+   * `lens_get_spreads` (#684). Hosts that can read the data pass
+   * {@link createLensMarketQueries}; leaving it out does not advertise the
+   * tools, so an agent is never offered data this server cannot produce.
+   */
+  marketQueries?: LensMarketQueries;
   /**
    * Outbound fetch policy for `bazaar_search`. Falls back to the operator's
    * shared `OUTBOUND_ALLOWED_HOSTS` allowlist. `lookup`/`fetchImpl` exist so
@@ -290,6 +305,7 @@ export class BazaarMcpServer {
   private bazaarFetchOptions: SsrfFetchOptions;
   private priceQueries?: LensPriceQueries;
   private dataQueries?: LensDataQueries;
+  private marketQueries?: LensMarketQueries;
   private budget?: SpendBudget;
   private limits: McpLimits;
   private resources: LensResourceDescriptor[];
@@ -300,6 +316,7 @@ export class BazaarMcpServer {
     this.fetchWithPayment = config_.fetchWithPayment;
     this.priceQueries = config_.priceQueries;
     this.dataQueries = config_.dataQueries;
+    this.marketQueries = config_.marketQueries;
     this.budget = config_.budget;
     this.paymentLedger = config_.paymentLedger ?? new PaymentLedger();
     this.limits = { ...config.mcp, ...config_.limits };
@@ -398,6 +415,13 @@ export class BazaarMcpServer {
       // is moving. Advertised only when this process can read Lens's data.
       if (this.dataQueries) {
         tools.push(...lensDataToolDefinitions());
+      }
+
+      // #684: volumes and spreads — an agent that can read a price and list pairs
+      // still cannot ask where an asset trades or how tight its market is.
+      // Advertised only when this process can read Lens's market data.
+      if (this.marketQueries) {
+        tools.push(...lensMarketToolDefinitions());
       }
 
       return { tools };
@@ -551,6 +575,39 @@ export class BazaarMcpServer {
           return this.createErrorResponse(
             'ERR_SERVICE_UNREACHABLE',
             `${request.params.name} could not read Lens data: the backing store is unreachable. Retry later rather than assuming the answer is empty.`
+          );
+        }
+      }
+
+      if (isLensMarketToolName(request.params.name)) {
+        if (!this.marketQueries) {
+          return this.createErrorResponse(
+            'ERR_INTERNAL_FAILURE',
+            `${request.params.name} is not available: this server has no Lens market data source configured.`
+          );
+        }
+
+        try {
+          const outcome = await callLensMarketTool(request.params.name, request.params.arguments, this.marketQueries);
+
+          if (!outcome.ok) {
+            return this.createErrorResponse(outcome.error.code, outcome.error.reason);
+          }
+
+          const bounded = boundSerialized(outcome.result, {
+            maxBytes: this.limits.maxResultBytes,
+            maxItems: Number.MAX_SAFE_INTEGER,
+            offset: 0,
+            notice: `A Lens market result was truncated to fit a ${this.limits.maxResultBytes}-byte tool output limit.`,
+          });
+          return bounded.truncated
+            ? { content: [{ type: 'text', text: bounded.text }] }
+            : { content: [{ type: 'text', text: bounded.text }], structuredContent: outcome.result };
+        } catch (e: any) {
+          console.error(`[mcp-server] ${request.params.name} failed:`, e);
+          return this.createErrorResponse(
+            'ERR_SERVICE_UNREACHABLE',
+            `${request.params.name} could not read Lens market data: the backing store is unreachable. Retry later rather than assuming the answer is empty.`
           );
         }
       }

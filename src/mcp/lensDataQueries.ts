@@ -11,7 +11,10 @@ import {
   ScreenerCursorError,
   ScreenerSortError,
 } from '../services/screener'
+import { computeVolumes } from '../routes/volumes'
+import { computeSpreads } from '../routes/spreads'
 import type { LensDataQueries } from './lensTools.js'
+import type { LensMarketQueries } from './marketTools.js'
 
 /**
  * The data layer behind the three Lens data tools (#409), built from the same
@@ -79,4 +82,23 @@ export function createLensDataQueries(): LensDataQueries {
 
 function pairsFor(network: NetworkName) {
   return network === activeNetwork ? getActivePairs() : getNetworkConfig(network).pairs
+}
+
+/**
+ * The market-depth layer behind `lens_get_volumes` and `lens_get_spreads` (#684).
+ * Calls the same exported functions the REST routes call, so an MCP result and
+ * an HTTP result for the same arguments are identical.
+ */
+export function createLensMarketQueries(): LensMarketQueries {
+  return {
+    activeNetwork,
+
+    getVolumes(asset, window, network) {
+      return computeVolumes(asset, window, network)
+    },
+
+    getSpreads(asset, window, network) {
+      return computeSpreads(asset, window, network)
+    },
+  }
 }

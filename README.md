@@ -471,8 +471,10 @@ When multiple venues quote the same pair, their prices naturally diverge due to 
 | `lens_list_pairs` | Lists the pairs watched on one network, one bounded page at a time, each with its latest price and the issuer of both assets in full. | No |
 | `lens_get_pools` | Lists AMM pools with their newest reserves, spot price and fee — how much liquidity stands behind a pair. | No |
 | `lens_screen_pairs` | Ranks watched pairs by volume, 24h change, price or liquidity, with the same filters as `GET /screener`. | No |
+| `lens_get_volumes` | Reports how much of a given asset traded across all venues over a time window, with a per-venue breakdown and HHI concentration. Equivalent to `GET /volumes/:asset`. | No |
+| `lens_get_spreads` | Reports the bid/ask spread (price dispersion) per venue and pair for a given asset, tightest first. Equivalent to `GET /spreads/:asset`. | No |
 
-`payment_budget` appears whenever a spend budget is configured, which the example always sets, and `lens_get_price` only where the server can reach Lens's own price data. The three data tools follow the same rule: they are advertised only where the host supplies Lens's data, and each one runs the very function its REST route runs, so a page over MCP is the same rows and cursor as a page over HTTP. Every one of them is served over **either** transport, and the tool list, schemas and error codes are identical whichever you pick. Which transport runs is selected by configuration; **stdio is the default**, so an existing setup needs no changes.
+`payment_budget` appears whenever a spend budget is configured, which the example always sets, and `lens_get_price` only where the server can reach Lens's own price data. The data tools follow the same rule: they are advertised only where the host supplies Lens's data, and each one runs the very function its REST route runs, so a result over MCP is the same as a result over HTTP. Every tool is served over **either** transport, and the tool list, schemas and error codes are identical whichever you pick. Which transport runs is selected by configuration; **stdio is the default**, so an existing setup needs no changes.
 
 **⚠️ Warning:** the mainnet key signs with real XLM. Read the configuration,
 spending warning, and worked example before running.
