@@ -8,17 +8,19 @@ services:
       - REDIS_URL=redis://redis:6379
       - WATCHED_PAIRS=XLM:native/USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
       - REQUIRE_API_KEY=false
+      # Explicit network so readers know what this stack ingests (default is testnet)
+      - STELLAR_NETWORK=testnet
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:3002/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 45s  # generous for prisma migrate on first run
 
   postgres:
     image: postgres:15-alpine
@@ -43,6 +45,11 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   pgdata:
