@@ -143,6 +143,7 @@ export function cachePolicyFor(
     case '/price/:assetA/:assetB':
     case '/price/:assetA/:assetB/route':
     case '/price/:assetA/:assetB/depth':
+    case '/premium/:assetA/:assetB':
       policy = 'public, max-age=30'
       break
 
@@ -152,14 +153,19 @@ export function cachePolicyFor(
     case '/price/vwap/:assetA/:assetB':
     case '/prices/history':
     case '/compare/:asset':
+    case '/compare/:asset/history':
+    case '/compare/:asset/summary':
     case '/spreads/:asset':
       policy = 'public, max-age=60'
       break
 
     // Slower-moving derived views.
     case '/volumes/:asset':
+    case '/coverage':
+    case '/coverage/:asset':
     case '/screener':
     case '/basket':
+    case '/tvl':
       policy = 'public, max-age=120'
       break
 
@@ -168,8 +174,10 @@ export function cachePolicyFor(
       policy = 'public, max-age=300'
       break
 
-    // Static discovery document.
+    // Static discovery document and asset metadata — change rarely.
     case '/discovery/resources':
+    case '/assets':
+    case '/assets/:code':
       policy = 'public, max-age=3600'
       break
 
