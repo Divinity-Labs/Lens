@@ -18,24 +18,33 @@ vi.mock('../db', () => ({
       create: vi.fn(),
       deleteMany: vi.fn(),
     },
+    adminCredential: {
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      findMany: vi.fn(),
+    },
   },
 }))
 
 import { prisma } from '../db'
 import {
   registerApiKeyAuth,
+  registerAdminAuth,
   hashApiKey,
   extractBearer,
   lookupApiKey,
   hasScope,
   invalidateApiKey,
   clearApiKeyCache,
+  lookupAdminCredential,
+  resolveAdminIdentity,
   recordApiKeyLastUsed,
   getKeyLastUsedThrottleMs,
   resetApiKeyLastUsedThrottle,
   DEFAULT_KEY_LAST_USED_THROTTLE_SECONDS,
 } from '../api/auth'
-import { registerAdminRoutes, generateApiKey } from '../api/admin'
+import { registerAdminRoutes, generateApiKey, generateAdminCredential } from '../api/admin'
 import {
   register,
   api_key_auth_failures_total,
@@ -48,6 +57,10 @@ const mockFindMany = prisma.apiKey.findMany as unknown as ReturnType<typeof vi.f
 const mockCount = prisma.apiKey.count as unknown as ReturnType<typeof vi.fn>
 const mockCreate = prisma.apiKey.create as unknown as ReturnType<typeof vi.fn>
 const mockUpdate = prisma.apiKey.update as unknown as ReturnType<typeof vi.fn>
+const mockAdminFindUnique = prisma.adminCredential.findUnique as unknown as ReturnType<typeof vi.fn>
+const mockAdminCreate = prisma.adminCredential.create as unknown as ReturnType<typeof vi.fn>
+const mockAdminUpdate = prisma.adminCredential.update as unknown as ReturnType<typeof vi.fn>
+const mockAdminFindMany = prisma.adminCredential.findMany as unknown as ReturnType<typeof vi.fn>
 
 function sha256(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex')
@@ -85,6 +98,10 @@ beforeEach(() => {
   mockCount.mockReset()
   mockCreate.mockReset()
   mockUpdate.mockReset()
+  mockAdminFindUnique.mockReset()
+  mockAdminCreate.mockReset()
+  mockAdminUpdate.mockReset()
+  mockAdminFindMany.mockReset()
   // webhookDeliveryFailure mocks are shared across the admin-endpoint tests;
   // reset them too, or a prior test's call count / mockResolvedValue leaks into
   // the next one under shuffled order (the "recent webhook failure endpoint"
@@ -848,6 +865,195 @@ describe('admin endpoints', () => {
   })
 })
 
+describe('named admin credentials', () => {
+  beforeEach(() => { vi.stubEnv('ADMIN_TOKEN', 'legacy-secret') })
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('generateAdminCredential produces a prefixed opaque credential', () => {
+    expect(generateAdminCredential()).toMatch(/^admin_[a-f0-9]{48}$/)
+  })
+
+  it('lookupAdminCredential returns the identity for a valid credential', async () => {
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+    const ctx = await lookupAdminCredential('admin_credential')
+    expect(mockAdminFindUnique).toHaveBeenCalledWith({ where: { hash: sha256('admin_credential') } })
+    expect(ctx).toEqual({ id: 'admin-1', name: 'alice' })
+  })
+
+  it('lookupAdminCredential returns null for an unknown or revoked credential', async () => {
+    mockAdminFindUnique.mockResolvedValue(null)
+    expect(await lookupAdminCredential('admin_unknown')).toBeNull()
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: new Date() })
+    expect(await lookupAdminCredential('admin_revoked')).toBeNull()
+  })
+
+  describe('resolveAdminIdentity', () => {
+    it('resolves a named credential sent as a bearer token', async () => {
+      mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+      const req = { headers: { authorization: 'Bearer admin_credential' } } as any
+      expect(await resolveAdminIdentity(req)).toEqual({ id: 'admin-1', name: 'alice' })
+    })
+
+    it('resolves a named credential sent as X-Admin-Token', async () => {
+      mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+      const req = { headers: { 'x-admin-token': 'admin_credential' } } as any
+      expect(await resolveAdminIdentity(req)).toEqual({ id: 'admin-1', name: 'alice' })
+    })
+
+    it('attributes the shared ADMIN_TOKEN to legacy-admin without touching the database', async () => {
+      const req = { headers: { authorization: 'Bearer legacy-secret' } } as any
+      expect(await resolveAdminIdentity(req)).toEqual({ id: 'legacy', name: 'legacy-admin' })
+      expect(mockAdminFindUnique).not.toHaveBeenCalled()
+    })
+
+    it('does not query the database for tokens without the admin_ prefix', async () => {
+      const req = { headers: { authorization: 'Bearer wrong' } } as any
+      expect(await resolveAdminIdentity(req)).toBeNull()
+      expect(mockAdminFindUnique).not.toHaveBeenCalled()
+    })
+
+    it('rejects a revoked named credential', async () => {
+      mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: new Date() })
+      const req = { headers: { authorization: 'Bearer admin_revoked' } } as any
+      expect(await resolveAdminIdentity(req)).toBeNull()
+    })
+
+    it('fails closed when the credential lookup errors', async () => {
+      mockAdminFindUnique.mockRejectedValue(new Error('db down'))
+      const req = { headers: { authorization: 'Bearer admin_credential' } } as any
+      expect(await resolveAdminIdentity(req)).toBeNull()
+    })
+  })
+})
+
+describe('admin credential and attribution endpoints', () => {
+  beforeEach(() => { vi.stubEnv('ADMIN_TOKEN', 'admin-secret') })
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  const legacyHeaders = { 'x-admin-token': 'admin-secret' }
+
+  async function buildAdminApp() {
+    const app = Fastify()
+    await app.register(registerAdminAuth)
+    await registerAdminRoutes(app)
+    await app.ready()
+    return app
+  }
+
+  const echoCreate = () =>
+    mockCreate.mockImplementation(async ({ data }: any) => ({
+      id: 'new-id', createdAt: new Date(), ratePerMin: 60, ratePerDay: 10000, ...data,
+    }))
+
+  it('creates an admin credential and stores only its hash', async () => {
+    mockAdminCreate.mockImplementation(async ({ data }: any) => ({ id: 'admin-id', createdAt: new Date(), ...data }))
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'POST', url: '/admin/credentials', headers: legacyHeaders, payload: { name: ' alice ' } })
+    expect(res.statusCode).toBe(201)
+    const body = res.json()
+    expect(body.name).toBe('alice')
+    expect(body.credential).toMatch(/^admin_[a-f0-9]{48}$/)
+    const stored = mockAdminCreate.mock.calls[0][0].data
+    expect(stored.hash).toBe(sha256(body.credential))
+    expect(stored.hash).not.toBe(body.credential)
+  })
+
+  it('rejects a credential with no name', async () => {
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'POST', url: '/admin/credentials', headers: legacyHeaders, payload: {} })
+    expect(res.statusCode).toBe(400)
+    expect(mockAdminCreate).not.toHaveBeenCalled()
+  })
+
+  it('answers 409, not 500, when the credential name is already taken', async () => {
+    mockAdminCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }))
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'POST', url: '/admin/credentials', headers: legacyHeaders, payload: { name: 'alice' } })
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('lists admin credentials without their hashes', async () => {
+    mockAdminFindMany.mockResolvedValue([
+      { id: 'admin-1', name: 'alice', revokedAt: null, createdAt: new Date() },
+      { id: 'admin-2', name: 'bob', revokedAt: null, createdAt: new Date() },
+    ])
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'GET', url: '/admin/credentials', headers: legacyHeaders })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().credentials.map((c: any) => c.name)).toEqual(['alice', 'bob'])
+    expect(mockAdminFindMany.mock.calls[0][0].select.hash).toBeUndefined()
+  })
+
+  it('revokes an admin credential', async () => {
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', revokedAt: null })
+    mockAdminUpdate.mockResolvedValue({ id: 'admin-1', revokedAt: new Date() })
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'DELETE', url: '/admin/credentials/admin-1', headers: legacyHeaders })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ id: 'admin-1', revoked: true })
+  })
+
+  it('404s when revoking an unknown admin credential', async () => {
+    mockAdminFindUnique.mockResolvedValue(null)
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'DELETE', url: '/admin/credentials/nope', headers: legacyHeaders })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('a named credential authenticates through the structural admin hook', async () => {
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+    mockAdminFindMany.mockResolvedValue([])
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/credentials', headers: { authorization: 'Bearer admin_alice-secret' },
+    })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('a revoked named credential is refused with 401 admin_unauthorized', async () => {
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: new Date() })
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'GET', url: '/admin/credentials', headers: { authorization: 'Bearer admin_revoked' },
+    })
+    expect(res.statusCode).toBe(401)
+    expect(res.json().code).toBe('admin_unauthorized')
+  })
+
+  it('a named credential still works when ADMIN_TOKEN is not configured', async () => {
+    vi.stubEnv('ADMIN_TOKEN', '')
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+    mockAdminFindMany.mockResolvedValue([])
+    const app = await buildAdminApp()
+    const named = await app.inject({
+      method: 'GET', url: '/admin/credentials', headers: { 'x-admin-token': 'admin_alice-secret' },
+    })
+    expect(named.statusCode).toBe(200)
+    // ...while an unrecognised secret still gets the "surface disabled" answer.
+    const other = await app.inject({
+      method: 'GET', url: '/admin/credentials', headers: { 'x-admin-token': 'something-else' },
+    })
+    expect(other.statusCode).toBe(503)
+    expect(other.json().code).toBe('admin_not_configured')
+  })
+
+  it('records which named admin minted a key', async () => {
+    mockAdminFindUnique.mockResolvedValue({ id: 'admin-1', name: 'alice', revokedAt: null })
+    echoCreate()
+    const app = await buildAdminApp()
+    const res = await app.inject({
+      method: 'POST', url: '/admin/keys', headers: { authorization: 'Bearer admin_alice-secret' }, payload: { label: 'acme' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(mockCreate.mock.calls[0][0].data.createdByAdminId).toBe('admin-1')  })
+
+  it('attributes keys minted with the shared ADMIN_TOKEN to legacy-admin', async () => {
+    echoCreate()
+    const app = await buildAdminApp()
+    const res = await app.inject({ method: 'POST', url: '/admin/keys', headers: legacyHeaders, payload: { label: 'acme' } })
+    expect(res.statusCode).toBe(201)
+    expect(mockCreate.mock.calls[0][0].data.createdByAdminId).toBe('legacy')  })
+})
 describe('lastUsedAt recording & throttling', () => {
   it('records lastUsedAt on successful authentication', async () => {
     mockFindUnique.mockResolvedValue({

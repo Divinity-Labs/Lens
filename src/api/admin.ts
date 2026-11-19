@@ -2,15 +2,29 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import { prisma } from '../db'
-import { admin_auth_failures_total } from '../metrics'
 import { formatValidationError } from '../validation'
-import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
+import {
+  hashApiKey,
+  invalidateApiKey,
+  authenticateAdmin,
+  sendAdminAuthFailure,
+  ADMIN_CREDENTIAL_PREFIX,
+} from './auth'
 import { copyUsageHistory } from '../x402/metering'
 
 import { apiError } from '../errors'
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
   return `lens_${randomBytes(24).toString('hex')}`
+}
+
+/** Generates a new named admin credential with a recognizable `admin_` prefix. */
+export function generateAdminCredential(): string {
+  return `${ADMIN_CREDENTIAL_PREFIX}${randomBytes(24).toString('hex')}`
+}
+
+interface CreateAdminCredentialBody {
+  name?: string
 }
 
 interface CreateKeyBody {
@@ -123,18 +137,22 @@ function parsePageValue(value: string | undefined, fallback: number, maximum: nu
  * - `POST /admin/keys`   — mint a new key (returns the plaintext key ONCE).
  * - `GET /admin/keys`    — list all existing keys with metadata and scopes.
  * - `DELETE /admin/keys/:id` — revoke an existing key.
+ * - `POST /admin/keys/:id/rotate` — replace a key, keeping the old one alive for an overlap.
+ * - `POST /admin/credentials` — create a named admin credential (plaintext returned ONCE).
+ * - `GET /admin/credentials` — list admin credentials (never their secrets).
+ * - `DELETE /admin/credentials/:id` — revoke an admin credential.
  *
- * All routes are marked `config.public = true` so the API-key auth hook skips
- * them; they enforce their own `ADMIN_TOKEN` check instead.
+ * Every route is an admin route (`config.admin`), guarded structurally by the
+ * admin hook and re-checked here with `authenticateAdmin`, which accepts the
+ * shared `ADMIN_TOKEN` or a named admin credential and says which one it was.
  */
 export async function registerAdminRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { limit?: string } }>(
     '/admin/webhook-delivery-failures',
     { config: { admin: true, auth: 'admin' } },
     async (req, reply) => {
-      if (!isAdminAuthorized(req)) {
-        return reply.status(401).send({ error: 'Unauthorized', message: 'Provide a valid X-Admin-Token header.' })
-      }
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
       const requestedLimit = Number(req.query.limit ?? 25)
       if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
         return reply.status(400).send(apiError('invalid_parameter', 'limit must be a positive integer'))
@@ -151,22 +169,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Body: CreateKeyBody }>, reply: FastifyReply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+      const admin = auth.admin
 
       const parsed = CreateKeySchema.safeParse(req.body ?? {})
       if (!parsed.success) {
@@ -181,6 +186,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         data: {
           hash: hashApiKey(plaintext),
           label,
+          createdByAdminId: admin.id,
           ...(expiration ? { expiresAt: expiration } : {}),
           ...(ratePerMin !== undefined ? { ratePerMin } : {}),
           ...(ratePerDay !== undefined ? { ratePerDay } : {}),
@@ -211,14 +217,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Querystring: ListKeysQuery }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
 
       const limit = parsePageValue(req.query.limit, 50, MAX_KEY_PAGE_SIZE)
       const offset = parsePageValue(req.query.offset, 0, Number.MAX_SAFE_INTEGER)
@@ -280,22 +280,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      const auth = checkAdminAuth(req)
-      if (auth === 'not_configured') {
-        return reply.status(503).send({
-          error: 'Service Unavailable',
-          code: 'admin_not_configured',
-          message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-        })
-      }
-      if (auth !== 'authorized') {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+      const admin = auth.admin
 
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })
@@ -323,14 +310,9 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     '/admin/keys/:id/rotate',
     { config: { admin: true, auth: 'admin' } },
     async (req: FastifyRequest<{ Params: { id: string }; Body: RotateKeyBody }>, reply: FastifyReply) => {
-      if (!isAdminAuthorized(req)) {
-        admin_auth_failures_total.inc()
-        return reply.status(401).send({
-          error: 'Unauthorized',
-          code: 'admin_unauthorized',
-          message: 'Provide a valid X-Admin-Token header.',
-        })
-      }
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+      const admin = auth.admin
 
       const { id } = req.params
       const oldKey = await prisma.apiKey.findUnique({ where: { id } })
@@ -379,6 +361,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           // then 403s on every scoped route — a rotation that hands the caller
           // a key which cannot do what the old one did.
           scopes: oldKey.scopes ?? [],
+          createdByAdminId: admin.id,
         },
       })
 
@@ -399,6 +382,76 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         overagePolicy: newKey.overagePolicy,
         createdAt: newKey.createdAt,
       })
+    },
+  )
+
+  app.post<{ Body: CreateAdminCredentialBody }>(
+    '/admin/credentials',
+    { config: { admin: true, auth: 'admin' } },
+    async (req: FastifyRequest<{ Body: CreateAdminCredentialBody }>, reply: FastifyReply) => {
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+
+      const name = req.body?.name
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return reply.status(400).send(apiError('invalid_parameter', 'name is required'))
+      }
+
+      const plaintext = generateAdminCredential()
+      let record
+      try {
+        record = await prisma.adminCredential.create({
+          data: { name: name.trim(), hash: hashApiKey(plaintext) },
+        })
+      } catch (err: unknown) {
+        // `name` is unique: two people sharing one name would defeat attribution.
+        if ((err as { code?: string })?.code === 'P2002') {
+          return reply.status(409).send(apiError('invalid_parameter', 'An admin credential with that name already exists'))
+        }
+        throw err
+      }
+
+      return reply.status(201).send({
+        id: record.id,
+        name: record.name,
+        credential: plaintext,
+        createdAt: record.createdAt,
+      })
+    },
+  )
+
+  app.get(
+    '/admin/credentials',
+    { config: { admin: true, auth: 'admin' } },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+
+      const credentials = await prisma.adminCredential.findMany({
+        select: { id: true, name: true, revokedAt: true, createdAt: true },
+      })
+      return reply.send({ credentials })
+    },
+  )
+
+  app.delete<{ Params: { id: string } }>(
+    '/admin/credentials/:id',
+    { config: { admin: true, auth: 'admin' } },
+    async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const auth = await authenticateAdmin(req)
+      if (!auth.ok) return sendAdminAuthFailure(reply, auth.reason)
+
+      const { id } = req.params
+      const existing = await prisma.adminCredential.findUnique({ where: { id } })
+      if (!existing) {
+        return reply.status(404).send(apiError('not_found', 'Admin credential not found'))
+      }
+      if (existing.revokedAt) {
+        return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
+      }
+
+      await prisma.adminCredential.update({ where: { id }, data: { revokedAt: new Date() } })
+      return reply.status(200).send({ id, revoked: true })
     },
   )
 }
