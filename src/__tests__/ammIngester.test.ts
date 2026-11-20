@@ -15,6 +15,7 @@ vi.mock('../webhookDispatcher', () => ({
 }))
 
 // ── Imports ──────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { snapshotPool, ingestPoolTrades } from '../ingest/venues/amm'
 import { prisma, upsertPricePoints, getIndexerState, setIndexerCursor } from '../db'
 import { dispatchPriceUpdate } from '../webhookDispatcher'

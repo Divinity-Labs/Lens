@@ -26,7 +26,7 @@ jobs:
         run: npm run client:typecheck
       - name: Fail if the committed README tables are out of date with openapi.yaml
         run: npm run readme:check
-      - run: npx tsc --noEmit
+      - run: npm run typecheck
       - run: npm run build
       - run: npm test --if-present
 

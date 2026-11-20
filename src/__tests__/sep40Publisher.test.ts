@@ -192,7 +192,7 @@ describe('runPublicationCycle', () => {
     expect(calls.lastPrice).toHaveLength(0)
     expect(calls.report).toHaveLength(0)
     expect(cycle.published).toHaveLength(0)
-    expect(cycle.outcomes[0].decision.guard).toBe('stale_aggregate')
+    expect(cycle.outcomes[0].decision).toMatchObject({ publish: false, guard: 'stale_aggregate' })
   })
 
   it('does not touch the chain for an aggregate with no venue behind it', async () => {
@@ -201,7 +201,7 @@ describe('runPublicationCycle', () => {
     const cycle = await runPublicationCycle('testnet', deps, NOW_MS)
     expect(calls.lastPrice).toHaveLength(0)
     expect(calls.report).toHaveLength(0)
-    expect(cycle.outcomes[0].decision.guard).toBe('no_venue')
+    expect(cycle.outcomes[0].decision).toMatchObject({ publish: false, guard: 'no_venue' })
   })
 
   it('refuses a venue name the contract cannot store, rather than sending a doomed write', async () => {
@@ -209,7 +209,7 @@ describe('runPublicationCycle', () => {
     const { deps } = fakeDeps(feed, {}, ['a_venue_name_that_is_definitely_longer_than_thirty_two_bytes'])
     const cycle = await runPublicationCycle('testnet', deps, NOW_MS)
     expect(calls.report).toHaveLength(0)
-    expect(cycle.outcomes[0].decision.guard).toBe('venue_provenance')
+    expect(cycle.outcomes[0].decision).toMatchObject({ publish: false, guard: 'venue_provenance' })
   })
 
   it('asks for the aggregate and the venues on the network it is publishing to', async () => {
@@ -247,7 +247,7 @@ describe('runPublicationCycle', () => {
     const { deps } = fakeDeps(feed, { price: 0.05 })
     const cycle = await runPublicationCycle('testnet', deps, NOW_MS)
     expect(calls.report).toHaveLength(0)
-    expect(cycle.outcomes[0].decision.guard).toBe('below_deviation')
+    expect(cycle.outcomes[0].decision).toMatchObject({ publish: false, guard: 'below_deviation' })
   })
 
   it('records provenance on every published row and calls it published only after the write', async () => {
@@ -295,7 +295,7 @@ describe('runPublicationCycle', () => {
       configMock.pair,
     ]
     const cycle = await runPublicationCycle('testnet', deps, NOW_MS)
-    expect(cycle.outcomes[0].decision.guard).toBe('asset_identity')
+    expect(cycle.outcomes[0].decision).toMatchObject({ publish: false, guard: 'asset_identity' })
     expect(calls.report).toHaveLength(1)
     expect(cycle.published).toEqual([configMock.pair.pairKey])
     expect(seen.records).toHaveLength(1)

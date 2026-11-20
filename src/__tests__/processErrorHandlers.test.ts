@@ -9,8 +9,8 @@ describe('installProcessErrorHandlers', () => {
   })
 
   it.each([
-    ['unhandledRejection', 'unhandledRejection'] as const,
-    ['uncaughtException', 'uncaughtException'] as const,
+    ['unhandledRejection'] as const,
+    ['uncaughtException'] as const,
   ])('logs the full %s error and exits without continuing', async (event) => {
     const error = new Error(`test ${event} failure`)
     const logger = { fatal: vi.fn() } as unknown as FastifyBaseLogger
@@ -19,7 +19,9 @@ describe('installProcessErrorHandlers', () => {
     const uninstall = installProcessErrorHandlers(logger, exit)
 
     try {
-      const handler = process.listeners(event).at(-1)
+      const handler = (event === 'unhandledRejection'
+        ? process.listeners('unhandledRejection')
+        : process.listeners('uncaughtException')).at(-1)
       expect(handler).toBeDefined()
 
       let continued = false
