@@ -3,7 +3,7 @@ import { readFileSync as readFileRaw } from 'node:fs'
 
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
-import { venueAdapters } from '../src/ingest/venues'
+import { venueAdapters, type VenueAdapter } from '../src/ingest/venues'
 import {
   extractSection,
   renderVenuesTable,
@@ -61,11 +61,13 @@ describe('README venue list and endpoint table generators', () => {
   })
 
   it('fails when the README and venue registry diverge', () => {
-    const fakeAdapters = [
+    const fakeAdapters: VenueAdapter[] = [
       ...venueAdapters,
       {
         name: 'NewDex',
         source: 'new_dex',
+        sourceTimeCapability: { status: 'unavailable' },
+        classification: 'primary',
         type: 'Order Book',
         description: 'New decentralized exchange',
         isEnabled: () => true,

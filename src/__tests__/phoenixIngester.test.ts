@@ -109,6 +109,7 @@ vi.mock('../events', () => ({
   publishPriceUpdate: vi.fn(),
 }))
 
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { StrKey, xdr, Address, scValToNative, nativeToScVal } from '@stellar/stellar-sdk'
 import { upsertPricePoints } from '../db'
 import {
@@ -634,7 +635,7 @@ describe('phoenixAdapter', () => {
     const raw = await phoenixAdapter.read(target, usdcXlmPair as any, 'mainnet')
     expect(raw).toEqual(xlmUsdcPool)
     expect(phoenixAdapter.derive(raw as PhoenixReserves, target, usdcXlmPair as any, 'mainnet')).toHaveLength(1)
-    expect(phoenixAdapter.derive(null, target, usdcXlmPair as any, 'mainnet')).toEqual([])
+    expect(phoenixAdapter.derive(null as unknown as PhoenixReserves, target, usdcXlmPair as any, 'mainnet')).toEqual([])
   })
 
   it('drops a pool whose tokens turn out not to be the watched pair', async () => {

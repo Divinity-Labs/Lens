@@ -62,7 +62,6 @@ describe('Daily API Key Quota Enforcement (#175)', () => {
     const originalIncr = redis.incr
     try {
       // Force Redis error
-      // @ts-expect-error test mock
       redis.status = 'ready'
       redis.incr = vi.fn().mockRejectedValueOnce(new Error('Connection lost'))
 
@@ -70,7 +69,6 @@ describe('Daily API Key Quota Enforcement (#175)', () => {
       expect(res.allowed).toBe(true)
     } finally {
       redis.incr = originalIncr
-      // @ts-expect-error test restore
       redis.status = 'wait'
     }
   })

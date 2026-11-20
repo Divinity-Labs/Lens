@@ -53,6 +53,7 @@ vi.mock('../events', () => ({ publishPriceUpdate: vi.fn() }))
 vi.mock('../network/clients', () => ({ getRpcServer: vi.fn() }))
 
 // ── Imports ───────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   calcSharePrice,
   deriveDeFindexPricePoints,

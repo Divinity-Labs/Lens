@@ -28,7 +28,8 @@ import { sdexAdapter, deriveSdexPricePoints } from '../ingest/venues/sdex'
 import { ammAdapter, snapshotPool } from '../ingest/venues/amm'
 import { soroswapAdapter } from '../ingest/venues/soroswap'
 import { aquariusAdapter, deriveAquariusPricePoints } from '../ingest/venues/aquarius'
-import { startVenueAdapter, type VenueAdapter } from '../ingest/venues/runner'
+import { startVenueAdapter } from '../ingest/venues/runner'
+import type { VenueAdapter } from '../ingest/venues/types'
 import { MockCexAdapter } from '../ingest/cex/mock'
 import { registerCandleRoutes } from '../routes/candles'
 import type { WatchedPair } from '../types'
@@ -157,7 +158,7 @@ describe('Observation and Source Time Separation (#240)', () => {
   })
 
   describe('3. Source with No Native Timestamp (Soroswap, Aquarius, AMM reserve snapshots)', () => {
-    it('Soroswap AMM pool derive sets sourceTime to null and observedAt to wall-clock', () => {
+    it('Soroswap AMM pool derive sets sourceTime to null and observedAt to wall-clock', async () => {
       const poolEntry = {
         poolAddress: 'CBXYZ123',
         tokenA: { address: 'CA1', symbol: 'XLM', name: 'Stellar Lumens', decimals: 7 },
@@ -165,7 +166,7 @@ describe('Observation and Source Time Separation (#240)', () => {
       }
 
       const before = Date.now()
-      const points = soroswapAdapter.derive(
+      const points = await soroswapAdapter.derive(
         [100_000_000n, 10_000_000n],
         poolEntry,
         dummyPair,

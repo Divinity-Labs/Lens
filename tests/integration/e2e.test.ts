@@ -76,7 +76,14 @@ describe.skipIf(!runE2E)('Docker Compose end-to-end ingest → query', () => {
 
   it('starts Lens, ingests test market data, and returns query results', async () => {
     const response = await fetch(`${API_URL}/price/XLM/USDC`)
-    const body = await response.json()
+    const body = (await response.json()) as {
+      assetA: string
+      assetB: string
+      pairKey: string
+      price: number
+      ammPrice: number
+      bestRoute: string
+    }
     console.log('E2E RESPONSE', { status: response.status, body })
 
     expect(response.ok).toBe(true)

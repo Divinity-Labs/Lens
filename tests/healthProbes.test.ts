@@ -283,7 +283,7 @@ describe('probe wiring', () => {
 
 describe('operational wiring', () => {
   it('is excluded from http_requests_total, so a poller cannot inflate the rate', async () => {
-    const app = await buildApp({ plugins: app => app.register(registerHttpMetrics) })
+    const app = await buildApp({ plugins: app => { app.register(registerHttpMetrics) } })
     http_requests_total.reset()
     http_request_duration_seconds.reset()
 
@@ -300,7 +300,7 @@ describe('operational wiring', () => {
     // Guard against excluding by accident: the exclusion is per-route, not a
     // blanket switch over the whole app.
     const app = await buildApp({
-      plugins: app => app.register(registerHttpMetrics),
+      plugins: app => { app.register(registerHttpMetrics) },
       routes: app => { app.get('/status', async () => ({ ok: true })) },
     })
     http_requests_total.reset()
@@ -370,7 +370,7 @@ describe('operational wiring', () => {
   })
 
   it('is never cached by a shared cache', async () => {
-    const app = await buildApp({ plugins: app => app.register(registerCachePolicy) })
+    const app = await buildApp({ plugins: app => { app.register(registerCachePolicy) } })
 
     const live = await app.inject({ method: 'GET', url: '/live' })
     const ready = await app.inject({ method: 'GET', url: '/ready' })
@@ -400,7 +400,7 @@ describe('/status is unchanged', () => {
 
   it('is still cached like it always was', async () => {
     const app = await buildApp({
-      plugins: app => app.register(registerCachePolicy),
+      plugins: app => { app.register(registerCachePolicy) },
       routes: app => { app.get('/status', async () => ({ ok: true })) },
     })
 

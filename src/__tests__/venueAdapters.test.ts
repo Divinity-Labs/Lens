@@ -123,6 +123,8 @@ describe('VenueAdapter Interface and Runner (#218)', () => {
     const customAdapter: VenueAdapter = {
       name: 'CustomDEX',
       source: 'custom_dex',
+      type: 'Liquidity Pool',
+      description: 'Custom test venue adapter',
       sourceTimeCapability: { status: 'unavailable' },
       classification: 'primary',
       isEnabled: () => false,

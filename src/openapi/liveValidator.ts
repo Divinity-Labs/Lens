@@ -2,7 +2,6 @@ import { createLogger } from '../logger'
 import { toBarePath } from './coverage'
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-// @ts-expect-error js-yaml types
 import YAML from 'js-yaml'
 import Ajv, { type ErrorObject } from 'ajv'
 
