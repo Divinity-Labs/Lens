@@ -1909,6 +1909,13 @@ export interface components {
         WebhookCreatedResponse: {
             id: string;
             secret: string;
+            assetA: string;
+            assetB: string;
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            threshold: number;
+            /** @enum {string} */
+            direction: "above" | "below";
         };
         UsageResponse: {
             keyId: string;
@@ -4049,6 +4056,13 @@ export interface operations {
             };
             /** @description Invalid webhook definition */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pair not watched */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
