@@ -147,4 +147,21 @@ describe('AMM Ingester', () => {
       64659443
     )
   })
+
+  it('starts fresh AMM ingester from now by default when no saved cursor exists', async () => {
+    vi.mocked(getIndexerState).mockResolvedValue({ cursor: null, ledger: null })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ _embedded: { records: [] } }),
+    })
+
+    await ingestPoolTrades({ id: 'pool-1' }, mockPair as any, 'mainnet')
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('cursor=now'),
+      expect.anything(),
+    )
+  })
 })

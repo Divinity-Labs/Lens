@@ -627,6 +627,7 @@ const globalConfig = {
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
     sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
     ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    initialLookbackHours: parseInt(process.env.INGEST_INITIAL_LOOKBACK_HOURS ?? '0', 10),
     get plausibilityThreshold(): number {
       return parseFloat(process.env.INGEST_PLAUSIBILITY_THRESHOLD ?? '0.20')
     },

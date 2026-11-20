@@ -97,7 +97,11 @@ Every venue adapter explicitly declares its `sourceTimeCapability`:
 | **Aquarius AMM** | `unavailable` | - | Pool API state snapshot; `source_time` is `null`. Never fabricates timestamps. |
 | **CEX Adapters** | `provided` | `exchange_timestamp` | Native exchange-reported ticker/trade timestamp. |
 
-### Bucketing Rationale
+### Ingestion Cursor Initialization & Lookback
+
+When a new pair or liquidity pool is added without a saved indexer state in `indexer_state`, live ingesters (SDEX and AMM trade ingestion) start at the present by default (`cursor=now`). This prevents fresh ingesters from walking past years of trade history and serving stale prices as fresh observation-time prices.
+Operators can configure an optional initial lookback via `INGEST_INITIAL_LOOKBACK_HOURS` in `.env`. Historical ingestion prior to the live starting cursor is handled explicitly via the backfill CLI (`npm run backfill`).
+
 
 All candle aggregation (`/candles`), time-window filtering, TWAP, and VWAP calculations key on **`observed_at`** (observation time).
 
