@@ -34,6 +34,14 @@ export const HISTORY_DEFAULT_LIMIT = 100
 export const HISTORY_MAX_LIMIT = 1000
 
 /**
+ * Build an error body that carries the request id, so a user reporting a
+ * failure can quote one short string and it can be found in the logs.
+ */
+function errorBody(req: { id: string }, message: string) {
+  return { error: message, requestId: req.id }
+}
+
+/**
  * Resolve a requested pair against the ones this network watches.
  *
  * The issuer is honoured when the caller supplies one. It used to be discarded
@@ -220,14 +228,14 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
       const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      if (!pair) return reply.status(404).send(errorBody(req, `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
       let staleThreshold: number | undefined
       if (rawThreshold !== undefined) {
         staleThreshold = parseInt(rawThreshold, 10)
         if (isNaN(staleThreshold) || staleThreshold <= 0) {
-          return reply.status(400).send(apiError('invalid_parameter', 'staleThreshold must be a positive integer'))
+          return reply.status(400).send(errorBody(req, 'staleThreshold must be a positive integer'))
         }
       }
 
@@ -321,7 +329,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       }
 
       if (!['1m', '5m', '1h', '24h'].includes(window)) {
-        return reply.status(400).send(apiError('bad_window', 'window must be one of: 1m, 5m, 1h, 24h'))
+        return reply.status(400).send(errorBody(req, 'window must be one of: 1m, 5m, 1h, 24h', 'bad_window'))
       }
 
       const result = await pgPool.query(
