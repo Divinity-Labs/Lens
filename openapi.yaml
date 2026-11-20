@@ -2700,6 +2700,8 @@ paths:
                 $ref: '#/components/schemas/WebhookCreatedResponse'
         '400':
           description: Invalid webhook definition
+        '404':
+          description: Pair not watched
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -5384,13 +5386,25 @@ components:
 
     WebhookCreatedResponse:
       type: object
-      required: [id, secret]
+      required: [id, secret, assetA, assetB, network, threshold, direction]
       additionalProperties: false
       properties:
         id:
           type: string
         secret:
           type: string
+        assetA:
+          type: string
+        assetB:
+          type: string
+        network:
+          type: string
+          enum: [testnet, mainnet]
+        threshold:
+          type: number
+        direction:
+          type: string
+          enum: [above, below]
 
     UsageResponse:
       type: object

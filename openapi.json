@@ -3820,6 +3820,9 @@
           "400": {
             "description": "Invalid webhook definition"
           },
+          "404": {
+            "description": "Pair not watched"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
@@ -8320,7 +8323,12 @@
         "type": "object",
         "required": [
           "id",
-          "secret"
+          "secret",
+          "assetA",
+          "assetB",
+          "network",
+          "threshold",
+          "direction"
         ],
         "additionalProperties": false,
         "properties": {
@@ -8329,6 +8337,29 @@
           },
           "secret": {
             "type": "string"
+          },
+          "assetA": {
+            "type": "string"
+          },
+          "assetB": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "above",
+              "below"
+            ]
           }
         }
       },
