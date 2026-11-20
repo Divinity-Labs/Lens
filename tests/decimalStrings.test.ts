@@ -50,6 +50,8 @@ vi.mock('../src/config', () => ({
 import { registerRESTRoutes } from '../src/api/rest'
 import { registerPriceRoutes } from '../src/routes/price'
 import { registerPoolsRoutes } from '../src/routes/pools'
+import { registerCandleRoutes } from '../src/routes/candles'
+import { registerHistoryRoutes } from '../src/api/history'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
@@ -58,6 +60,8 @@ async function buildApp() {
   // /pools lives in routes/pools.ts, which app.ts registers alongside the rest
   // aggregate — a harness that wants it has to mount it too.
   await registerPoolsRoutes(app)
+  await registerCandleRoutes(app)
+  await registerHistoryRoutes(app)
   await app.ready()
   return app
 }
@@ -429,6 +433,126 @@ describe('Issue #248: Decimal values cross API boundary as JSON numbers', () => 
     expect(body.volume24h).toBe('600.123456789012345679')
     // Exact 18-decimal percentage change:
     expect(body.priceChange24h).toBe('50.123456789012345678')
+  })
+
+  describe('Issue #670: Candles and history export exact decimals', () => {
+    const HIGH_PRECISION_PRICE = '0.123456789012345678'
+    const HIGH_PRECISION_VOL = '1234567.1234567'
+
+    it('returns exact strings for /candles/:assetA/:assetB in string mode', async () => {
+      mockQuery.mockResolvedValue({
+        rows: [
+          {
+            time: new Date('2025-01-01T00:00:00Z'),
+            open: HIGH_PRECISION_PRICE,
+            high: '0.987654321098765432',
+            low: '0.111111111111111111',
+            close: HIGH_PRECISION_PRICE,
+            volume: HIGH_PRECISION_VOL,
+          },
+        ],
+      })
+
+      const app = await buildApp()
+      const res = await app.inject({
+        method: 'GET',
+        url: '/candles/XLM/USDC?interval=1h&decimals=string',
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['x-decimal-format']).toBe('string')
+      const body = res.json()
+      expect(body.candles).toHaveLength(1)
+      const candle = body.candles[0]
+      expect(candle.open).toBe(HIGH_PRECISION_PRICE)
+      expect(candle.high).toBe('0.987654321098765432')
+      expect(candle.low).toBe('0.111111111111111111')
+      expect(candle.close).toBe(HIGH_PRECISION_PRICE)
+      expect(candle.volume).toBe(HIGH_PRECISION_VOL)
+    })
+
+    it('returns standard rounded numbers for /candles/:assetA/:assetB in default mode', async () => {
+      mockQuery.mockResolvedValue({
+        rows: [
+          {
+            time: new Date('2025-01-01T00:00:00Z'),
+            open: HIGH_PRECISION_PRICE,
+            high: '0.987654321098765432',
+            low: '0.111111111111111111',
+            close: HIGH_PRECISION_PRICE,
+            volume: HIGH_PRECISION_VOL,
+          },
+        ],
+      })
+
+      const app = await buildApp()
+      const res = await app.inject({
+        method: 'GET',
+        url: '/candles/XLM/USDC?interval=1h',
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['x-decimal-format']).toBeUndefined()
+      const body = res.json()
+      const candle = body.candles[0]
+      expect(typeof candle.open).toBe('number')
+      expect(typeof candle.volume).toBe('number')
+      expect(candle.open).toBe(0.12345678901234568)
+      expect(candle.volume).toBe(1234567.1234567)
+    })
+
+    it('returns exact strings for /prices/history JSON in string mode', async () => {
+      mockQuery.mockResolvedValue({
+        rows: [
+          {
+            bucket: new Date('2025-01-01T00:00:00Z'),
+            price: HIGH_PRECISION_PRICE,
+            volume: HIGH_PRECISION_VOL,
+          },
+        ],
+      })
+
+      const app = await buildApp()
+      const res = await app.inject({
+        method: 'GET',
+        url: '/prices/history?pair=XLM/USDC&interval=1h&decimals=string',
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['x-decimal-format']).toBe('string')
+      const body = res.json()
+      expect(body.points).toHaveLength(1)
+      expect(body.points[0].price).toBe(HIGH_PRECISION_PRICE)
+      expect(body.points[0].volume).toBe(HIGH_PRECISION_VOL)
+    })
+
+    it('returns exact strings in /prices/history CSV when string format is negotiated', async () => {
+      mockQuery.mockResolvedValue({
+        rows: [
+          {
+            bucket: new Date('2025-01-01T00:00:00.000Z'),
+            price: HIGH_PRECISION_PRICE,
+            volume: HIGH_PRECISION_VOL,
+          },
+        ],
+      })
+
+      const app = await buildApp()
+      const res = await app.inject({
+        method: 'GET',
+        url: '/prices/history?pair=XLM/USDC&interval=1h&format=csv',
+        headers: {
+          'x-decimal-format': 'string',
+        },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['content-type']).toContain('text/csv')
+      expect(res.headers['x-decimal-format']).toBe('string')
+      expect(res.body).toBe(
+        `ts,price,volume\n2025-01-01T00:00:00.000Z,${HIGH_PRECISION_PRICE},${HIGH_PRECISION_VOL}\n`
+      )
+    })
   })
 })
 

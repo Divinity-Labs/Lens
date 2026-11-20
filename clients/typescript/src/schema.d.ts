@@ -2757,8 +2757,13 @@ export interface operations {
                 cursor?: components["parameters"]["CursorQuery"];
                 /** @description Page size. Out-of-range values are clamped into [1, 5000]. */
                 limit?: number;
+                /** @description Decimal formatting. Set to `string` for exact decimal strings. */
+                decimals?: "number" | "string";
             };
-            header?: never;
+            header?: {
+                /** @description Formatting for decimal quantities (prices, volumes, reserves). Set to `string` to serialize high-precision `Decimal(36,18)` quantities as exact strings, preventing IEEE-754 floating-point precision loss. Defaults to `number`. Can also be negotiated via `Accept: application/json; decimals=strings` or query parameter `?decimals=strings`. */
+                "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
+            };
             path: {
                 /** @example XLM */
                 assetA: string;
@@ -2786,11 +2791,11 @@ export interface operations {
                         candles: {
                             /** Format: date-time */
                             time?: string;
-                            open?: number;
-                            high?: number;
-                            low?: number;
-                            close?: number;
-                            volume?: number;
+                            open?: number | string;
+                            high?: number | string;
+                            low?: number | string;
+                            close?: number | string;
+                            volume?: number | string;
                         }[];
                         nextCursor: string | null;
                         hasMore: boolean;
@@ -2828,8 +2833,13 @@ export interface operations {
                 limit?: number;
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
                 network?: components["parameters"]["NetworkQuery"];
+                /** @description Decimal formatting. Set to `string` for exact decimal strings. */
+                decimals?: "number" | "string";
             };
-            header?: never;
+            header?: {
+                /** @description Formatting for decimal quantities (prices, volumes, reserves). Set to `string` to serialize high-precision `Decimal(36,18)` quantities as exact strings, preventing IEEE-754 floating-point precision loss. Defaults to `number`. Can also be negotiated via `Accept: application/json; decimals=strings` or query parameter `?decimals=strings`. */
+                "X-Decimal-Format"?: components["parameters"]["DecimalFormatHeader"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -2862,8 +2872,8 @@ export interface operations {
                         points: {
                             /** Format: date-time */
                             ts?: string;
-                            price?: number;
-                            volume?: number;
+                            price?: number | string;
+                            volume?: number | string;
                         }[];
                         nextCursor: string | null;
                         hasMore: boolean;
