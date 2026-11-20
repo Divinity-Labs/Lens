@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, getNetworkConfig, type NetworkName } from '../config'
 import { resolveNetworkName } from '../middleware/network'
-
 import { apiError } from '../errors'
+
 function isValidHttpsUrl(raw: string): boolean {
   try {
     const u = new URL(raw)
@@ -12,6 +12,52 @@ function isValidHttpsUrl(raw: string): boolean {
   } catch {
     return false
   }
+}
+
+function parseAssetInput(a: string): { code: string; issuer: string | null } | null {
+  if (typeof a !== 'string' || !a.trim()) return null
+  if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null }
+  const parts = a.split(':')
+  if (parts.length > 2) return null
+  const code = (parts[0] ?? '').trim().toUpperCase()
+  if (!code || code.length > 12) return null
+  const issuer = parts[1] !== undefined ? parts[1].trim() : null
+  if (issuer !== null) {
+    if (!issuer || issuer.toLowerCase() === 'native') {
+      return { code, issuer: null }
+    }
+    // Stellar public key check: 56 chars G...
+    if (!/^G[A-Z2-7]{55}$/.test(issuer)) return null
+  }
+  return { code, issuer }
+}
+
+function findWatchedPair(
+  qA: { code: string; issuer: string | null },
+  qB: { code: string; issuer: string | null },
+  network: NetworkName,
+) {
+  const matches = (
+    q: { code: string; issuer: string | null },
+    side: { code: string; issuer?: string | null },
+  ) => {
+    if (q.code !== side.code.toUpperCase()) return false
+    // Only enforce the issuer when both sides name one; XLM has none, and a
+    // caller passing a bare code is not asserting which issuer they meant.
+    if (!q.issuer || !side.issuer) return true
+    return q.issuer === side.issuer
+  }
+
+  const pairs = getNetworkConfig(network).pairs ?? []
+  for (const p of pairs) {
+    if (matches(qA, p.assetA) && matches(qB, p.assetB)) {
+      return { pair: p, isReversed: false }
+    }
+    if (matches(qA, p.assetB) && matches(qB, p.assetA)) {
+      return { pair: p, isReversed: true }
+    }
+  }
+  return null
 }
 
 export async function registerWebhookRoutes(app: FastifyInstance) {
@@ -30,8 +76,8 @@ export async function registerWebhookRoutes(app: FastifyInstance) {
     if (!assetB || typeof assetB !== 'string') {
       return reply.status(400).send(apiError('missing_parameter', 'assetB is required'))
     }
-    if (typeof threshold !== 'number' || isNaN(threshold)) {
-      return reply.status(400).send(apiError('invalid_parameter', 'threshold must be a number'))
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold <= 0) {
+      return reply.status(400).send(apiError('invalid_parameter', 'threshold must be a positive number'))
     }
     if (direction !== 'above' && direction !== 'below') {
       return reply.status(400).send(apiError('invalid_parameter', 'direction must be "above" or "below"'))
@@ -46,21 +92,49 @@ export async function registerWebhookRoutes(app: FastifyInstance) {
       targetNetwork = resolved.network
     }
 
+    const parsedA = parseAssetInput(assetA)
+    if (!parsedA) {
+      return reply.status(400).send(apiError('invalid_parameter', `Invalid assetA: "${assetA}"`))
+    }
+    const parsedB = parseAssetInput(assetB)
+    if (!parsedB) {
+      return reply.status(400).send(apiError('invalid_parameter', `Invalid assetB: "${assetB}"`))
+    }
+
+    const match = findWatchedPair(parsedA, parsedB, targetNetwork)
+    if (!match) {
+      return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${targetNetwork}`))
+    }
+
+    const { pair, isReversed } = match
+    const storedA = pair.assetA.code
+    const storedB = pair.assetB.code
+    const storedThreshold = isReversed ? 1 / threshold : threshold
+    const storedDirection = isReversed ? (direction === 'above' ? 'below' : 'above') : direction
+
     const secret = randomBytes(32).toString('hex')
 
     const webhook = await prisma.webhook.create({
       data: {
         network: targetNetwork,
         url,
-        assetA: assetA.toUpperCase(),
-        assetB: assetB.toUpperCase(),
-        threshold,
-        direction,
+        assetA: storedA,
+        assetB: storedB,
+        threshold: storedThreshold,
+        direction: storedDirection,
         secret,
       },
     })
 
-    return reply.status(201).send({ id: webhook.id, secret: webhook.secret })
+    return reply.status(201).send({
+      id: webhook.id,
+      secret: webhook.secret,
+      assetA: storedA,
+      assetB: storedB,
+      network: targetNetwork,
+      threshold: storedThreshold,
+      direction: storedDirection,
+    })
   })
 
   // DELETE /webhooks/:id — unsubscribe
