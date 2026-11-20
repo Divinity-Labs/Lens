@@ -11,6 +11,7 @@ import {
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import { findOverlappingGaps } from '../backfill/gaps'
 import { formatPrice, formatVolume } from '../pricing/precision'
+import { resolveDecimalFormat, type DecimalFormat } from '../utils/decimals'
 
 import { apiError } from '../errors'
 /** Supported aggregation intervals → bucket width in seconds. */
@@ -25,8 +26,8 @@ export const MAX_HISTORY_POINTS = 10_000
 
 export interface HistoryPoint {
   ts: string
-  price: number
-  volume: number
+  price: number | string
+  volume: number | string
 }
 
 /** Fixed column order of the CSV export. Downstream parsers key on this. */
@@ -41,7 +42,7 @@ function csvField(value: string): string {
 }
 
 /**
- * Format a number for the CSV export.
+ * Format a number or exact decimal string for the CSV export.
  *
  * `String(n)` is locale-independent (unlike toFixed/toLocaleString), so the
  * same value always renders identically — that byte-stability is what
@@ -49,11 +50,18 @@ function csvField(value: string): string {
  * rather than emitted as `NaN`/`Infinity`, which would silently poison a
  * downstream analytics import.
  */
-function csvNumber(n: number): string {
-  if (!Number.isFinite(n)) {
-    throw new TypeError(`historyToCsv: non-finite number (${String(n)}) cannot be exported`)
+function csvValue(v: number | string): string {
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) {
+      throw new TypeError(`historyToCsv: non-finite number (${String(v)}) cannot be exported`)
+    }
+    return String(v)
   }
-  return String(n)
+  const clean = String(v).trim()
+  if (clean === '' || clean === 'NaN' || clean === 'Infinity' || clean === '-Infinity') {
+    throw new TypeError(`historyToCsv: non-finite number (${clean}) cannot be exported`)
+  }
+  return clean
 }
 
 /**
@@ -69,7 +77,7 @@ function csvNumber(n: number): string {
 export function historyToCsv(points: HistoryPoint[]): string {
   const lines = [HISTORY_CSV_COLUMNS.join(',')]
   for (const p of points) {
-    lines.push([csvField(p.ts), csvNumber(p.price), csvNumber(p.volume)].join(','))
+    lines.push([csvField(p.ts), csvValue(p.price), csvValue(p.volume)].join(','))
   }
   return lines.join('\n') + '\n'
 }
@@ -93,7 +101,7 @@ export async function queryHistory(
   to: Date,
   intervalSecs: number,
   network: NetworkName,
-  opts?: { afterTs?: Date; limit?: number }
+  opts?: { afterTs?: Date; limit?: number; decimalFormat?: DecimalFormat }
 ): Promise<HistoryPoint[]> {
   const params: unknown[] = [intervalSecs, pair, from, to, network]
   let cursorCondition = ''
@@ -121,10 +129,12 @@ export async function queryHistory(
     params
   )
 
+  const isString = opts?.decimalFormat === 'string'
+
   return result.rows.map(r => ({
     ts: new Date(r.bucket).toISOString(),
-    price: formatPrice(r.price) ?? 0,
-    volume: formatVolume(r.volume),
+    price: isString ? String(r.price ?? '0') : (formatPrice(r.price) ?? 0),
+    volume: isString ? String(r.volume ?? '0') : formatVolume(r.volume),
   }))
 }
 
@@ -155,7 +165,17 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
   // clause before grouping, so a snapshot inserted mid-paging cannot shift a
   // page boundary the way an offset would.
   app.get<{
-    Querystring: { pair?: string; from?: string; to?: string; interval?: string; format?: string; cursor?: string; limit?: string }
+    Querystring: {
+      pair?: string
+      from?: string
+      to?: string
+      interval?: string
+      format?: string
+      cursor?: string
+      limit?: string
+      decimals?: string
+      decimalFormat?: string
+    }
   }>('/prices/history', { config: { scope: 'read:history' } }, async (req, reply) => {
     const { pair } = req.query
     if (!pair) {
@@ -217,10 +237,16 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
       })
     }
 
+    const decimalFormat = resolveDecimalFormat(req)
+    if (decimalFormat === 'string') {
+      reply.header('x-decimal-format', 'string')
+    }
+
     const network = req.network ?? activeNetwork
     const points = await queryHistory(pair, from, to, intervalSecs, network, {
       afterTs,
       limit: limit + 1, // Fetch one extra bucket to determine hasMore
+      decimalFormat,
     })
     const { data, hasMore } = slicePage(points, limit)
     const last = hasMore && data.length > 0 ? data[data.length - 1] : null
