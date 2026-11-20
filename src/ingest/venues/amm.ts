@@ -1,7 +1,7 @@
 import { amm_snapshots_total, trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '../../metrics'
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '../../db'
-import { resolvePageLedgers } from '../toid'
+import { calculateStartingCursor, resolvePageLedgers } from '../toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
@@ -190,7 +190,11 @@ export async function ingestPoolTrades(
 ): Promise<void> {
   const stateId = `amm:${network}:${pool.id}`
   const state = await getIndexerState(stateId, network)
-  const cursor = state.cursor ?? '0'
+  let cursor = state.cursor
+  if (!cursor) {
+    cursor = calculateStartingCursor(config.indexer.initialLookbackHours, state.ledger)
+    log.info({ poolId: pool.id, network, cursor, lookbackHours: config.indexer.initialLookbackHours }, 'fresh AMM ingester started')
+  }
 
   try {
     if (signal?.aborted) return

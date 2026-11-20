@@ -12,7 +12,7 @@ import { activeNetwork, type NetworkName } from '../config'
 import { findOverlappingGaps } from '../backfill/gaps'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import { formatPrice, formatVolume } from '../pricing/precision'
-
+import { resolveDecimalFormat, formatDecimal, type DecimalFormat } from '../utils/decimals'
 
 import { apiError } from '../errors'
 const INTERVAL_SECONDS: Record<string, number> = {
@@ -45,7 +45,15 @@ export async function registerCandleRoutes(app: FastifyInstance) {
   // boundary the way an offset would.
   app.get<{
     Params: { assetA: string; assetB: string }
-    Querystring: { interval?: string; from?: string; to?: string; cursor?: string; limit?: string }
+    Querystring: {
+      interval?: string
+      from?: string
+      to?: string
+      cursor?: string
+      limit?: string
+      decimals?: string
+      decimalFormat?: string
+    }
   }>('/candles/:assetA/:assetB', { config: { scope: 'read:history' } }, async (req, reply) => {
     const { assetA, assetB } = req.params
     const interval = req.query.interval ?? '1h'
@@ -133,6 +141,11 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       ? encodeCursor(Math.floor(new Date(last.time).getTime() / 1000), pairKey)
       : null
 
+    const decimalFormat = resolveDecimalFormat(req)
+    if (decimalFormat === 'string') {
+      reply.header('x-decimal-format', 'string')
+    }
+
     return {
       pairKey,
       interval,
@@ -141,11 +154,11 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       to: to.toISOString(),
       candles: data.map(r => ({
         time: r.time,
-        open: formatPrice(r.open),
-        high: formatPrice(r.high),
-        low: formatPrice(r.low),
-        close: formatPrice(r.close),
-        volume: formatVolume(r.volume),
+        open: decimalFormat === 'string' ? String(r.open ?? '0') : formatPrice(r.open),
+        high: decimalFormat === 'string' ? String(r.high ?? '0') : formatPrice(r.high),
+        low: decimalFormat === 'string' ? String(r.low ?? '0') : formatPrice(r.low),
+        close: decimalFormat === 'string' ? String(r.close ?? '0') : formatPrice(r.close),
+        volume: decimalFormat === 'string' ? String(r.volume ?? '0') : formatVolume(r.volume),
       })),
       ...gapDeclaration,
       nextCursor,

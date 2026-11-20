@@ -316,4 +316,60 @@ describe('stale price flag and freshness metadata', () => {
       vi.useRealTimers()
     }
   })
+
+  it('reports last-trade age of 2 hours and stale=true when fresh pool snapshots exist but no trade for 2 hours (#648)', async () => {
+    const now = new Date()
+    const twoHoursAgo = new Date(now.getTime() - 2 * 3600 * 1000).toISOString()
+    const freshSnapshotTime = new Date(now.getTime() - 10 * 1000).toISOString()
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('AVG(spot_price::numeric)')) return { rows: [{ amm_price: '0.1' }] }
+      if (sql.includes('as last_trade')) {
+        return {
+          rows: [{
+            last_trade: twoHoursAgo,
+            last_observation: freshSnapshotTime,
+            input_count: '15',
+          }],
+        }
+      }
+      if (sql.includes('GROUP BY source')) return { rows: [{ source: 'AMM', vol: '0' }] }
+      if (sql.includes('COUNT(DISTINCT COALESCE(pool_id')) return { rows: [{ sources: '2' }] }
+      if (sql.includes('SUM(price::numeric * base_volume::numeric)')) return { rows: [{ vwap: '0.1' }] }
+      if (sql.includes('price_24h_ago')) return { rows: [{ price_24h_ago: '0.09', price_now: '0.1' }] }
+      return { rows: [] }
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({ method: 'GET', url: '/price/XLM/USDC' })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    // 2 hours = 7200 seconds (>= 7190s)
+    expect(body.lastTradeAgeSeconds).toBeGreaterThanOrEqual(7190)
+    expect(body.stale).toBe(true)
+    expect(body.confidence).toBe('low')
+  })
+
+  it('trade stored late reports its age from its own native time (source_time) (#648)', async () => {
+    // Verifies that getAggregatedPrice uses source_time over observed_at
+    const { getAggregatedPrice } = await import('../src/aggregator/vwap')
+
+    let capturedQuery = ''
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('as last_trade')) capturedQuery = sql
+      if (sql.includes('AVG(spot_price::numeric)')) return { rows: [{ amm_price: '0.1' }] }
+      if (sql.includes('GROUP BY source')) return { rows: [{ source: 'SDEX', vol: '100' }] }
+      if (sql.includes('COUNT(DISTINCT COALESCE(pool_id')) return { rows: [{ sources: '1' }] }
+      if (sql.includes('SUM(price::numeric * base_volume::numeric)')) return { rows: [{ vwap: '0.1' }] }
+      if (sql.includes('price_24h_ago')) return { rows: [{ price_24h_ago: '0.09', price_now: '0.1' }] }
+      return { rows: [] }
+    })
+
+    await getAggregatedPrice('USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5/XLM', 'testnet')
+
+    expect(capturedQuery).toContain('MAX(COALESCE(source_time, observed_at, timestamp))')
+    expect(capturedQuery).toContain("WHERE (source IN ('SDEX', 'AMM') OR base_volume::numeric > 0)")
+    expect(capturedQuery).toContain("AND (event_id IS NULL OR event_id NOT LIKE 'amm-snapshot-%')")
+  })
 })

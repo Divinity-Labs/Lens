@@ -1,4 +1,27 @@
 /**
+ * Calculate a Horizon starting cursor for a given lookback in hours.
+ *
+ * If lookbackHours <= 0, returns 'now' to start from the live present.
+ * For a positive lookback, approximates the target ledger sequence using
+ * average 5-second ledger close times and converts to a TOID paging token
+ * (`{ledger << 32}-0`).
+ */
+export function calculateStartingCursor(lookbackHours = 0, currentLedger?: number | null): string {
+  if (lookbackHours <= 0) {
+    return 'now'
+  }
+
+  // If a reference ledger is provided, subtract the estimated ledger count (1 ledger ~ 5s => 720 ledgers/hour)
+  if (currentLedger && currentLedger > 0) {
+    const ledgersToSubtract = Math.floor((lookbackHours * 3600) / 5)
+    const targetLedger = Math.max(1, currentLedger - ledgersToSubtract)
+    const toid = BigInt(targetLedger) << 32n
+    return `${toid.toString()}-0`
+  }
+
+  return 'now'
+}
+/**
  * Horizon trade ids and paging tokens are `{toid}-{order}`. The TOID packs the
  * ledger sequence into its high 32 bits, and that is the only place a trade
  * exposes its ledger: `/trades` and `/liquidity_pools/{id}/trades` both return
