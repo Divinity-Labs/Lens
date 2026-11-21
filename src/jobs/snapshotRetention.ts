@@ -90,9 +90,28 @@ export async function pruneOldSnapshots(
  * Prunes every network in `getEnabledNetworks()` and returns the pruned row
  * count per network. A failure on one network does not stop the others from
  * being pruned; the failures are rethrown together once all have been tried.
+ *
+ * Single-flight: the boot pass and the first scheduled run overlap by design
+ * (the queue is asked for an immediate job), and a prune after an outage can
+ * take minutes. A second caller joins the run already in progress instead of
+ * starting another drain over the same table. Once it settles, the next call
+ * starts fresh.
  */
-export async function pruneAllNetworks(
+let pruneInFlight: Promise<Partial<Record<NetworkName, number>>> | null = null
+
+export function pruneAllNetworks(
   retentionDays: number = SNAPSHOT_RETENTION_DAYS
+): Promise<Partial<Record<NetworkName, number>>> {
+  if (pruneInFlight) return pruneInFlight
+
+  pruneInFlight = pruneAllNetworksOnce(retentionDays).finally(() => {
+    pruneInFlight = null
+  })
+  return pruneInFlight
+}
+
+async function pruneAllNetworksOnce(
+  retentionDays: number
 ): Promise<Partial<Record<NetworkName, number>>> {
   const counts: Partial<Record<NetworkName, number>> = {}
   const errors: Error[] = []

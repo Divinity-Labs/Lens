@@ -81,9 +81,25 @@ export async function pruneOldRates(
 /**
  * Prunes every network in `getEnabledNetworks()` and returns the pruned row
  * count per network.
+ *
+ * Single-flight: the boot pass and the immediate scheduled run would otherwise
+ * drain the same table at once. A second caller joins the run in progress.
  */
-export async function pruneAllRateNetworks(
+let pruneInFlight: Promise<Partial<Record<NetworkName, number>>> | null = null
+
+export function pruneAllRateNetworks(
   retentionDays: number = RATE_RETENTION_DAYS
+): Promise<Partial<Record<NetworkName, number>>> {
+  if (pruneInFlight) return pruneInFlight
+
+  pruneInFlight = pruneAllRateNetworksOnce(retentionDays).finally(() => {
+    pruneInFlight = null
+  })
+  return pruneInFlight
+}
+
+async function pruneAllRateNetworksOnce(
+  retentionDays: number
 ): Promise<Partial<Record<NetworkName, number>>> {
   const counts: Partial<Record<NetworkName, number>> = {}
   const errors: Error[] = []

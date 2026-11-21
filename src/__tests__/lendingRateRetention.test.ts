@@ -103,4 +103,21 @@ describe('pruneAllRateNetworks', () => {
     expect(typeof counts).toBe('object')
     expect(mockQuery).toHaveBeenCalled()
   })
+
+  it('joins the prune already running instead of starting a second one', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    mockQuery.mockImplementation(async () => {
+      await gate
+      return { rowCount: 0 }
+    })
+
+    const first = pruneAllRateNetworks(30)
+    const second = pruneAllRateNetworks(30)
+
+    expect(second).toBe(first)
+    release()
+    await Promise.all([first, second])
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+  })
 })

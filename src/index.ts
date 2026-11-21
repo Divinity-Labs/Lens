@@ -26,6 +26,7 @@ import {
   startPricePointsPartitionWorker,
   schedulePricePointsPartitionMaintenance,
   runPricePointsMaintenance,
+  ensureTodaysPricePointsPartition,
   PRICE_POINTS_RETENTION_DAYS,
 } from './jobs/pricePointsPartitionJob'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
@@ -153,7 +154,10 @@ async function main() {
     }
   }
 
-  await safePrune()
+  // Backgrounded: after an outage this can drain millions of rows, and none of
+  // that work is needed before ingesters start writing prices again. safePrune
+  // catches and logs its own failures, so it cannot reject unhandled.
+  void safePrune()
 
   {
     let fallbackTimer: NodeJS.Timeout | undefined
@@ -231,7 +235,8 @@ async function main() {
     }
   }
 
-  await safeRatePrune()
+  // Backgrounded for the same reason as the snapshot prune above.
+  void safeRatePrune()
 
   {
     let rateRetentionQueue: ReturnType<typeof createRateRetentionQueue> | undefined
@@ -270,7 +275,12 @@ async function main() {
     }
   }
 
-  await safeMaintainPartitions()
+  // Partition availability is the exception: an ingester cannot write a
+  // timestamp with no partition, so today's partition is ensured here, before
+  // the ingesters start. The call is time-bounded internally; the rest of the
+  // maintenance window (future partitions, expired drops) is background work.
+  await ensureTodaysPricePointsPartition()
+  void safeMaintainPartitions()
 
   {
     let partitionQueue: ReturnType<typeof createPricePointsPartitionQueue> | undefined

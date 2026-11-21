@@ -170,6 +170,36 @@ describe('pruneAllNetworks', () => {
     expect([...new Set(mockQuery.mock.calls.map(c => c[1][0]))]).toEqual([activeNetwork])
   })
 
+  it('joins the prune already running instead of starting a second one', async () => {
+    process.env.ENABLED_NETWORKS = 'testnet'
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    mockQuery.mockImplementation(async () => {
+      await gate
+      return { rowCount: 0 }
+    })
+
+    const first = pruneAllNetworks()
+    const second = pruneAllNetworks()
+
+    // The boot pass and the immediate scheduled job overlap by design; the
+    // second caller must observe the first run rather than drain the table too.
+    expect(second).toBe(first)
+    release()
+    await Promise.all([first, second])
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts a fresh prune once the previous run settles', async () => {
+    process.env.ENABLED_NETWORKS = 'testnet'
+    mockQuery.mockResolvedValue({ rowCount: 0 })
+
+    await pruneAllNetworks()
+    await pruneAllNetworks()
+
+    expect(mockQuery).toHaveBeenCalledTimes(2)
+  })
+
   it('still prunes the other network when one fails, then reports the failure', async () => {
     process.env.ENABLED_NETWORKS = 'testnet,mainnet'
     let mainnetBatches = 0
