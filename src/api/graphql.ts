@@ -144,7 +144,7 @@ export const schema = `
     vwap5m: Float!
     vwap1h: Float!
     vwap24h: Float!
-    priceChange24h: Float!
+    priceChange24h: Float
     lastUpdated: String!
     sources: Int!
     confidence: String!

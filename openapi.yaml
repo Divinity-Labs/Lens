@@ -3606,6 +3606,8 @@ components:
             - type: number
             - type: string
         priceChange24h:
+          nullable: true
+          description: 24-hour percentage change vs the reference price in force 24h ago, or null when no reference is available.
           oneOf:
             - type: number
             - type: string

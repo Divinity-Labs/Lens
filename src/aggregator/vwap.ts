@@ -118,24 +118,32 @@ export function addDecimalStrings(a: string, b: string): string {
   return result === '' || result === '-0' ? '0' : result
 }
 
+export const PRICE_CHANGE_24H_WINDOW_HOURS = 24
+/** Look-back limit before `now - 24h` for finding the prior reference price in force. */
+export const PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS = 48
+/** Short endpoint averaging window (minutes) around each end to damp thin-venue price noise. */
+export const PRICE_CHANGE_ENDPOINT_VWAP_MINUTES = 5
+
 /**
- * Computes exact percentage change between two decimal strings: ((now - ago) / ago) * 100
+ * Computes exact percentage change between two decimal strings: ((now - ago) / ago) * 100.
+ * Returns `{ num: null, raw: null }` when no usable reference price (`agoRaw` or `nowRaw`) exists.
  */
 export function computePriceChange(
   nowRaw: string | undefined | null,
   agoRaw: string | undefined | null,
   computedRaw?: string | null
-): { num: number; raw: string } {
-  if (computedRaw != null) {
-    const raw = String(computedRaw)
-    return { num: parseFloat(raw) || 0, raw }
-  }
-  const agoStr = (agoRaw != null ? String(agoRaw) : '0').trim()
-  const nowStr = (nowRaw != null ? String(nowRaw) : '0').trim()
+): { num: number | null; raw: string | null } {
+  const agoStr = agoRaw != null ? String(agoRaw).trim() : ''
+  const nowStr = nowRaw != null ? String(nowRaw).trim() : ''
   const agoNum = parseFloat(agoStr)
   const nowNum = parseFloat(nowStr)
-  if (!agoNum || agoNum === 0 || !Number.isFinite(agoNum)) {
-    return { num: 0, raw: '0' }
+  if (!agoStr || !nowStr || !Number.isFinite(agoNum) || agoNum === 0 || !Number.isFinite(nowNum)) {
+    return { num: null, raw: null }
+  }
+  if (computedRaw != null) {
+    const raw = String(computedRaw)
+    const parsed = parseFloat(raw)
+    return { num: Number.isFinite(parsed) ? parsed : null, raw }
   }
   try {
     const [aInt = '0', aFrac = ''] = agoStr.split('.')
@@ -143,7 +151,7 @@ export function computePriceChange(
     const scale = Math.max(aFrac.length, nFrac.length)
     const aBig = BigInt((aInt.startsWith('-') ? '-' : '') + aInt.replace('-', '') + aFrac.padEnd(scale, '0'))
     const nBig = BigInt((nInt.startsWith('-') ? '-' : '') + nInt.replace('-', '') + nFrac.padEnd(scale, '0'))
-    if (aBig === 0n) return { num: 0, raw: '0' }
+    if (aBig === 0n) return { num: null, raw: null }
     const diff = nBig - aBig
     const PRECISION = 18n
     const mult = 10n ** PRECISION
@@ -164,33 +172,78 @@ export function computePriceChange(
 export async function getPriceChange24hDetailed(
   pairKey: string,
   network: NetworkName
-): Promise<{ num: number; raw: string }> {
+): Promise<{ num: number | null; raw: string | null }> {
+  // Uses half-open bounds (#236): current window [now - 24h, now), reference lookback
+  // [now - 24h - lookback, now - 24h). Endpoint prices use a short VWAP around each anchor
+  // (falling back to mean price when volume is 0) to damp cross-venue spread noise.
   const result = await pgPool.query(
-    `SELECT
-       price_24h_ago,
-       price_now,
-       CASE
-         WHEN price_24h_ago IS NULL OR price_24h_ago = 0 THEN 0
-         ELSE ((price_now - price_24h_ago) / price_24h_ago * 100)
-       END AS price_change_24h
-     FROM (
+    `WITH bounds AS (
+       SELECT NOW() - INTERVAL '24 hours' AS window_start,
+              NOW() AS window_end
+     ),
+     ref_anchor AS (
+       SELECT COALESCE(observed_at, timestamp) AS ts
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $2
+         AND COALESCE(observed_at, timestamp) >= b.window_start - ($3 || ' hours')::interval
+         AND COALESCE(observed_at, timestamp) < b.window_start
+       ORDER BY COALESCE(observed_at, timestamp) DESC
+       LIMIT 1
+     ),
+     now_anchor AS (
+       SELECT COALESCE(observed_at, timestamp) AS ts
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $2
+         AND COALESCE(observed_at, timestamp) >= b.window_start
+         AND COALESCE(observed_at, timestamp) < b.window_end
+       ORDER BY COALESCE(observed_at, timestamp) DESC
+       LIMIT 1
+     ),
+     ref_agg AS (
        SELECT
-         (SELECT price::numeric FROM price_points
-          WHERE pair_key = $1 AND network = $2
-            AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
-          ORDER BY COALESCE(observed_at, timestamp) ASC LIMIT 1) AS price_24h_ago,
-         (SELECT price::numeric FROM price_points
-          WHERE pair_key = $1 AND network = $2
-            AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
-          ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS price_now
-     ) sub`,
-    [pairKey, network]
+         CASE
+           WHEN COALESCE(SUM(CASE WHEN p.base_volume::numeric > 0 THEN p.base_volume::numeric ELSE 0 END), 0) > 0
+             THEN SUM(p.price::numeric * p.base_volume::numeric) / SUM(p.base_volume::numeric)
+           ELSE AVG(p.price::numeric)
+         END AS price_24h_ago
+       FROM price_points p, bounds b, ref_anchor a
+       WHERE p.pair_key = $1
+         AND p.network = $2
+         AND COALESCE(p.observed_at, p.timestamp) >= GREATEST(b.window_start - ($3 || ' hours')::interval, a.ts - ($4 || ' minutes')::interval)
+         AND COALESCE(p.observed_at, p.timestamp) <= a.ts
+         AND COALESCE(p.observed_at, p.timestamp) < b.window_start
+     ),
+     now_agg AS (
+       SELECT
+         CASE
+           WHEN COALESCE(SUM(CASE WHEN p.base_volume::numeric > 0 THEN p.base_volume::numeric ELSE 0 END), 0) > 0
+             THEN SUM(p.price::numeric * p.base_volume::numeric) / SUM(p.base_volume::numeric)
+           ELSE AVG(p.price::numeric)
+         END AS price_now
+       FROM price_points p, bounds b, now_anchor a
+       WHERE p.pair_key = $1
+         AND p.network = $2
+         AND COALESCE(p.observed_at, p.timestamp) >= GREATEST(b.window_start, a.ts - ($4 || ' minutes')::interval)
+         AND COALESCE(p.observed_at, p.timestamp) <= a.ts
+         AND COALESCE(p.observed_at, p.timestamp) < b.window_end
+     )
+     SELECT
+       ref_agg.price_24h_ago,
+       now_agg.price_now,
+       CASE
+         WHEN ref_agg.price_24h_ago IS NULL OR ref_agg.price_24h_ago = 0 OR now_agg.price_now IS NULL THEN NULL
+         ELSE ((now_agg.price_now - ref_agg.price_24h_ago) / ref_agg.price_24h_ago * 100)
+       END AS price_change_24h
+     FROM ref_agg, now_agg`,
+    [pairKey, network, PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS, PRICE_CHANGE_ENDPOINT_VWAP_MINUTES]
   )
   const row = result.rows[0]
   return computePriceChange(row?.price_now, row?.price_24h_ago, row?.price_change_24h)
 }
 
-export async function getPriceChange24h(pairKey: string, network: NetworkName): Promise<number> {
+export async function getPriceChange24h(pairKey: string, network: NetworkName): Promise<number | null> {
   const detailed = await getPriceChange24hDetailed(pairKey, network)
   return detailed.num
 }
@@ -206,7 +259,7 @@ export interface AggregatedPriceNumeric {
   vwap5m: number
   vwap1h: number
   vwap24h: number
-  priceChange24h: number
+  priceChange24h: number | null
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
@@ -227,7 +280,7 @@ export interface AggregatedPriceString {
   vwap5m: string
   vwap1h: string
   vwap24h: string
-  priceChange24h: string
+  priceChange24h: string | null
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null

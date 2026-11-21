@@ -10,9 +10,12 @@ import {
   calculateVWAP,
   calculateOHLCV,
   getPriceChange24h,
+  getPriceChange24hDetailed,
   getAggregatedPrice,
   HIGH_CONFIDENCE_MAX_AGE_SECONDS,
   MEDIUM_CONFIDENCE_MAX_AGE_SECONDS,
+  PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS,
+  PRICE_CHANGE_ENDPOINT_VWAP_MINUTES,
 } from '../aggregator/vwap'
 import type { NetworkName } from '../config'
 
@@ -143,7 +146,7 @@ describe('aggregator/vwap.ts', () => {
   })
 
   describe('getPriceChange24h', () => {
-    it('computes 24h percentage change when price_24h_ago > 0', async () => {
+    it('computes 24h percentage change using reference before 24h and short endpoint VWAP', async () => {
       mockQuery.mockResolvedValueOnce({
         rows: [{ price_24h_ago: '100', price_now: '125' }],
       })
@@ -153,7 +156,17 @@ describe('aggregator/vwap.ts', () => {
       expect(change).toBe(25)
       const [sql, params] = mockQuery.mock.calls[0]
       expect(sql).toContain("INTERVAL '24 hours'")
-      expect(params).toEqual([PAIR, NETWORK])
+      expect(sql).toContain('ref_anchor')
+      expect(sql).toContain('now_anchor')
+      expect(sql).toContain('< b.window_start')
+      expect(sql).toContain('>= b.window_start')
+      expect(sql).toContain('< b.window_end')
+      expect(params).toEqual([
+        PAIR,
+        NETWORK,
+        PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS,
+        PRICE_CHANGE_ENDPOINT_VWAP_MINUTES,
+      ])
     })
 
     it('returns negative percentage change when price dropped', async () => {
@@ -166,14 +179,106 @@ describe('aggregator/vwap.ts', () => {
       expect(change).toBe(-25)
     })
 
-    it('returns 0 when price_24h_ago is 0 or missing (prevent division by zero)', async () => {
+    it('returns null (unknown) when price_24h_ago or price_now is 0 or missing (#647)', async () => {
       mockQuery.mockResolvedValueOnce({
         rows: [{ price_24h_ago: '0', price_now: '100' }],
       })
-      expect(await getPriceChange24h(PAIR, NETWORK)).toBe(0)
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeNull()
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ price_24h_ago: null, price_now: '100' }],
+      })
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeNull()
 
       mockQuery.mockResolvedValueOnce({ rows: [] })
-      expect(await getPriceChange24h(PAIR, NETWORK)).toBe(0)
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeNull()
+    })
+
+    it('compares against a 26h-old row when the oldest row inside [now-24h, now) is 1h old, damps thin-venue noise with endpoint VWAP, and honors half-open boundary', async () => {
+      const now = Date.parse('2026-06-01T12:00:00.000Z')
+      const hour = 3_600_000
+      const min = 60_000
+
+      function runRefNowSql(
+        rows: Array<{ price: number; vol: number; ageMs: number }>,
+        lookbackH: number,
+        endpointMin: number
+      ) {
+        const wEnd = now
+        const wStart = now - 24 * hour
+        const lookStart = wStart - lookbackH * hour
+
+        const ts = (r: { ageMs: number }) => now - r.ageMs
+        const refCandidates = rows
+          .filter(r => ts(r) >= lookStart && ts(r) < wStart)
+          .sort((a, b) => ts(b) - ts(a))
+        const nowCandidates = rows
+          .filter(r => ts(r) >= wStart && ts(r) < wEnd)
+          .sort((a, b) => ts(b) - ts(a))
+
+        const vwapEnd = (slice: typeof rows) => {
+          if (slice.length === 0) return null
+          const posVol = slice.reduce((s, r) => s + (r.vol > 0 ? r.vol : 0), 0)
+          if (posVol > 0) {
+            return String(slice.reduce((s, r) => s + r.price * r.vol, 0) / posVol)
+          }
+          return String(slice.reduce((s, r) => s + r.price, 0) / slice.length)
+        }
+
+        const refTs = refCandidates[0] ? ts(refCandidates[0]) : null
+        const nowTs = nowCandidates[0] ? ts(nowCandidates[0]) : null
+        const refSlice =
+          refTs === null
+            ? []
+            : refCandidates.filter(r => ts(r) >= Math.max(lookStart, refTs - endpointMin * min) && ts(r) <= refTs)
+        const nowSlice =
+          nowTs === null
+            ? []
+            : nowCandidates.filter(r => ts(r) >= Math.max(wStart, nowTs - endpointMin * min) && ts(r) <= nowTs)
+
+        return { rows: [{ price_24h_ago: vwapEnd(refSlice), price_now: vwapEnd(nowSlice) }] }
+      }
+
+      // 1. Oldest in-window row is 1h old (120), prior row 26h ago (100) -> +20%
+      mockQuery.mockImplementationOnce(async (_sql: string, params: unknown[]) =>
+        runRefNowSql(
+          [
+            { price: 100, vol: 10, ageMs: 26 * hour },
+            { price: 120, vol: 10, ageMs: 1 * hour },
+          ],
+          Number(params[2]),
+          Number(params[3])
+        )
+      )
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeCloseTo(20, 6)
+
+      // 2. Only an in-window row (1h old), no prior reference -> null (unknown)
+      mockQuery.mockImplementationOnce(async (_sql: string, params: unknown[]) =>
+        runRefNowSql([{ price: 120, vol: 10, ageMs: 1 * hour }], Number(params[2]), Number(params[3]))
+      )
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeNull()
+
+      // 3. Two venues near endpoint: dominant SDEX (vol 1000) vs tiny AMM outlier (vol 1)
+      mockQuery.mockImplementationOnce(async (_sql: string, params: unknown[]) =>
+        runRefNowSql(
+          [
+            { price: 100, vol: 1000, ageMs: 25 * hour + 1 * min },
+            { price: 100, vol: 1000, ageMs: 2 * min },
+            { price: 130, vol: 1, ageMs: 1 * min },
+          ],
+          Number(params[2]),
+          Number(params[3])
+        )
+      )
+      const venueDamped = await getPriceChange24hDetailed(PAIR, NETWORK)
+      expect(venueDamped.num).not.toBeNull()
+      expect(venueDamped.num!).toBeLessThan(1)
+
+      // 4. Exact 24h boundary belongs to [now-24h, now), not [now-72h, now-24h)
+      mockQuery.mockImplementationOnce(async (_sql: string, params: unknown[]) =>
+        runRefNowSql([{ price: 100, vol: 10, ageMs: 24 * hour }], Number(params[2]), Number(params[3]))
+      )
+      expect(await getPriceChange24h(PAIR, NETWORK)).toBeNull()
     })
   })
 

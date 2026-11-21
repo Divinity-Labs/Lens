@@ -40,10 +40,12 @@ interface SeedPool {
 }
 
 const points: SeedPoint[] = [
+  { network: 'testnet', pairKey: PAIR, source: 'SDEX', price: 0.10, baseVolume: 100, ageSeconds: 25 * 3600 },
   { network: 'testnet', pairKey: PAIR, source: 'SDEX', price: 0.10, baseVolume: 100, ageSeconds: 23 * 3600 },
   { network: 'testnet', pairKey: PAIR, source: 'SDEX', price: 0.20, baseVolume: 300, ageSeconds: 120 },
   { network: 'testnet', pairKey: PAIR, source: 'SDEX', price: 0.25, baseVolume: 100, ageSeconds: 90 },
   { network: 'testnet', pairKey: PAIR, source: 'AMM', price: 0.30, baseVolume: 100, ageSeconds: 5, poolId: 'tn-pool' },
+  { network: 'mainnet', pairKey: PAIR, source: 'SDEX', price: 0.50, baseVolume: 100, ageSeconds: 25 * 3600 },
   { network: 'mainnet', pairKey: PAIR, source: 'SDEX', price: 0.50, baseVolume: 100, ageSeconds: 23 * 3600 },
   { network: 'mainnet', pairKey: PAIR, source: 'SDEX', price: 0.60, baseVolume: 100, ageSeconds: 120 },
   { network: 'mainnet', pairKey: PAIR, source: 'SDEX', price: 0.55, baseVolume: 300, ageSeconds: 90 },
@@ -105,15 +107,17 @@ function installSeededDb() {
     const windowMinutes = boundWindowMinutes(sql, params)
     const pairKey = String(params[0])
 
-    // 24h price change: oldest and newest price in the window.
+    // 24h price change: reference in [now-72h, now-24h) and latest inside [now-24h, now).
     if (sql.includes('price_24h_ago')) {
-      const rows = rowsInWindow(network, pairKey, windowMinutes)
-      // Largest ageSeconds is the oldest row, matching `ORDER BY timestamp`.
-      const sorted = [...rows].sort((a, b) => b.ageSeconds - a.ageSeconds)
+      const allNet = rowsInWindow(network, pairKey, null)
+      const refRows = allNet
+        .filter(r => r.ageSeconds > 24 * 3600 && r.ageSeconds <= 72 * 3600)
+        .sort((a, b) => a.ageSeconds - b.ageSeconds)
+      const inWinRows = rowsInWindow(network, pairKey, 1440).sort((a, b) => a.ageSeconds - b.ageSeconds)
       return {
         rows: [{
-          price_24h_ago: String(sorted[0]?.price ?? 0),
-          price_now: String(sorted[sorted.length - 1]?.price ?? 0),
+          price_24h_ago: refRows[0] ? String(refRows[0].price) : null,
+          price_now: inWinRows[0] ? String(inWinRows[0].price) : null,
         }],
       }
     }

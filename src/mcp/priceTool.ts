@@ -26,7 +26,7 @@ export interface AggregatedPriceFields {
   vwap5m: number
   vwap1h: number
   vwap24h: number
-  priceChange24h: number
+  priceChange24h: number | null
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'
   lastTradeAgeSeconds: number | null
@@ -73,7 +73,7 @@ export type LensPriceResult = {
   vwap5m: number
   vwap1h: number
   vwap24h: number
-  priceChange24h: number
+  priceChange24h: number | null
   volume24h: number
   sdexPrice: number
   ammPrice: number
@@ -164,7 +164,7 @@ export const lensPriceToolDefinition = () => ({
       vwap5m: { type: 'number' },
       vwap1h: { type: 'number' },
       vwap24h: { type: 'number' },
-      priceChange24h: { type: 'number' },
+      priceChange24h: { type: ['number', 'null'] },
       volume24h: { type: 'number' },
       sdexPrice: { type: 'number' },
       ammPrice: { type: 'number' },

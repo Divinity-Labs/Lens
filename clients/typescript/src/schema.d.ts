@@ -1212,7 +1212,8 @@ export interface components {
             vwap5m?: number | string;
             vwap1h?: number | string;
             vwap24h?: number | string;
-            priceChange24h?: number | string;
+            /** @description 24-hour percentage change vs the reference price in force 24h ago, or null when no reference is available. */
+            priceChange24h?: (number | string) | null;
             /** Format: date-time */
             lastUpdated?: string;
             sources?: number;
