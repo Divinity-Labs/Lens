@@ -1,4 +1,4 @@
-import { config, activeNetwork } from './config'
+import { config, activeNetwork, getNetworkConfig, type NetworkName } from './config'
 import { prisma } from './db'
 import type { WatchedPair, AssetId } from './types'
 
@@ -7,6 +7,15 @@ const activePairs: WatchedPair[] = [...config.pairs]
 
 export function getActivePairs(): readonly WatchedPair[] {
   return activePairs
+}
+
+/**
+ * Returns the watched pairs for `network`. On this process's own active network,
+ * runtime-registered pairs added via POST /pairs are included alongside configured pairs;
+ * other networks use their declared static config so a pair watched on one network never leaks to another.
+ */
+export function getPairsForNetwork(network: NetworkName = activeNetwork): readonly WatchedPair[] {
+  return network === activeNetwork ? activePairs : getNetworkConfig(network).pairs
 }
 
 export function hasPair(pairKey: string): boolean {
