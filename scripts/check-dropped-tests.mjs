@@ -24,32 +24,48 @@
  * is "missing" every case added since it forked, whether or not merging would
  * drop them. What matters is the tree that would actually land.
  *
+ * Case identity is the title plus its multiplicity, repository-wide:
+ *  - Duplicate titles are counted separately, so removing one of two copies is
+ *    reported (a Set keyed by title silently ignored that).
+ *  - Comparing titles across the repository rather than per file means renaming
+ *    or moving a test file is not reported as a deletion when its cases remain.
+ *  - `it.each` rows are one declaration with one title, not one case per row.
+ *  - Constructs inside comments, strings, templates or regex literals are not
+ *    cases; extraction lives in dropped-tests.mjs and is not a single regex.
+ *
+ * A merge with conflicts is not compared at all: the conflicted tree contains
+ * both sides' chunks and cannot say what would actually land, so the check
+ * fails closed instead of reporting a result that may give false comfort.
+ *
  *   node scripts/check-dropped-tests.mjs <base-ref> [head-ref]
  *
- * Exits 1 when cases are missing from the merge result, 0 otherwise.
+ * Exits 1 when cases are missing from the merge result (or the merge
+ * conflicts), 0 otherwise.
  */
 import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
-const BASE = process.argv[2] ?? 'origin/main'
-const HEAD = process.argv[3] ?? 'HEAD'
+import { compareTestCases, extractTestCases } from './dropped-tests.mjs'
 
-/** Matches `it('…`, `test("…`, and the `.each`/`.only`/`.skip` variants. */
-const CASE = /^\s*(?:it|test)(?:\.\w+)*\s*(?:\(|`)\s*(['"`])(.*?)\1/gm
+const DEFAULT_BASE = 'origin/main'
+
+/** Test files: `foo.test.ts`, `foo.spec.js`, and the .mjs/.cjs/.tsx variants. */
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/i
 
 function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
 }
 
 /** Test files tracked at a ref. */
-function testFilesAt(ref) {
+export function testFilesAt(ref) {
   return git('ls-tree', '-r', '--name-only', ref)
     .split('\n')
-    .filter(f => /\.(test|spec)\.[cm]?[jt]sx?$/.test(f))
+    .filter((file) => TEST_FILE.test(file))
 }
 
-/** Map of "file :: case name" for every test case at a ref. */
-function casesAt(ref) {
-  const cases = new Map()
+/** Every test-case title in every test file at a ref. */
+export function casesAt(ref) {
+  const cases = []
   for (const file of testFilesAt(ref)) {
     let source
     try {
@@ -57,57 +73,72 @@ function casesAt(ref) {
     } catch {
       continue
     }
-    for (const m of source.matchAll(CASE)) {
-      // Keyed by file AND name: the same name in two files is two cases, and a
-      // case merely moving between files should still be reported, because a
-      // move and a deletion look identical from the base's point of view.
-      cases.set(`${file} :: ${m[2]}`, true)
-    }
+    cases.push(...extractTestCases(source))
   }
   return cases
 }
 
 /**
- * The tree merging HEAD into BASE would produce. Falls back to HEAD itself if
- * the merge conflicts — a conflicted PR has other problems and the comparison
- * is still worth printing.
+ * The tree merging HEAD into BASE would produce, or a conflict marker.
+ *
+ * `git merge-tree --write-tree` exits 1 and still prints a tree on conflict.
+ * That tree is not a merge result — it can contain conflict markers and only
+ * parts of either side — so it is reported as conflicting and never compared.
  */
-function mergeResult(base, head) {
+export function mergeResult(base, head) {
   try {
-    return git('merge-tree', '--write-tree', base, head).trim().split('\n')[0]
-  } catch (e) {
-    // A conflicted merge still writes the tree it got to, on stdout.
-    const out = String(e.stdout ?? '').trim().split('\n')[0]
-    if (out) {
-      console.log('Note: the merge conflicts; comparing against its tree anyway.\n')
-      return out
+    const stdout = git('merge-tree', '--write-tree', base, head)
+    return { tree: stdout.trim().split('\n')[0], conflict: false }
+  } catch (error) {
+    if (error && error.status === 1) {
+      return { tree: null, conflict: true }
     }
-    console.log('Note: could not compute a merge tree; comparing against the branch tip.\n')
-    return head
+    throw error
   }
 }
 
-const merged = mergeResult(BASE, HEAD)
-const base = casesAt(BASE)
-const head = casesAt(merged)
-const missing = [...base.keys()].filter(k => !head.has(k))
+/** Run the check. Returns the process exit code. */
+export function run(base = DEFAULT_BASE, head = 'HEAD', log = console.log) {
+  const merged = mergeResult(base, head)
+  if (merged.conflict) {
+    log(
+      `Merging ${head} into ${base} conflicts, so no merge tree can be compared.` +
+        '\nResolve the conflicts and push again; the dropped-test check is not run' +
+        '\nagainst a conflicted tree because it cannot say what would land.',
+    )
+    return 1
+  }
 
-console.log(`base ${BASE}: ${base.size} cases`)
-console.log(`merging ${HEAD}: ${head.size} cases`)
+  const baseCases = casesAt(base)
+  const result = compareTestCases(baseCases, casesAt(merged.tree))
 
-if (missing.length === 0) {
-  console.log('\nNo test case present on the base is missing from this branch.')
-  process.exit(0)
+  log(`base ${base}: ${result.baseCount} cases`)
+  log(`merging ${head}: ${result.headCount} cases`)
+
+  if (result.missingCount === 0) {
+    log('\nNo test case present on the base is missing from this branch.')
+    return 0
+  }
+
+  log(`\n${result.missingCount} test case(s) on ${base} would be removed by merging:\n`)
+  for (const { name, count } of result.missing) {
+    log(`  - ${name}${count > 1 ? ` (x${count})` : ''}`)
+  }
+  log(
+    '\nIf that is deliberate — the feature went away, the case was a duplicate,' +
+      '\nthe assertion was wrong — say so in the PR and apply the' +
+      '\n`tests-removed-intentionally` label.' +
+      '\n\nIf it is not, the usual cause is a branch opened before other PRs' +
+      '\nlanded: merging `main` in replaces the file wholesale and takes the' +
+      '\ncases added in between with it. Rebase, then keep both sides.',
+  )
+  return 1
 }
 
-console.log(`\n${missing.length} test case(s) on ${BASE} would be removed by merging:\n`)
-for (const k of missing) console.log(`  - ${k}`)
-console.log(
-  '\nIf that is deliberate — the feature went away, the case was a duplicate,' +
-    '\nthe assertion was wrong — say so in the PR and apply the' +
-    '\n`tests-removed-intentionally` label.' +
-    '\n\nIf it is not, the usual cause is a branch opened before other PRs' +
-    '\nlanded: merging `main` in replaces the file wholesale and takes the' +
-    '\ncases added in between with it. Rebase, then keep both sides.',
-)
-process.exit(1)
+const isMain =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+
+if (isMain) {
+  process.exit(run(process.argv[2] ?? DEFAULT_BASE, process.argv[3] ?? 'HEAD'))
+}
