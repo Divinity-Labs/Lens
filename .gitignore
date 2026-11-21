@@ -3,6 +3,9 @@ dist/
 .env
 *.tsbuildinfo
 
+# Written by tests/integration/e2e.test.ts and uploaded by the e2e CI job.
+compose.log
+
 # Kiro IDE editor-assistant artifacts (spec files, hooks, etc.)
 .kiro/
 

@@ -1,0 +1,26 @@
+# Overrides applied only by tests/integration/e2e.test.ts.
+#
+# The suite asserts on the values it inserted itself, so no background writer may
+# add rows for the network the API serves. Ingesters, the aggregate-refresh
+# worker and reconciliation are all scoped to ENABLED_NETWORKS; moving them to
+# mainnet leaves the API (STELLAR_NETWORK, testnet by default) reading only the
+# testnet rows the suite inserts.
+#
+# Every upstream points at a closed local port. The suite must be provable
+# offline: the route's SDEX leg fails closed to zero and its AMM leg is priced
+# from the inserted pool snapshot.
+services:
+  lens:
+    environment:
+      - STELLAR_NETWORK=testnet
+      - ENABLED_NETWORKS=mainnet
+      - HORIZON_URL_TESTNET=http://127.0.0.1:9
+      - HORIZON_URL_MAINNET=http://127.0.0.1:9
+      - RPC_URL_MAINNET=http://127.0.0.1:9
+      # Only SDEX and AMM cannot be switched off. Leaving the rest enabled would
+      # reach their live APIs for rows the suite never reads.
+      - SOROSWAP_ENABLED_MAINNET=false
+      - AQUARIUS_ENABLED_MAINNET=false
+      - DEFINDEX_ENABLED_MAINNET=false
+      - PHOENIX_ENABLED_MAINNET=false
+      - BLEND_ENABLED_MAINNET=false
