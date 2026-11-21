@@ -967,7 +967,7 @@ export const venuesResponseSchema = {
           samples: { type: 'integer' },
           pairs: { type: 'integer' },
           marketShare: { type: 'number' },
-          periodOverPeriodPctChange: { type: 'number' },
+          periodOverPeriodPctChange: { type: ['number', 'null'] },
           lastUpdated: { type: ['string', 'null'] },
           ageSeconds: { type: ['integer', 'null'] },
         },
@@ -995,7 +995,7 @@ export const venuesResponseSchema = {
         variance: { type: 'number' },
       },
     },
-    periodOverPeriodPctChange: { type: 'number' },
+    periodOverPeriodPctChange: { type: ['number', 'null'] },
   },
 } as const
 
