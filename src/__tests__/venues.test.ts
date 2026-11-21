@@ -216,4 +216,22 @@ describe('GET /venues?window= — Venue Share of Volume', () => {
 
     await app.close()
   })
+
+  it('passes network and both clock bounds to each venue-volume query and reports no previous volume as null', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ source: 'SDEX', samples: 1, pairs: 1, base_volume: '10', counter_volume: '20', base_asset: 'XLM', base_asset_count: 1, last_seen: new Date() }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    const result = await calculateVenueVolumeShare('testnet', '24h')
+    const currentArgs = mockQuery.mock.calls[0][1] as [string, string, string]
+    const previousArgs = mockQuery.mock.calls[1][1] as [string, string, string]
+
+    expect(currentArgs[0]).toBe('testnet')
+    expect(new Date(currentArgs[1]).valueOf()).toBe(new Date(result.endTime).valueOf())
+    expect(new Date(currentArgs[2]).valueOf()).toBe(new Date(result.startTime).valueOf())
+    expect(previousArgs[0]).toBe('testnet')
+    expect(new Date(previousArgs[1]).valueOf()).toBe(new Date(result.startTime).valueOf())
+    expect(result.periodOverPeriodPctChange).toBeNull()
+    expect(result.venues.find(venue => venue.venue === 'SDEX')?.pairs).toBe(1)
+  })
 })

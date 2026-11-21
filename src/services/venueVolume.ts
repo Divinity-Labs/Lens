@@ -17,7 +17,7 @@ export interface VenueVolumeEntry {
   samples: number
   pairs: number
   marketShare: number
-  periodOverPeriodPctChange: number
+  periodOverPeriodPctChange: number | null
   lastUpdated: string | null
   ageSeconds: number | null
   enabled: boolean
@@ -40,12 +40,14 @@ export interface VenueVolumeResponse {
     total: number
     variance: number
   }
-  periodOverPeriodPctChange: number
+  periodOverPeriodPctChange: number | null
 }
 
 interface SeriesRow {
   source: string
   pair_key: string
+  base_asset: string | null
+  base_asset_count: number
   samples_24h: number | null
   base_volume_24h: number | null
   counter_volume_24h: number | null
@@ -117,14 +119,21 @@ export async function calculateVenueVolumeShare(
   // Query volume by venue for the requested window
   const currentQuery = `
     WITH bounds AS (
-      SELECT NOW() as end_time,
-             NOW() - INTERVAL '${windowHours} hours' as start_time
+      SELECT $2::timestamptz AS end_time,
+             $3::timestamptz AS start_time
     )
     SELECT 
       pp.source,
       COUNT(*)::int AS samples,
-      COALESCE(SUM(pp.base_volume::numeric), 0)::float AS base_volume,
-      COALESCE(SUM(pp.counter_volume::numeric), 0)::float AS counter_volume,
+      CASE WHEN COUNT(DISTINCT split_part(pp.pair_key, '/', 1)) = 1
+        THEN COALESCE(SUM(pp.base_volume::numeric), 0)
+        ELSE NULL END AS base_volume,
+      CASE WHEN COUNT(DISTINCT split_part(pp.pair_key, '/', 1)) = 1
+        THEN COALESCE(SUM(pp.counter_volume::numeric), 0)
+        ELSE NULL END AS counter_volume,
+      MIN(split_part(pp.pair_key, '/', 1)) AS base_asset,
+      COUNT(DISTINCT split_part(pp.pair_key, '/', 1))::int AS base_asset_count,
+      COUNT(DISTINCT pp.pair_key)::int AS pairs,
       MAX(pp.timestamp) AS last_seen
     FROM price_points pp
     CROSS JOIN bounds
@@ -141,12 +150,16 @@ export async function calculateVenueVolumeShare(
 
   const previousQuery = `
     WITH bounds AS (
-      SELECT $1 as end_time,
-             $2 as start_time
+      SELECT $2::timestamptz AS end_time,
+             $3::timestamptz AS start_time
     )
     SELECT 
       pp.source,
-      COALESCE(SUM(pp.base_volume::numeric), 0)::float AS base_volume
+      CASE WHEN COUNT(DISTINCT split_part(pp.pair_key, '/', 1)) = 1
+        THEN COALESCE(SUM(pp.base_volume::numeric), 0)
+        ELSE NULL END AS base_volume,
+      MIN(split_part(pp.pair_key, '/', 1)) AS base_asset,
+      COUNT(DISTINCT split_part(pp.pair_key, '/', 1))::int AS base_asset_count
     FROM price_points pp
     CROSS JOIN bounds
     WHERE pp.network = $1
@@ -157,19 +170,20 @@ export async function calculateVenueVolumeShare(
 
   // Execute both queries
   const [currentResult, previousResult] = await Promise.all([
-    pgPool.query(currentQuery, [network]),
-    pgPool.query(previousQuery, [prevEndTime, prevStartTime, network]),
+    pgPool.query(currentQuery, [network, endTimeISO, startTimeISO]),
+    pgPool.query(previousQuery, [network, prevEndTime.toISOString(), prevStartTime.toISOString()]),
   ])
 
   // Build previous volume map for period-over-period comparison
   const previousVolumes = new Map<string, number>()
   for (const row of previousResult.rows) {
-    previousVolumes.set(row.source, row.base_volume || 0)
+    if (row.base_volume != null) previousVolumes.set(row.source, Number(row.base_volume))
   }
 
   // Process current results
   const venuesMap = new Map<string, VenueVolumeEntry>()
   const excludedVenues: string[] = []
+  const baseAssets = new Set<string>()
 
   // Build a map of venue data from current results
   const currentRowsMap = new Map<string, typeof currentResult.rows[0]>()
@@ -180,9 +194,11 @@ export async function calculateVenueVolumeShare(
   // Process all known venue sources from the registry
   for (const source of configuredSources) {
     const row = currentRowsMap.get(source)
-    const baseVolume = row?.base_volume || 0
-    const counterVolume = row?.counter_volume || 0
+    const baseVolume = row?.base_volume == null ? 0 : Number(row.base_volume)
+    const counterVolume = row?.counter_volume == null ? 0 : Number(row.counter_volume)
     const samples = row?.samples || 0
+    const pairs = row?.pairs || 0
+    if (row?.base_asset && (row.base_asset_count ?? 1) === 1) baseAssets.add(row.base_asset)
     const lastSeen = row?.last_seen ? new Date(row.last_seen as string | Date).toISOString() : null
     const ageSeconds = lastSeen ? Math.max(0, Math.floor((endTime.getTime() - new Date(lastSeen).getTime()) / 1000)) : null
 
@@ -195,11 +211,11 @@ export async function calculateVenueVolumeShare(
 
     // Calculate period-over-period change
     const prevVolume = previousVolumes.get(source) || 0
-    let periodOverPeriodPctChange = 0
-    if (prevVolume === 0) {
-      periodOverPeriodPctChange = baseVolume > 0 ? 100 : 0
-    } else {
+    let periodOverPeriodPctChange: number | null = null
+    if (previousVolumes.has(source) && prevVolume !== 0) {
       periodOverPeriodPctChange = ((baseVolume - prevVolume) / prevVolume) * 100
+    } else if (previousVolumes.has(source) && baseVolume === 0) {
+      periodOverPeriodPctChange = 0
     }
 
     venuesMap.set(source, {
@@ -207,7 +223,7 @@ export async function calculateVenueVolumeShare(
       baseVolume,
       counterVolume,
       samples,
-      pairs: 1, // Could be enhanced to count distinct pairs per venue
+      pairs,
       marketShare: 0, // Will calculate after total is known
       periodOverPeriodPctChange,
       lastUpdated: lastSeen,
@@ -234,19 +250,19 @@ export async function calculateVenueVolumeShare(
 
   // Calculate overall period-over-period change
   const totalPrevVolume = Array.from(previousVolumes.values()).reduce((sum, v) => sum + v, 0)
-  let overallPeriodOverPeriodPctChange = 0
-  if (totalPrevVolume === 0) {
-    overallPeriodOverPeriodPctChange = totalVolume > 0 ? 100 : 0
-  } else {
+  let overallPeriodOverPeriodPctChange: number | null = null
+  if (previousVolumes.size > 0 && totalPrevVolume !== 0) {
     overallPeriodOverPeriodPctChange = ((totalVolume - totalPrevVolume) / totalPrevVolume) * 100
+  } else if (previousVolumes.size > 0 && totalVolume === 0) {
+    overallPeriodOverPeriodPctChange = 0
   }
 
   // Collapse total volume to single unit (simplified - just base volume sum)
   // In a real implementation, this would properly handle mixed units
   const totalVolumeInfo = {
-    value: totalVolume,
-    unit: { code: 'base', issuer: null } as { code: string; issuer: string | null } | null,
-    reason: null,
+    value: baseAssets.size === 1 ? totalVolume : null,
+    unit: baseAssets.size === 1 ? { code: [...baseAssets][0], issuer: null } : null,
+    reason: baseAssets.size === 1 ? null : 'mixed or unknown base assets; volume is not comparable',
   }
 
   return {

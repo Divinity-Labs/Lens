@@ -70,3 +70,6 @@ The aggregated volume endpoint (`GET /volumes/:asset`) reports both figures with
 - **`totals.gross` / `grossVolume`**: Total volume across all reporting venues including aggregators (`aquarius_amm`, `defindex_vault`).
 - **`totalVolume`**: Preserved for backward compatibility, reporting `netVolume` to ensure callers do not overstate real activity.
 - **`byVenue`**: Granular breakdown of reported volume by venue source string.
+- Venue-share windows use the same explicit start and end timestamps for both
+  current and previous queries. When no comparable previous volume exists,
+  `periodOverPeriodPctChange` is `null`, not `100`.
