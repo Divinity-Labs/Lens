@@ -1,0 +1,14 @@
+# Files excluded from the Docker build context. In particular a developer's
+# local .env must never be sent to the daemon or sit in a build-stage layer.
+.git
+node_modules
+dist
+.env*
+!.env.example
+tests
+docs
+*.md
+**/*.md
+.github
+.kiro
+coverage
