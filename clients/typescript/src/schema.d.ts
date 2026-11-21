@@ -1392,7 +1392,8 @@ export interface components {
             network: "testnet" | "mainnet";
             twap: number | string;
             windowMinutes: number;
-            sampleIntervalSeconds: number;
+            /** @description Requested fixed sampling interval in seconds, or null when using continuous event-time weighting. */
+            sampleIntervalSeconds: number | null;
             /** Format: date-time */
             startTime: string;
             /** Format: date-time */
@@ -3137,7 +3138,7 @@ export interface operations {
             query?: {
                 /** @description Lookback window in minutes. */
                 window?: number;
-                /** @description Sampling grid width in seconds. */
+                /** @description Optional fixed sampling grid width in seconds (omit for continuous event-time weighting). */
                 sampleInterval?: number;
                 method?: "iqr" | "modified_zscore";
                 /** @description Max age in seconds before the price is marked stale (overrides default staleness bound). */

@@ -44,20 +44,26 @@ export function median(arr: number[]): number {
 
 // ─── TWAP Computation ─────────────────────────────────────────────────────────
 
+/** How far before the TWAP window start to look back for the prior price already in force. */
+export const TWAP_CARRY_IN_LOOKBACK_MINUTES = 24 * 60
+const TWAP_CARRY_IN_LOOKBACK_MS = TWAP_CARRY_IN_LOOKBACK_MINUTES * 60_000
+
 /**
- * Compute Time-Weighted Average Price over a configurable window.
+ * Compute Time-Weighted Average Price over a configurable window [now - windowMinutes, now).
  * Uses IQR outlier rejection by default.
  *
- * TWAP = Σ(price_i * Δt_i) / Σ(Δt_i)  where Δt_i is the time to the next sample.
+ * Default (continuous) mode integrates step-function prices in a single O(n) pass over the rows:
+ * each price is weighted by the exact duration (ms) it stayed in force from its timestamp (or
+ * `windowStart` for the carried-in prior price) until the next observation or `windowEnd`.
  *
- * Price points are fetched from the price_points table at a regular sample
- * interval. If no trades occur within a sub-interval, the last known price
- * is carried forward (prevents stale gap manipulation).
+ * When `options.sampleIntervalSeconds` is explicitly provided, uses fixed-width discrete step
+ * resampling over `[windowStart, windowEnd)` in a single forward pass with the carried-in price.
  */
 export async function computeTWAP(
   pairKey: string,
   windowMinutes: number,
   options?: {
+    /** Optional fixed sampling grid width in seconds; omit for continuous event-time weighting. */
     sampleIntervalSeconds?: number
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
@@ -65,7 +71,7 @@ export async function computeTWAP(
     staleThresholdSeconds?: number
   }
 ): Promise<TWAPResult> {
-  const sampleIntervalSeconds = options?.sampleIntervalSeconds ?? 60
+  const sampleIntervalSeconds = options?.sampleIntervalSeconds
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
   const isString = options?.decimalFormat === 'string'
@@ -73,23 +79,50 @@ export async function computeTWAP(
     ?? (config as any).pricing?.staleThresholdSeconds
     ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
-  // Fetch price points within the window for the specific network, ordered by observed_at
+  const windowEndMs = Date.now()
+  const windowStartMs = windowEndMs - windowMinutes * 60_000
+  const startTime = new Date(windowStartMs)
+  const endTime = new Date(windowEndMs)
+
+  // Fetch up to 1 prior carry-in observation within TWAP_CARRY_IN_LOOKBACK_MINUTES before
+  // window_start, plus all half-open in-window observations [window_start, window_end).
   const result = await pgPool.query(
-    `SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
-     FROM price_points
-     WHERE pair_key = $1
-       AND network = $3
-       AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
-     ORDER BY COALESCE(observed_at, timestamp) ASC`,
-    [pairKey, windowMinutes, network]
+    `WITH bounds AS (
+       SELECT NOW() - ($2 || ' minutes')::interval AS window_start,
+              NOW() AS window_end
+     ),
+     carry_in AS (
+       SELECT p.price::numeric as price, p.timestamp, COALESCE(p.observed_at, p.timestamp) as observed_at
+       FROM price_points p, bounds b
+       WHERE p.pair_key = $1
+         AND p.network = $3
+         AND COALESCE(p.observed_at, p.timestamp) >= b.window_start - ($4 || ' minutes')::interval
+         AND COALESCE(p.observed_at, p.timestamp) < b.window_start
+       ORDER BY COALESCE(p.observed_at, p.timestamp) DESC
+       LIMIT 1
+     ),
+     in_window AS (
+       SELECT p.price::numeric as price, p.timestamp, COALESCE(p.observed_at, p.timestamp) as observed_at
+       FROM price_points p, bounds b
+       WHERE p.pair_key = $1
+         AND p.network = $3
+         AND COALESCE(p.observed_at, p.timestamp) >= b.window_start
+         AND COALESCE(p.observed_at, p.timestamp) < b.window_end
+       ORDER BY COALESCE(p.observed_at, p.timestamp) ASC
+     )
+     SELECT price::numeric as price, timestamp, observed_at FROM carry_in
+     UNION ALL
+     SELECT price::numeric as price, timestamp, observed_at FROM in_window
+     ORDER BY observed_at ASC`,
+    [pairKey, windowMinutes, network, TWAP_CARRY_IN_LOOKBACK_MINUTES]
   )
 
   const rows = result.rows
   if (rows.length === 0) {
     return {
       twap: isString ? '0' : 0,
-      startTime: new Date(Date.now() - windowMinutes * 60_000),
-      endTime: new Date(),
+      startTime,
+      endTime,
       sampleCount: 0,
       outlierRejected: 0,
       filterMethod: outlierMethod,
@@ -105,7 +138,7 @@ export async function computeTWAP(
   const newestTimestamp = new Date(newestRow.observed_at ?? newestRow.timestamp)
   const newestInputObservedAt = newestTimestamp.toISOString()
   const inputCount = rows.length
-  const lastTradeAgeSeconds = Math.floor((Date.now() - newestTimestamp.getTime()) / 1000)
+  const lastTradeAgeSeconds = Math.floor((windowEndMs - newestTimestamp.getTime()) / 1000)
   const stale = lastTradeAgeSeconds >= staleThreshold
 
   // Extract raw prices for outlier rejection
@@ -131,13 +164,10 @@ export async function computeTWAP(
     .map(({ ts, price }: any) => ({ ts, price }))
     .sort((a: any, b: any) => a.ts - b.ts)
 
-  const firstPointTime = rows[0].observed_at ?? rows[0].timestamp
-  const lastPointTime = rows[rows.length - 1].observed_at ?? rows[rows.length - 1].timestamp
-
   if (validPoints.length === 0) {
     return {
-      startTime: firstPointTime,
-      endTime: lastPointTime,
+      startTime,
+      endTime,
       twap: isString ? '0' : 0,
       sampleCount: rawPrices.length,
       outlierRejected: rejected,
@@ -150,59 +180,82 @@ export async function computeTWAP(
     }
   }
 
-  // Build equi-spaced time grid and interpolate price at each sample point
-  const startTime = new Date(firstPointTime).getTime()
-  const endTime = new Date(lastPointTime).getTime()
-  const totalDurationMs = endTime - startTime
+  const carryInFloorMs = windowStartMs - TWAP_CARRY_IN_LOOKBACK_MS
+  let twap = 0
 
-  if (totalDurationMs <= 0) {
-    // Single data point — use its price
-    return {
-      startTime: firstPointTime,
-      endTime: lastPointTime,
-      twap: isString ? String(rows[0].price) : validPoints[0].price,
-      sampleCount: rawPrices.length,
-      outlierRejected: rejected,
-      filterMethod: outlierMethod,
-      network,
-      newestInputObservedAt,
-      inputCount,
-      stalenessThresholdSeconds: staleThreshold,
-      stale,
+  if (sampleIntervalSeconds !== undefined) {
+    // Explicit discrete sub-sampling mode over [windowStartMs, windowEndMs) in one forward pass.
+    const sampleIntervalMs = sampleIntervalSeconds * 1000
+    let weightedSum = 0
+    let totalWeightMs = 0
+    let activePrice: number | null = null
+    let ptr = 0
+
+    while (ptr < validPoints.length && validPoints[ptr].ts <= windowStartMs) {
+      if (validPoints[ptr].ts >= carryInFloorMs) {
+        activePrice = validPoints[ptr].price
+      }
+      ptr++
     }
-  }
 
-  const sampleIntervalMs = sampleIntervalSeconds * 1000
-  const sampleCount = Math.max(1, Math.floor(totalDurationMs / sampleIntervalMs))
-  const interpolatedPrices: { price: number; weight: number }[] = []
-
-  for (let i = 0; i <= sampleCount; i++) {
-    const sampleTs = startTime + i * sampleIntervalMs
-    if (sampleTs > endTime) break
-
-    // Find the closest price at or before this sample time (last observation carry forward)
-    let interpolatedPrice = validPoints[0].price
-    for (let j = 0; j < validPoints.length; j++) {
-      if (validPoints[j].ts <= sampleTs) {
-        interpolatedPrice = validPoints[j].price
-      } else {
-        break
+    for (let sampleTs = windowStartMs; sampleTs < windowEndMs; sampleTs += sampleIntervalMs) {
+      while (ptr < validPoints.length && validPoints[ptr].ts <= sampleTs) {
+        activePrice = validPoints[ptr].price
+        ptr++
+      }
+      const nextTs = Math.min(sampleTs + sampleIntervalMs, windowEndMs)
+      if (activePrice !== null) {
+        const dt = nextTs - sampleTs
+        weightedSum += activePrice * dt
+        totalWeightMs += dt
       }
     }
 
-    // Weight: time to next sample or to end
-    const nextSampleTs = Math.min(startTime + (i + 1) * sampleIntervalMs, endTime)
-    const weight = (nextSampleTs - sampleTs) / totalDurationMs
-    interpolatedPrices.push({ price: interpolatedPrice, weight })
-  }
+    twap = totalWeightMs > 0 ? weightedSum / totalWeightMs : 0
+  } else {
+    // Continuous step-function integration in one pass over the rows.
+    let weightedSum = 0
+    let totalWeightMs = 0
+    let currentPrice: number | null = null
+    let currentTs = windowStartMs
 
-  // Compute TWAP as weighted average
-  const twap = interpolatedPrices.reduce((sum, p) => sum + p.price * p.weight, 0)
+    for (let i = 0; i < validPoints.length; i++) {
+      const pt = validPoints[i]
+      if (pt.ts >= windowEndMs) break
+      if (pt.ts < carryInFloorMs) continue
+
+      if (pt.ts <= windowStartMs) {
+        currentPrice = pt.price
+        currentTs = windowStartMs
+        continue
+      }
+
+      if (currentPrice !== null) {
+        const dt = pt.ts - currentTs
+        if (dt > 0) {
+          weightedSum += currentPrice * dt
+          totalWeightMs += dt
+        }
+      }
+      currentPrice = pt.price
+      currentTs = pt.ts
+    }
+
+    if (currentPrice !== null) {
+      const tailDt = windowEndMs - currentTs
+      if (tailDt > 0) {
+        weightedSum += currentPrice * tailDt
+        totalWeightMs += tailDt
+      }
+    }
+
+    twap = totalWeightMs > 0 ? weightedSum / totalWeightMs : 0
+  }
 
   return {
     twap: isString ? String(twap) : twap,
-    startTime: new Date(startTime),
-    endTime: new Date(endTime),
+    startTime,
+    endTime,
     sampleCount: rawPrices.length,
     outlierRejected: rejected,
     filterMethod: outlierMethod,

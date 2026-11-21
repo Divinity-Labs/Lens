@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const { mockQuery } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
@@ -8,11 +8,19 @@ vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
 
-import { computeTWAP, computeVWAP } from '../pricing/twap'
+import {
+  computeTWAP,
+  computeVWAP,
+  TWAP_CARRY_IN_LOOKBACK_MINUTES,
+} from '../pricing/twap'
 
 describe('TWAP Computation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('returns zero TWAP when no price points exist', async () => {
@@ -70,8 +78,10 @@ describe('TWAP Computation', () => {
   })
 
   it('keeps timestamps aligned when rejecting an interior outlier', async () => {
+    vi.useFakeTimers()
     const start = new Date('2026-01-01T00:00:00.000Z')
     const oneMinMs = 60_000
+    vi.setSystemTime(new Date(start.getTime() + 10 * oneMinMs))
     mockQuery.mockResolvedValue({
       rows: [
         { price: '10', timestamp: new Date(start.getTime()) },
@@ -91,14 +101,16 @@ describe('TWAP Computation', () => {
     expect(result.outlierRejected).toBe(1)
     expect(result.sampleCount).toBe(6)
     // The rejected t+3m spike must not shift the t+4m price back to t+3m.
-    // Hand-computed TWAP over the five one-minute intervals:
-    // (10 + 10 + 10 + 10 + 20) / 5 = 12.
-    expect(result.twap).toBe(12)
+    // Over [00:00, 00:10), 10 holds for minutes 0..3 (4 min) and 20 holds for minutes 4..9 (6 min):
+    // (10 * 4 + 20 * 6) / 10 = 16.
+    expect(result.twap).toBe(16)
   })
 
   it('rejects non-finite prices without corrupting TWAP', async () => {
+    vi.useFakeTimers()
     const start = new Date('2026-01-01T00:00:00.000Z')
     const oneMinMs = 60_000
+    vi.setSystemTime(new Date(start.getTime() + 10 * oneMinMs))
     mockQuery.mockResolvedValue({
       rows: [
         { price: '10', timestamp: new Date(start.getTime()) },
@@ -340,5 +352,76 @@ describe('VWAP Computation', () => {
     expect(vwapResult.outlierRejected).toBeGreaterThanOrEqual(1)
     expect(vwapResult.vwap).toBeGreaterThan(90)
     expect(vwapResult.vwap).toBeLessThan(120)
+  })
+})
+
+describe('TWAP continuous window weighting & carry-in (#650)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('weights two rows at minute 1 and minute 5 across the full 60m tail and returns real window bounds', async () => {
+    vi.useFakeTimers()
+    const windowStart = new Date('2026-01-01T00:00:00.000Z')
+    const windowEnd = new Date('2026-01-01T01:00:00.000Z')
+    vi.setSystemTime(windowEnd)
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        { price: '10', timestamp: new Date(windowStart.getTime() + 1 * 60_000) },
+        { price: '20', timestamp: new Date(windowStart.getTime() + 5 * 60_000) },
+      ],
+    })
+
+    const result = await computeTWAP('XLM/USDC', 60)
+    expect(result.startTime).toEqual(windowStart)
+    expect(result.endTime).toEqual(windowEnd)
+    // Minute 1..5 (4m) at 10 + minute 5..60 (55m) at 20 = (40 + 1100) / 59
+    expect(result.twap).toBeCloseTo((10 * 4 + 20 * 55) / 59, 12)
+  })
+
+  it('carries in the last price before windowStart (within lookback limit) so the full 60m window is covered', async () => {
+    vi.useFakeTimers()
+    const windowStart = new Date('2026-01-01T00:00:00.000Z')
+    const windowEnd = new Date('2026-01-01T01:00:00.000Z')
+    vi.setSystemTime(windowEnd)
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        { price: '8', timestamp: new Date(windowStart.getTime() - 5 * 60_000) },
+        { price: '10', timestamp: new Date(windowStart.getTime() + 1 * 60_000) },
+        { price: '20', timestamp: new Date(windowStart.getTime() + 5 * 60_000) },
+      ],
+    })
+
+    const result = await computeTWAP('XLM/USDC', 60)
+    // [0..1) = 8 (1m), [1..5) = 10 (4m), [5..60) = 20 (55m) -> (8 + 40 + 1100) / 60 = 1148 / 60
+    expect(result.twap).toBeCloseTo(1148 / 60, 12)
+    expect(mockQuery.mock.calls[0][1][3]).toBe(TWAP_CARRY_IN_LOOKBACK_MINUTES)
+    expect(mockQuery.mock.calls[0][0]).toMatch(/>=\s*b\.window_start/)
+    expect(mockQuery.mock.calls[0][0]).toMatch(/<\s*b\.window_end/)
+  })
+
+  it('weights sub-minute price moves by the exact seconds each price held', async () => {
+    vi.useFakeTimers()
+    const windowStart = new Date('2026-01-01T00:00:00.000Z')
+    const windowEnd = new Date('2026-01-01T00:01:00.000Z')
+    vi.setSystemTime(windowEnd)
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        { price: '10', timestamp: windowStart },
+        { price: '20', timestamp: new Date(windowStart.getTime() + 10_000) },
+        { price: '10', timestamp: new Date(windowStart.getTime() + 40_000) },
+      ],
+    })
+
+    const result = await computeTWAP('XLM/USDC', 1)
+    // 10s * 10 + 30s * 20 + 20s * 10 = 900 / 60 = 15
+    expect(result.twap).toBeCloseTo(15, 12)
   })
 })
