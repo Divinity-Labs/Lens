@@ -7,6 +7,7 @@ import {
   recordPoolExhaustion,
   updatePoolMetrics,
   pgPool,
+  checkDatabaseReachable,
 } from '../src/db'
 import {
   register,
@@ -151,5 +152,48 @@ describe('Database Connection Pool (Issue #339)', () => {
 
       await app.close()
     })
+  })
+})
+
+describe('checkDatabaseReachable (Issue #687)', () => {
+  function fakePool(opts: { connectError?: Error; queryError?: Error } = {}) {
+    const state = { checkedOut: 0, queries: [] as string[] }
+    const pool = {
+      connect: vi.fn(async () => {
+        if (opts.connectError) throw opts.connectError
+        state.checkedOut++
+        return {
+          query: vi.fn(async (sql: string) => {
+            state.queries.push(sql)
+            if (opts.queryError) throw opts.queryError
+            return { rows: [{ '?column?': 1 }] }
+          }),
+          release: vi.fn(() => {
+            state.checkedOut--
+          }),
+        }
+      }),
+    }
+    return { pool: pool as any, state }
+  }
+
+  it('leaves no client checked out after the start-up check', async () => {
+    const { pool, state } = fakePool()
+    await checkDatabaseReachable(pool)
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+    expect(state.queries).toEqual(['SELECT 1'])
+    expect(state.checkedOut).toBe(0)
+  })
+
+  it('releases the client even when the probe query fails', async () => {
+    const { pool, state } = fakePool({ queryError: new Error('boom') })
+    await expect(checkDatabaseReachable(pool)).rejects.toThrow('boom')
+    expect(state.checkedOut).toBe(0)
+  })
+
+  it('rejects when the database is unreachable so start-up stops', async () => {
+    const { pool, state } = fakePool({ connectError: new Error('ECONNREFUSED') })
+    await expect(checkDatabaseReachable(pool)).rejects.toThrow('ECONNREFUSED')
+    expect(state.checkedOut).toBe(0)
   })
 })
