@@ -123,10 +123,13 @@ const MAX_HISTORY: u32 = 64;
 /// Venue names accepted in one report. Well above the number of venues Lens
 /// aggregates today, and low enough to keep a report's storage small.
 const MAX_VENUES: u32 = 16;
-/// Persistent-entry TTL policy: extend when an entry is within `THRESHOLD`
-/// ledgers of expiry, by `BUMP` ledgers (roughly 4 days at ~5 s per ledger).
+/// Feed storage TTL policy. Five thousand ledgers is about 6.9 hours at the
+/// five-second ledger target, while 200,000 ledgers is about 11.6 days
+/// (200,000 * 5 seconds / 86,400). The bump is deliberately much longer than
+/// the publisher's 15-minute maximum write interval, while still requiring a
+/// later report to renew an otherwise idle feed.
 const TTL_THRESHOLD: u32 = 5_000;
-const TTL_BUMP: u32 = 40_000;
+const TTL_BUMP: u32 = 200_000;
 
 #[contract]
 pub struct Sep40OracleContract;
@@ -259,6 +262,9 @@ impl Sep40OracleContract {
         storage.extend_ttl(&history_key, TTL_THRESHOLD, TTL_BUMP);
         storage.extend_ttl(&last_key, TTL_THRESHOLD, TTL_BUMP);
         storage.extend_ttl(&report_key, TTL_THRESHOLD, TTL_BUMP);
+        // Keep the feed configuration alive while the publisher is active.
+        // An initialize-time extension alone cannot protect an idle instance.
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
 
         // Enumerate this asset from `assets()` from now on.
         let mut assets: Vec<Asset> = env

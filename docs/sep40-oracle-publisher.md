@@ -142,10 +142,14 @@ the publisher and not the transaction's signer.
 
 Per asset: `Last` (one `PriceData`), `LastReport` (one `Report`) and `History`
 (newest-first, trimmed to `MAX_HISTORY = 64` records). The asset registry is one
-instance entry. Persistent entries extend their TTL on read and write
-(`TTL_THRESHOLD = 5_000`, `TTL_BUMP = 40_000` ledgers), and instance storage is
-extended at `initialize`, so an idle feed does not expire out from under its
-consumers.
+instance entry. Writes extend the three persistent entries and the instance
+storage (`TTL_THRESHOLD = 5_000`, `TTL_BUMP = 200_000` ledgers). At the
+five-second ledger target, that threshold is about 6.9 hours and the bump is
+about 11.6 days (`200,000 * 5 / 86,400`). `read_last` extends `Last` when it
+reads it; `price`, `prices` and `last_report` do not extend their entries.
+Operators should keep publishing within the configured 15-minute maximum
+interval and repair an archived entry by rebuilding the feed or running the
+contract's deployment recovery procedure; a read cannot revive archived data.
 
 ---
 
