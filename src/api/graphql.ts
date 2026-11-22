@@ -15,7 +15,7 @@ import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork, type NetworkName } from '../config'
+import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../config'
 import { parseAssetStr, getActivePairs } from '../pairsRegistry'
 import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
@@ -35,7 +35,10 @@ import { isAggregatorVenue } from '../ingest/venues'
 import { computeSpreads, SpreadsInputError } from '../routes/spreads'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
-import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
+import { getMaxGraphQLQueryDepth, queryDepthValidationRules, costlyRootFieldValidationRules } from './queryDepth'
+import { findPair as resolveWatchedPair } from './pairLookup'
+import { getDepth, getImpact } from '../pricing/depth'
+import { computeBook, parseBookQuery, BookInputError } from '../routes/book'
 import { formatPrice, formatVolume } from '../pricing/precision'
 
 const WINDOW_SECONDS: Record<string, number> = {
@@ -361,6 +364,143 @@ export const schema = `
     tightest: VenueQuote
   }
 
+  """One price level of a depth answer: quote units per base unit."""
+  type DepthLevel {
+    price: Float!
+    size: Float!
+  }
+
+  """A pool that could not be used to price a trade, and why."""
+  type ExcludedPool {
+    poolId: String!
+    reason: String!
+  }
+
+  """The pool a depth answer was priced from, and when its inputs were read."""
+  type DepthPool {
+    poolId: String!
+    feeBp: Int!
+    feeReadAt: String!
+    reservesObservedAt: String!
+  }
+
+  """
+  What a trade of a given size would cost on the AMM.
+
+  status discriminates two arms, mirroring REST GET /price/:assetA/:assetB/depth
+  and the two arms of DepthOutcome. When it is "unavailable", every numeric
+  field is null and reason plus excludedPools say why. There is no zeroed
+  fallback: a genuine price of zero and "no pool could price this" are
+  different answers, and reporting the second as the first is the bug #219 is
+  about.
+
+  A priced answer carries asks and bids around the pool mid, the pool it was
+  priced from, and the pools that were excluded with their reasons.
+  """
+  type DepthResult {
+    status: String!
+    network: String!
+    pairKey: String!
+    assetA: String!
+    assetB: String!
+    spotPrice: Float
+    executionPrice: Float
+    slippagePct: Float
+    """Levels around the mid. Null on an unavailable answer, which has no levels."""
+    asks: [DepthLevel!]
+    bids: [DepthLevel!]
+    source: String
+    pool: DepthPool
+    reason: String
+    excludedPools: [ExcludedPool!]!
+  }
+
+  """One rung of the price-impact ladder."""
+  type ImpactPoint {
+    size: Float!
+    output: Float!
+    executionPrice: Float!
+    slippagePct: Float!
+  }
+
+  """The size at which a slippage threshold is crossed."""
+  type ImpactThreshold {
+    thresholdPct: Float!
+    crossed: Boolean!
+    """Input size at which this threshold is crossed; null when it never is."""
+    size: Float
+  }
+
+  """
+  Price impact for a pair: the same figures as REST GET /impact/:assetA/:assetB.
+
+  status is "ok" when the pool can absorb at least the smallest standard trade
+  size, and "insufficient_liquidity" otherwise. In that second arm the ladder is
+  empty and no threshold is crossed; no point is fabricated.
+  """
+  type ImpactResult {
+    status: String!
+    assetA: String!
+    assetB: String!
+    pairKey: String!
+    network: String!
+    spotPrice: Float!
+    availableLiquidity: Float!
+    smallestSize: Float!
+    ladder: [ImpactPoint!]!
+    thresholds: [ImpactThreshold!]!
+    source: String!
+  }
+
+  """One aggregated price level of the merged order book."""
+  type BookLevel {
+    price: Float!
+    size: Float!
+    cumulativeSize: Float!
+    venues: [String!]!
+    synthetic: Boolean!
+    sampleCount: Int!
+  }
+
+  """One venue's contribution to the order book, and its freshness."""
+  type BookSource {
+    venue: String!
+    """available, no_liquidity or unavailable."""
+    status: String!
+    sampleCount: Int!
+    observedAt: String
+    dataAgeSeconds: Float
+    truncated: Boolean!
+  }
+
+  """
+  The SDEX order book merged with synthetic AMM levels: the same body as REST
+  GET /book/:assetA/:assetB, produced by the same function. The REST payload's
+  provenance object is flattened here (sampledAt, sampleCount, venues) so the
+  query stays within the schema's depth limit.
+
+  status is one of ok, partial, no_liquidity, no_levels_in_range or unavailable.
+  """
+  type OrderBook {
+    assetA: String!
+    assetB: String!
+    pairKey: String!
+    network: String!
+    spotPrice: Float
+    spotSource: String
+    depth: Float!
+    step: Float!
+    status: String!
+    asks: [BookLevel!]!
+    bids: [BookLevel!]!
+    """When the book was assembled (REST provenance.sampledAt)."""
+    sampledAt: String!
+    """Rows read across both venues (REST provenance.sampleCount)."""
+    sampleCount: Int!
+    """Per-venue freshness (REST provenance.venues)."""
+    venues: [BookSource!]!
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -432,6 +572,53 @@ export const schema = `
     network; any other value fails with INVALID_INPUT, as REST answers 400.
     """
     spreads(asset: String!, window: String, network: String): SpreadReport!
+    """
+    What a trade of amount would cost on the AMM, at the same figures as REST
+    GET /price/:assetA/:assetB/depth. Shares getDepth with the REST route, so
+    the two cannot drift.
+
+    network (testnet or mainnet) defaults to the active network; any other
+    value fails with INVALID_INPUT. An unknown pair fails with PAIR_NOT_FOUND
+    and a non-positive amount with INVALID_INPUT, as REST answers 404 and 400.
+    A watched pair that no pool can price is not an error: it resolves with
+    status "unavailable", a reason and the excluded pools, and null numbers.
+    """
+    depth(assetA: String!, assetB: String!, amount: Float! = 1000, network: String): DepthResult!
+    """
+    Price impact ladder and the sizes at which each slippage threshold is
+    crossed, at the same figures as REST GET /impact/:assetA/:assetB. Shares
+    getImpact with the REST route.
+
+    thresholds are percentages and default to [1, 5, 10]; liquidityFraction is
+    the share of the reserve the ladder may use and must be in (0, 1],
+    defaulting to 0.5. A non-empty list of positive thresholds is required.
+    Violations fail with INVALID_INPUT. A pair with no AMM pool fails with
+    PAIR_NOT_FOUND, which is where REST answers 404 unknown_pair.
+    """
+    impact(
+      assetA: String!
+      assetB: String!
+      thresholds: [Float!]
+      liquidityFraction: Float = 0.5
+      network: String
+    ): ImpactResult!
+    """
+    The SDEX order book merged with synthetic AMM levels, at the same figures
+    as REST GET /book/:assetA/:assetB. Both surfaces call computeBook.
+
+    depth is a fractional distance from spot and must be in [0, 0.5]; step is
+    the reserve fraction per synthetic rung and must be in [0.001, 0.1]. Both
+    default to the REST defaults (0.1 and 0.01) and are validated identically,
+    failing with INVALID_INPUT where REST answers 400. An unreachable venue is
+    reported in status and venues rather than as an empty book.
+    """
+    book(
+      assetA: String!
+      assetB: String!
+      depth: Float = 0.1
+      step: Float = 0.01
+      network: String
+    ): OrderBook!
   }
 
   type Subscription {
@@ -484,6 +671,37 @@ function asInvalidInput(err: unknown): never {
 }
 
 /**
+ * Resolves the optional network argument of a trade-cost query.
+ *
+ * Null means "the active network". Anything other than testnet/mainnet fails
+ * with INVALID_INPUT, the same refusal REST gives with its 400 bad_network.
+ */
+function requireNetwork(network: string | null | undefined): NetworkName {
+  if (network === undefined || network === null) return activeNetwork
+  if (network !== 'testnet' && network !== 'mainnet') {
+    throw new ErrorWithProps('network must be one of: testnet, mainnet', {
+      code: 'INVALID_INPUT',
+      field: 'network',
+    })
+  }
+  return network
+}
+
+/**
+ * Resolves a pair by the REST routes' issuer-aware rule (src/api/pairLookup.ts),
+ * failing with PAIR_NOT_FOUND where the REST routes answer 404 unwatched_pair.
+ */
+function requireWatchedPair(assetA: string, assetB: string, network: NetworkName) {
+  const pair = resolveWatchedPair(assetA, assetB, network)
+  if (!pair) {
+    throw new ErrorWithProps(`Pair ${assetA}/${assetB} not watched on ${network}`, {
+      code: 'PAIR_NOT_FOUND',
+    })
+  }
+  return pair
+}
+
+/**
  * Required scope for each GraphQL operation field, matching its REST equivalent route (#618).
  * Every query, mutation and subscription field declares the scope it needs.
  */
@@ -497,6 +715,10 @@ export const FIELD_SCOPES: Record<string, string> = {
   screener: 'read:prices',
   volumes: 'read:prices',
   spreads: 'read:prices',
+  // The trade-cost queries share their REST routes' read:prices scope.
+  depth: 'read:prices',
+  impact: 'read:prices',
+  book: 'read:prices',
   priceUpdated: 'subscribe',
 }
 
@@ -903,6 +1125,145 @@ export const resolvers = {
       return computeSpreads(asset, window ?? undefined, network ?? undefined)
         .catch(asInvalidInput)
     }),
+
+    depth: withScope('read:prices', async function (
+      _: unknown,
+      { assetA, assetB, amount, network }: {
+        assetA: string
+        assetB: string
+        amount?: number | null
+        network?: string | null
+      }
+    ) {
+      const resolvedNetwork = requireNetwork(network)
+      const pair = requireWatchedPair(assetA, assetB, resolvedNetwork)
+      // Number(), not parseFloat(): REST rejects trailing junk instead of
+      // silently pricing a different trade than the caller asked for.
+      const size = Number(amount ?? 1000)
+      if (!Number.isFinite(size) || size <= 0) {
+        throw new ErrorWithProps('amount must be a positive number', {
+          code: 'INVALID_INPUT',
+          field: 'amount',
+        })
+      }
+
+      // Argument order is (network, pairKey, amount, feeOpts). network and
+      // pairKey are both strings, so swapping the first two compiles cleanly
+      // and then prices against a network named "XLM/USDC" — see the warning
+      // above the REST route's identical call.
+      const depthResult = await getDepth(resolvedNetwork, pair.pairKey, size, {
+        horizonUrl: getNetworkConfig(resolvedNetwork).horizon.url,
+      })
+
+      // The REST route adds the pair's asset codes around the same union, so
+      // the two surfaces return the same fields.
+      return {
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        ...depthResult,
+      }
+    }),
+
+    impact: withScope('read:prices', async function (
+      _: unknown,
+      {
+        assetA,
+        assetB,
+        thresholds,
+        liquidityFraction,
+        network,
+      }: {
+        assetA: string
+        assetB: string
+        thresholds?: number[] | null
+        liquidityFraction?: number | null
+        network?: string | null
+      }
+    ) {
+      const resolvedNetwork = requireNetwork(network)
+      const pair = requireWatchedPair(assetA, assetB, resolvedNetwork)
+
+      // The REST route's validation, in the same order: pair, thresholds and
+      // liquidity fraction, then the AMM read.
+      const thresholdList = thresholds ?? [1, 5, 10]
+      const fraction = liquidityFraction ?? 0.5
+      if (
+        thresholdList.length === 0 ||
+        thresholdList.some(value => !Number.isFinite(value) || value <= 0)
+      ) {
+        throw new ErrorWithProps('thresholds must be positive numbers', {
+          code: 'INVALID_INPUT',
+          field: 'thresholds',
+        })
+      }
+      if (!Number.isFinite(fraction) || fraction <= 0 || fraction > 1) {
+        throw new ErrorWithProps('liquidityFraction must be between 0 and 1', {
+          code: 'INVALID_INPUT',
+          field: 'liquidityFraction',
+        })
+      }
+
+      const impact = await getImpact(
+        pair.pairKey,
+        { thresholds: thresholdList, liquidityFraction: fraction },
+        resolvedNetwork,
+      )
+      // REST answers 404 unknown_pair here; PAIR_NOT_FOUND is the GraphQL code
+      // for "this pair has no data on this surface".
+      if (!impact) {
+        throw new ErrorWithProps(`No AMM liquidity available for ${assetA}/${assetB}`, {
+          code: 'PAIR_NOT_FOUND',
+        })
+      }
+      return {
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        pairKey: pair.pairKey,
+        network: resolvedNetwork,
+        ...impact,
+      }
+    }),
+
+    book: withScope('read:prices', async function (
+      _: unknown,
+      { assetA, assetB, depth, step, network }: {
+        assetA: string
+        assetB: string
+        depth?: number | null
+        step?: number | null
+        network?: string | null
+      }
+    ) {
+      try {
+        // The REST route's own validation and computation: one implementation,
+        // two transports.
+        const query = parseBookQuery({ depth, step, network })
+        const { book } = await computeBook({
+          assetA,
+          assetB,
+          depth: query.depth,
+          step: query.step,
+          network: query.network ?? activeNetwork,
+        })
+        // Rest's provenance object is flattened into the OrderBook type so the
+        // deepest application selection stays within the query-depth limit.
+        const { provenance, ...rest } = book
+        return {
+          ...rest,
+          sampledAt: provenance.sampledAt,
+          sampleCount: provenance.sampleCount,
+          venues: provenance.venues,
+        }
+      } catch (error) {
+        if (error instanceof BookInputError) {
+          throw new ErrorWithProps(error.message, {
+            code: 'INVALID_INPUT',
+            field: error.field,
+          })
+        }
+        throw error
+      }
+    }),
   },
 
   Subscription: {
@@ -972,7 +1333,12 @@ export async function registerGraphQL(app: FastifyInstance) {
     // be used with Mercurius's document cache, so disable that cache rather
     // than weakening the operation-aware validation policy.
     cache: false,
-    validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
+    validationRules: ({ operationName }) => [
+      ...queryDepthValidationRules(maxQueryDepth, operationName),
+      // Aliases do not add depth, so the trade-cost queries need their own
+      // bound on how many times one document may select them.
+      ...costlyRootFieldValidationRules(operationName),
+    ],
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {

@@ -17,6 +17,7 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
    - [`listPairs`](#4-listpairs)
    - [`screener`](#5-screener)
    - [`volumes` and `spreads`](#6-volumes-and-spreads)
+   - [`depth`, `impact` and `book`](#7-depth-impact-and-book)
 6. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
@@ -54,6 +55,9 @@ GraphQL operations on Lens enforce the same fine-grained per-route scopes requir
 | `screener` | `Query` | `read:prices` | `GET /screener` |
 | `volumes` | `Query` | `read:prices` | `GET /volumes/:asset` |
 | `spreads` | `Query` | `read:prices` | `GET /spreads/:asset` |
+| `depth` | `Query` | `read:prices` | `GET /price/:assetA/:assetB/depth` |
+| `impact` | `Query` | `read:prices` | `GET /impact/:assetA/:assetB` |
+| `book` | `Query` | `read:prices` | `GET /book/:assetA/:assetB` |
 | `priceUpdated` | `Subscription` | `subscribe` | WebSocket `/ws/prices` |
 
 ### Multi-Field Queries & Scope Union
@@ -118,7 +122,30 @@ Pure `__schema` and `__type` operations are exempt to preserve GraphiQL's
 standard introspection query. This exemption is deliberately root-scoped: a
 mixed operation still has every application-field path measured, so adding an
 introspection field cannot bypass the limit. Revisit the default when adding a
-legitimate application relationship deeper than three fields.
+legitimate application relationship deeper than three fields. The trade-cost
+queries (`depth`, `impact`, `book`) are shaped to stay within it: the book's
+per-venue provenance is flattened onto `OrderBook` rather than nested one level
+deeper.
+
+### Costly-field (alias) limit
+
+Depth is not cost. Aliases let one document name the same field many times
+without adding depth, so a query such as `a: book(...) b: book(...) ...` could
+otherwise trigger hundreds of Horizon and Postgres round-trips in one request.
+A document may select at most **5** of the costly trade-cost fields (`depth`,
+`impact`, `book`) in total, counting aliases and fields reached through inline
+fragments and fragment spreads. A larger document is rejected before any
+resolver runs:
+
+```json
+{
+  "errors": [
+    {
+      "message": "Query selects 6 expensive trade-cost fields (depth, impact, book), which exceeds the maximum of 5 per request. Split it into several requests."
+    }
+  ]
+}
+```
 
 ---
 
@@ -138,6 +165,9 @@ type Query {
   screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
   volumes(asset: String!, window: String, network: String): VolumeReport!
   spreads(asset: String!, window: String, network: String): SpreadReport!
+  depth(assetA: String!, assetB: String!, amount: Float! = 1000, network: String): DepthResult!
+  impact(assetA: String!, assetB: String!, thresholds: [Float!], liquidityFraction: Float = 0.5, network: String): ImpactResult!
+  book(assetA: String!, assetB: String!, depth: Float = 0.1, step: Float = 0.01, network: String): OrderBook!
 }
 
 type Subscription {
@@ -578,6 +608,117 @@ curl -s -X POST http://localhost:3002/graphql \
 
 ---
 
+### 7. `depth`, `impact` and `book`
+
+GraphQL counterparts of the three REST routes that answer what a trade of a
+given size would cost. Each resolver calls the REST route's own implementation
+(`getDepth` and `getImpact` in `src/pricing/depth.ts`, `computeBook` in
+`src/routes/book.ts`), so the figures cannot drift between the two surfaces.
+
+| Argument | `depth` | `impact` | `book` |
+|---|---|---|---|
+| `assetA`, `assetB` | required | required | required |
+| `amount` | base-asset size, default `1000`, must be > 0 | — | — |
+| `thresholds` | — | slippage percentages, default `[1, 5, 10]`, all > 0 | — |
+| `liquidityFraction` | — | share of the reserve the ladder may use, default `0.5`, in `(0, 1]` | — |
+| `depth`, `step` | — | — | price distance from spot (`0`–`0.5`, default `0.1`) and reserve fraction per synthetic rung (`0.001`–`0.1`, default `0.01`) |
+| `network` | `testnet` / `mainnet`, defaults to the active network | same | same |
+
+#### `depth`
+
+Prices a swap of `amount` against the pair's deepest AMM pool, returning the
+mid, execution price, slippage, the levels around the mid and the pool the price
+came from.
+
+An unpriceable pair is **not** an error and is **not** zeroed. It resolves with
+`status: "unavailable"`, a human-readable `reason`, the pools that were excluded
+with their reasons, and `null` for every numeric field — the two arms of the
+REST `DepthOutcome` union:
+
+```graphql
+query TradeCost($amount: Float!) {
+  priced: depth(assetA: "XLM", assetB: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN", amount: $amount) {
+    status reason
+    spotPrice executionPrice slippagePct
+    pool { poolId feeBp reservesObservedAt }
+    excludedPools { poolId reason }
+  }
+}
+```
+
+```json
+{
+  "data": {
+    "priced": {
+      "status": "unavailable",
+      "reason": "no AMM pool snapshots for this pair on this network",
+      "spotPrice": null,
+      "executionPrice": null,
+      "slippagePct": null,
+      "pool": null,
+      "excludedPools": []
+    }
+  }
+}
+```
+
+A non-positive `amount` fails with `INVALID_INPUT`; a pair this network does not
+watch fails with `PAIR_NOT_FOUND`; a network other than `testnet` or `mainnet`
+fails with `INVALID_INPUT`. These are the same refusals REST gives with 400 and
+404. One difference in transport only: REST answers an unavailable depth with
+HTTP 503, whereas GraphQL returns the same body with `status: "unavailable"`.
+
+#### `impact`
+
+Returns the price-impact ladder (sizes 100, 1,000, 10,000 and the pool's usable
+liquidity, capped by `liquidityFraction`) and the size at which each slippage
+threshold is crossed.
+
+```graphql
+{
+  impact(assetA: "XLM", assetB: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN", thresholds: [1, 5]) {
+    status
+    spotPrice
+    availableLiquidity
+    ladder { size output executionPrice slippagePct }
+    thresholds { thresholdPct crossed size }
+  }
+}
+```
+
+A pool too thin to absorb the smallest standard size reports
+`status: "insufficient_liquidity"` with an empty ladder and no crossed
+thresholds, rather than a fabricated point. A pair with no AMM pool fails with
+`PAIR_NOT_FOUND`, which is where REST answers 404 `unknown_pair`.
+
+#### `book`
+
+The SDEX order book merged with synthetic AMM levels, produced by the same
+`computeBook` function the REST route uses. The REST payload's `provenance`
+object is flattened onto `OrderBook` (`sampledAt`, `sampleCount`, `venues`) so
+the query stays within the depth limit.
+
+```graphql
+{
+  book(assetA: "XLM", assetB: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN", depth: 0.05, step: 0.01) {
+    assetA assetB pairKey network
+    spotPrice spotSource status
+    asks { price size cumulativeSize venues synthetic }
+    bids { price size cumulativeSize venues synthetic }
+    sampleCount
+    venues { venue status sampleCount dataAgeSeconds truncated }
+  }
+}
+```
+
+An empty or unreachable market is reported in `status` (`no_liquidity`,
+`no_levels_in_range`, `partial`, `unavailable`) and in each venue's `status` —
+never as a book of zero-price levels. `depth` outside `[0, 0.5]`, `step` outside
+`[0.001, 0.1]` and an issued asset without its issuer fail with `INVALID_INPUT`
+and the same message REST returns with its 400.
+
+---
+
 ## Live Price Subscriptions (`graphql-transport-ws`)
 
 Live price updates are streamed over WebSocket using the [`graphql-transport-ws`](https://github.com/enisdenjo/graphql-ws) subprotocol. The client must negotiate this subprotocol during the WebSocket handshake.
@@ -655,3 +796,9 @@ const unsubscribe = client.subscribe(
 | Boundary inclusivity | inclusive at both ends | exclusive at the upper (`to`) end |
 | Over-large range rejection | yes | yes (same cap) |
 | `from` after `to` is an error | yes | yes |
+
+| Capability | REST | GraphQL |
+|---|---|---|
+| Trade cost for a size | `GET /price/:assetA/:assetB/depth` | `depth` |
+| Price-impact ladder and thresholds | `GET /impact/:assetA/:assetB` | `impact` |
+| Merged SDEX + AMM order book | `GET /book/:assetA/:assetB` | `book` |

@@ -116,6 +116,26 @@ vi.mock('../config', () => ({
   config: {
     pairs: mocks.pairs,
   },
+  getNetworkConfig: (network: string) => ({
+    network,
+    pairs: mocks.pairs,
+    horizon: { url: `https://horizon-${network}.example.test` },
+  }),
+}))
+vi.mock('../network/clients', () => ({
+  getHorizonServer: () => ({
+    orderbook: () => ({
+      limit: () => ({ call: async () => ({ asks: [], bids: [] }) }),
+    }),
+  }),
+}))
+vi.mock('../pricing/pool-fee', () => ({
+  getPoolFee: async (_network: string, poolId: string) => ({
+    ok: true,
+    fee: { poolId, feeBp: 30, feeReadAt: '2026-11-20T00:00:00.000Z' },
+    cached: false,
+  }),
+  clearPoolFeeCache: () => {},
 }))
 vi.mock('../api/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/auth')>()
@@ -405,6 +425,58 @@ describe('GraphQL per-route scope enforcement (#618)', () => {
       const success = await queryGraphQL(app, query, 'prices')
       expect(success.statusCode).toBe(200)
       expect(success.body.data.spreads.asset).toBe('XLM')
+    })
+
+    // #683: the trade-cost queries share their REST routes' read:prices scope.
+    const POOL_ROW = {
+      pool_id: 'pool-1',
+      asset_a: 'XLM',
+      asset_b: 'USDC',
+      reserve_a: '10000',
+      reserve_b: '5000',
+      fee_bp: 30,
+      timestamp: new Date('2026-11-20T00:00:00.000Z'),
+    }
+
+    it('depth requires read:prices and rejects read:history', async () => {
+      const query = `{ depth(assetA: "XLM", assetB: "USDC:${USDC_ISSUER}", amount: 100) { status } }`
+
+      const refused = await queryGraphQL(app, query, 'history')
+      expect(refused.statusCode).toBe(403)
+      expect(refused.body.errors[0].extensions.code).toBe('insufficient_scope')
+      expect(refused.body.errors[0].extensions.requiredScope).toBe('read:prices')
+
+      mocks.pgPoolQuery.mockResolvedValue({ rows: [POOL_ROW] })
+      const success = await queryGraphQL(app, query, 'prices')
+      expect(success.statusCode).toBe(200)
+      expect(success.body.data.depth.status).toBe('ok')
+    })
+
+    it('impact requires read:prices and rejects read:history', async () => {
+      const query = `{ impact(assetA: "XLM", assetB: "USDC:${USDC_ISSUER}") { status } }`
+
+      const refused = await queryGraphQL(app, query, 'history')
+      expect(refused.statusCode).toBe(403)
+      expect(refused.body.errors[0].extensions.code).toBe('insufficient_scope')
+      expect(refused.body.errors[0].extensions.requiredScope).toBe('read:prices')
+
+      mocks.pgPoolQuery.mockResolvedValue({ rows: [POOL_ROW] })
+      const success = await queryGraphQL(app, query, 'prices')
+      expect(success.statusCode).toBe(200)
+      expect(success.body.data.impact.status).toBe('ok')
+    })
+
+    it('book requires read:prices and rejects read:history', async () => {
+      const query = `{ book(assetA: "XLM", assetB: "USDC:${USDC_ISSUER}") { status } }`
+
+      const refused = await queryGraphQL(app, query, 'history')
+      expect(refused.statusCode).toBe(403)
+      expect(refused.body.errors[0].extensions.code).toBe('insufficient_scope')
+      expect(refused.body.errors[0].extensions.requiredScope).toBe('read:prices')
+
+      const success = await queryGraphQL(app, query, 'prices')
+      expect(success.statusCode).toBe(200)
+      expect(success.body.data.book.status).toBe('no_liquidity')
     })
   })
 

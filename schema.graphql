@@ -260,6 +260,153 @@ type SpreadReport {
   tightest: VenueQuote
 }
 
+"""One price level of a depth answer: quote units per base unit."""
+type DepthLevel {
+  price: Float!
+  size: Float!
+}
+
+"""A pool that could not be used to price a trade, and why."""
+type ExcludedPool {
+  poolId: String!
+  reason: String!
+}
+
+"""
+The pool a depth answer was priced from, and when its inputs were read.
+"""
+type DepthPool {
+  poolId: String!
+  feeBp: Int!
+  feeReadAt: String!
+  reservesObservedAt: String!
+}
+
+"""
+What a trade of a given size would cost on the AMM.
+
+status discriminates two arms, mirroring REST GET /price/:assetA/:assetB/depth
+and the two arms of DepthOutcome. When it is "unavailable", every numeric
+field is null and reason plus excludedPools say why. There is no zeroed
+fallback: a genuine price of zero and "no pool could price this" are
+different answers, and reporting the second as the first is the bug #219 is
+about.
+
+A priced answer carries asks and bids around the pool mid, the pool it was
+priced from, and the pools that were excluded with their reasons.
+"""
+type DepthResult {
+  status: String!
+  network: String!
+  pairKey: String!
+  assetA: String!
+  assetB: String!
+  spotPrice: Float
+  executionPrice: Float
+  slippagePct: Float
+
+  """
+  Levels around the mid. Null on an unavailable answer, which has no levels.
+  """
+  asks: [DepthLevel!]
+  bids: [DepthLevel!]
+  source: String
+  pool: DepthPool
+  reason: String
+  excludedPools: [ExcludedPool!]!
+}
+
+"""One rung of the price-impact ladder."""
+type ImpactPoint {
+  size: Float!
+  output: Float!
+  executionPrice: Float!
+  slippagePct: Float!
+}
+
+"""The size at which a slippage threshold is crossed."""
+type ImpactThreshold {
+  thresholdPct: Float!
+  crossed: Boolean!
+
+  """Input size at which this threshold is crossed; null when it never is."""
+  size: Float
+}
+
+"""
+Price impact for a pair: the same figures as REST GET /impact/:assetA/:assetB.
+
+status is "ok" when the pool can absorb at least the smallest standard trade
+size, and "insufficient_liquidity" otherwise. In that second arm the ladder is
+empty and no threshold is crossed; no point is fabricated.
+"""
+type ImpactResult {
+  status: String!
+  assetA: String!
+  assetB: String!
+  pairKey: String!
+  network: String!
+  spotPrice: Float!
+  availableLiquidity: Float!
+  smallestSize: Float!
+  ladder: [ImpactPoint!]!
+  thresholds: [ImpactThreshold!]!
+  source: String!
+}
+
+"""One aggregated price level of the merged order book."""
+type BookLevel {
+  price: Float!
+  size: Float!
+  cumulativeSize: Float!
+  venues: [String!]!
+  synthetic: Boolean!
+  sampleCount: Int!
+}
+
+"""One venue's contribution to the order book, and its freshness."""
+type BookSource {
+  venue: String!
+
+  """available, no_liquidity or unavailable."""
+  status: String!
+  sampleCount: Int!
+  observedAt: String
+  dataAgeSeconds: Float
+  truncated: Boolean!
+}
+
+"""
+The SDEX order book merged with synthetic AMM levels: the same body as REST
+GET /book/:assetA/:assetB, produced by the same function. The REST payload's
+provenance object is flattened here (sampledAt, sampleCount, venues) so the
+query stays within the schema's depth limit.
+
+status is one of ok, partial, no_liquidity, no_levels_in_range or unavailable.
+"""
+type OrderBook {
+  assetA: String!
+  assetB: String!
+  pairKey: String!
+  network: String!
+  spotPrice: Float
+  spotSource: String
+  depth: Float!
+  step: Float!
+  status: String!
+  asks: [BookLevel!]!
+  bids: [BookLevel!]!
+
+  """When the book was assembled (REST provenance.sampledAt)."""
+  sampledAt: String!
+
+  """Rows read across both venues (REST provenance.sampleCount)."""
+  sampleCount: Int!
+
+  """Per-venue freshness (REST provenance.venues)."""
+  venues: [BookSource!]!
+}
+
 type Query {
   """
   Aggregated price for a pair. Three outcomes are kept distinct:
@@ -323,6 +470,44 @@ type Query {
   network; any other value fails with INVALID_INPUT, as REST answers 400.
   """
   spreads(asset: String!, window: String, network: String): SpreadReport!
+
+  """
+  What a trade of amount would cost on the AMM, at the same figures as REST
+  GET /price/:assetA/:assetB/depth. Shares getDepth with the REST route, so
+  the two cannot drift.
+  
+  network (testnet or mainnet) defaults to the active network; any other
+  value fails with INVALID_INPUT. An unknown pair fails with PAIR_NOT_FOUND
+  and a non-positive amount with INVALID_INPUT, as REST answers 404 and 400.
+  A watched pair that no pool can price is not an error: it resolves with
+  status "unavailable", a reason and the excluded pools, and null numbers.
+  """
+  depth(assetA: String!, assetB: String!, amount: Float! = 1000, network: String): DepthResult!
+
+  """
+  Price impact ladder and the sizes at which each slippage threshold is
+  crossed, at the same figures as REST GET /impact/:assetA/:assetB. Shares
+  getImpact with the REST route.
+  
+  thresholds are percentages and default to [1, 5, 10]; liquidityFraction is
+  the share of the reserve the ladder may use and must be in (0, 1],
+  defaulting to 0.5. A non-empty list of positive thresholds is required.
+  Violations fail with INVALID_INPUT. A pair with no AMM pool fails with
+  PAIR_NOT_FOUND, which is where REST answers 404 unknown_pair.
+  """
+  impact(assetA: String!, assetB: String!, thresholds: [Float!], liquidityFraction: Float = 0.5, network: String): ImpactResult!
+
+  """
+  The SDEX order book merged with synthetic AMM levels, at the same figures
+  as REST GET /book/:assetA/:assetB. Both surfaces call computeBook.
+  
+  depth is a fractional distance from spot and must be in [0, 0.5]; step is
+  the reserve fraction per synthetic rung and must be in [0.001, 0.1]. Both
+  default to the REST defaults (0.1 and 0.01) and are validated identically,
+  failing with INVALID_INPUT where REST answers 400. An unreachable venue is
+  reported in status and venues rather than as an empty book.
+  """
+  book(assetA: String!, assetB: String!, depth: Float = 0.1, step: Float = 0.01, network: String): OrderBook!
 }
 
 type Subscription {
