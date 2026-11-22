@@ -7,6 +7,7 @@ vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
 vi.mock('../config', () => ({ activeNetwork: 'testnet' }))
 
 import { registerSpreadsRoutes } from '../routes/spreads'
+import { registerNetworkSelector } from '../middleware/network'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
@@ -180,5 +181,42 @@ describe('GET /spreads/:asset', () => {
 
     expect(body.venues[0].spreadPct).toBeCloseTo(body.venues[0].spreadBps / 100, 6)
     expect(body.venues[0].spreadPct).toBeCloseTo(2, 6)
+  })
+})
+
+describe('GET /spreads/:asset network selection', () => {
+  beforeEach(() => {
+    mockQuery.mockReset()
+    mockQuery.mockResolvedValue({ rows: [] })
+  })
+
+  async function buildAppWithSelector() {
+    const app = Fastify({ logger: false })
+    await app.register(registerNetworkSelector)
+    await registerSpreadsRoutes(app)
+    await app.ready()
+    return app
+  }
+
+  it('honours the x-network header when no query param is sent', async () => {
+    const app = await buildAppWithSelector()
+    const body = (await app.inject({ method: 'GET', url: '/spreads/XLM', headers: { 'x-network': 'mainnet' } })).json()
+
+    expect(mockQuery.mock.calls[0][1][1]).toBe('mainnet')
+    expect(body.network).toBe('mainnet')
+  })
+
+  it('honours the network query param', async () => {
+    const app = await buildAppWithSelector()
+    await app.inject({ method: 'GET', url: '/spreads/XLM?network=mainnet' })
+
+    expect(mockQuery.mock.calls[0][1][1]).toBe('mainnet')
+  })
+
+  it('lets the query param win when both are sent', async () => {
+    const app = await buildAppWithSelector()
+    await app.inject({ method: 'GET', url: '/spreads/XLM?network=testnet', headers: { 'x-network': 'mainnet' } })
+
+    expect(mockQuery.mock.calls[0][1][1]).toBe('testnet')
   })
 })

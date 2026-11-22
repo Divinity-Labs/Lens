@@ -34,6 +34,7 @@ vi.mock('../db', () => ({
 
 import { registerRateRoutes } from '../routes/rates'
 import { registerNetworkSelector } from '../middleware/network'
+import { pgPool } from '../db'
 
 async function buildTestApp() {
   const app = Fastify({ logger: false })
@@ -106,6 +107,40 @@ describe('Rates list route (GET /rates)', () => {
     })
 
     expect(res.statusCode).toBe(400)
+    await app.close()
+  })
+})
+
+describe('GET /rates/:asset network selection', () => {
+  const mockQuery = vi.mocked(pgPool.query)
+
+  beforeEach(() => {
+    mockQuery.mockReset()
+    mockQuery.mockResolvedValue({ rows: [] } as never)
+  })
+
+  it('honours the x-network header when no query param is sent', async () => {
+    const app = await buildTestApp()
+    const res = await app.inject({ method: 'GET', url: '/rates/USDC', headers: { 'x-network': 'mainnet' } })
+
+    expect(res.statusCode).toBe(200)
+    expect(mockQuery.mock.calls[0][1]).toEqual(['USDC', 'mainnet'])
+    await app.close()
+  })
+
+  it('honours the network query param', async () => {
+    const app = await buildTestApp()
+    await app.inject({ method: 'GET', url: '/rates/USDC?network=mainnet' })
+
+    expect(mockQuery.mock.calls[0][1]).toEqual(['USDC', 'mainnet'])
+    await app.close()
+  })
+
+  it('lets the query param win when both are sent', async () => {
+    const app = await buildTestApp()
+    await app.inject({ method: 'GET', url: '/rates/USDC?network=testnet', headers: { 'x-network': 'mainnet' } })
+
+    expect(mockQuery.mock.calls[0][1]).toEqual(['USDC', 'testnet'])
     await app.close()
   })
 })

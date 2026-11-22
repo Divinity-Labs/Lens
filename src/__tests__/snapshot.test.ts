@@ -30,6 +30,7 @@ vi.mock('../config', () => ({
 }))
 
 import { registerSnapshotRoutes } from '../routes/snapshot'
+import { registerNetworkSelector } from '../middleware/network'
 import { snapshotResponseSchema } from '../api/schemas'
 
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
@@ -487,6 +488,57 @@ describe('GET /snapshot', () => {
 
       expect(res.json().network).toBe('mainnet')
       expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet'])
+      await app.close()
+    })
+
+    async function buildAppWithSelector() {
+      const app = Fastify({ logger: false })
+      await app.register(registerNetworkSelector)
+      await registerSnapshotRoutes(app)
+      await app.ready()
+      return app
+    }
+
+    it('honours the x-network header when no query param is sent', async () => {
+      mockQuery.mockResolvedValue(dbRow(populated))
+      const app = await buildAppWithSelector()
+      const res = await app.inject({ method: 'GET', url: '/snapshot', headers: { 'x-network': 'mainnet' } })
+
+      expect(res.json().network).toBe('mainnet')
+      expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet'])
+      expect(mockGetCachedSnapshot).toHaveBeenCalledWith('mainnet')
+      await app.close()
+    })
+
+    it('honours the network query param', async () => {
+      mockQuery.mockResolvedValue(dbRow(populated))
+      const app = await buildAppWithSelector()
+      await app.inject({ method: 'GET', url: '/snapshot?network=mainnet' })
+
+      expect(mockQuery.mock.calls[0][1]).toEqual(['mainnet'])
+      await app.close()
+    })
+
+    it('lets the query param win when both are sent', async () => {
+      mockQuery.mockResolvedValue(dbRow(populated))
+      const app = await buildAppWithSelector()
+      await app.inject({ method: 'GET', url: '/snapshot?network=testnet', headers: { 'x-network': 'mainnet' } })
+
+      expect(mockQuery.mock.calls[0][1]).toEqual(['testnet'])
+      await app.close()
+    })
+
+    it('sends Vary: x-network on a miss and on a hit', async () => {
+      mockQuery.mockResolvedValue(dbRow(populated))
+      const app = await buildAppWithSelector()
+      const miss = await app.inject({ method: 'GET', url: '/snapshot' })
+      expect(miss.headers['x-cache']).toBe('MISS')
+      expect(miss.headers.vary).toBe('x-network')
+
+      mockGetCachedSnapshot.mockResolvedValueOnce(JSON.stringify(miss.json()))
+      const hit = await app.inject({ method: 'GET', url: '/snapshot' })
+      expect(hit.headers['x-cache']).toBe('HIT')
+      expect(hit.headers.vary).toBe('x-network')
       await app.close()
     })
 
