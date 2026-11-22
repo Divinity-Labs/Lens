@@ -20,6 +20,22 @@ export function ledgerFromPagingToken(token?: string | null): number | null {
 }
 
 /**
+ * The lowest paging token that can belong to `ledger`.
+ *
+ * Horizon packs the ledger sequence into the high 32 bits of a trade's TOID, so
+ * `ledger << 32` is the first token of that ledger and `order=asc` paging from it
+ * replays the ledger from its first trade. This is the inverse of
+ * {@link ledgerFromPagingToken} and the only way to ask Horizon for "trades from
+ * this time onwards" without walking history from zero.
+ */
+export function firstPagingTokenOfLedger(ledger: number): string {
+  if (!Number.isSafeInteger(ledger) || ledger < 0) {
+    throw new RangeError(`ledger sequence must be a non-negative safe integer, got ${ledger}`)
+  }
+  return `${(BigInt(ledger) << 32n).toString()}-0`
+}
+
+/**
  * Resolve a page of ascending Horizon trades to one ledger per record.
  *
  * A token that won't parse inherits the nearest ledger we can establish — the

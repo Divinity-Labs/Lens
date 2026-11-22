@@ -19,8 +19,7 @@ export class HorizonRateLimitError extends Error {
  * band: every ingester polls on the same interval, so a fixed backoff makes
  * four venues retry in lockstep and rate-limit each other again.
  */
-function retryDelay(response: Response, attempt: number): number {
-  const retryAfter = response.headers.get('retry-after')
+function delayForRetry(retryAfter: string | null, attempt: number): number {
   if (retryAfter) {
     const seconds = Number(retryAfter)
     if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
@@ -29,6 +28,10 @@ function retryDelay(response: Response, attempt: number): number {
   }
   const exponential = Math.min(1_000 * 2 ** attempt, 30_000)
   return Math.round(exponential * (0.75 + Math.random() * 0.5))
+}
+
+function retryDelay(response: Response, attempt: number): number {
+  return delayForRetry(response.headers.get('retry-after'), attempt)
 }
 
 /** Sleep that gives up as soon as the cycle is abandoned. */
@@ -97,6 +100,57 @@ export async function fetchHorizonJson<T>(
       throw new Error(`Horizon request failed with HTTP ${response.status} for ${new URL(url).pathname}`)
     }
     return await response.json() as T
+  }
+  throw new HorizonRateLimitError(url)
+}
+
+/**
+ * The status and `Retry-After` of a Horizon failure that did not come from
+ * `fetch` — the SDK's `CallBuilder.call()` rejects with the underlying axios
+ * error, whose response lives on `err.response`.
+ */
+function errorResponse(err: unknown): { status: number | null; retryAfter: string | null } {
+  const anyErr = err as any
+  const response = anyErr?.response ?? anyErr
+  const status = typeof response?.status === 'number' ? response.status : null
+  const headers = response?.headers as Record<string, unknown> | undefined
+  const raw = headers?.['retry-after'] ?? headers?.['Retry-After']
+  return {
+    status,
+    retryAfter: typeof raw === 'string' ? raw : raw == null ? null : String(raw),
+  }
+}
+
+/**
+ * Run an SDK-backed Horizon request with the same 429 policy as
+ * {@link fetchHorizonJson}.
+ *
+ * The SDK's builder chain is the only way to ask for an asset-pair page of
+ * trades, so callers that need it (the backfill's paging loop) would otherwise
+ * get the exact bug #348 removed: a rate-limited page rejects, the caller's
+ * `catch` treats it as a failed page, and the walk stops early with the rest of
+ * the window silently missing. Here the page is retried with the same backoff,
+ * and only after the attempts run out does it reach the caller's error path.
+ */
+export async function callHorizonWithRetry<T>(
+  request: () => Promise<T>,
+  url: string,
+  options: FetchHorizonJsonOptions = {},
+): Promise<T> {
+  const attempts = options.attempts ?? 3
+  const { signal } = options
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (signal?.aborted) throw new HorizonRateLimitError(url)
+    try {
+      return await request()
+    } catch (err) {
+      const { status, retryAfter } = errorResponse(err)
+      if (status !== 429) throw err
+      if (attempt + 1 === attempts) throw new HorizonRateLimitError(url)
+      await sleep(delayForRetry(retryAfter, attempt), signal)
+      if (signal?.aborted) throw new HorizonRateLimitError(url)
+    }
   }
   throw new HorizonRateLimitError(url)
 }
