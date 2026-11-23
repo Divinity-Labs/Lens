@@ -28,6 +28,13 @@ import {
   runPricePointsMaintenance,
   PRICE_POINTS_RETENTION_DAYS,
 } from './jobs/pricePointsPartitionJob'
+import {
+  createPriceAggregatesRetentionQueue,
+  startPriceAggregatesRetentionWorker,
+  schedulePriceAggregatesRetention,
+  pruneAllAggregateNetworks,
+  PRICE_AGGREGATES_RETENTION_DAYS,
+} from './jobs/priceAggregatesRetention'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
 import { markHealthy, recordCrash } from './ingester/restart'
 import { markBootComplete } from './health'
@@ -284,6 +291,48 @@ async function main() {
       log.warn({ err }, 'price_points partition worker unavailable; falling back to hourly in-process maintenance')
       await Promise.allSettled([partitionQueue?.close(), partitionWorker?.close()])
       setInterval(() => { void safeMaintainPartitions() }, 60 * 60 * 1000).unref()
+    }
+  }
+
+  // ── price_aggregates retention ────────────────────────────────────────────
+  // The refresher writes four rows per pair per network per minute and nothing
+  // removed them, so the table grew forever (#691). The prune keeps what the
+  // history route can still answer with — the newest rows of every series — and
+  // never touches the 1-hour rollups that raw price_points were compressed into.
+  //
+  // Same rule as snapshot retention: BullMQ is only how the prune gets scheduled,
+  // so a missing Redis falls back to a timer in this process rather than to a
+  // table nobody ever trims.
+  const safePruneAggregates = async () => {
+    try {
+      const results = await pruneAllAggregateNetworks()
+      for (const [network, res] of Object.entries(results)) {
+        if (res && res.pruned > 0) {
+          log.info(
+            { network, pruned: res.pruned, retentionDays: PRICE_AGGREGATES_RETENTION_DAYS },
+            'pruned aggregate rows older than the retention window'
+          )
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'price_aggregates prune failed')
+    }
+  }
+
+  await safePruneAggregates()
+
+  {
+    let aggregatesRetentionQueue: ReturnType<typeof createPriceAggregatesRetentionQueue> | undefined
+    let aggregatesRetentionWorker: ReturnType<typeof startPriceAggregatesRetentionWorker> | undefined
+    try {
+      aggregatesRetentionQueue = createPriceAggregatesRetentionQueue()
+      aggregatesRetentionWorker = startPriceAggregatesRetentionWorker()
+      await schedulePriceAggregatesRetention(aggregatesRetentionQueue)
+      log.info('price_aggregates retention worker started')
+    } catch (err) {
+      log.warn({ err }, 'price_aggregates retention worker unavailable; falling back to hourly in-process prune')
+      await Promise.allSettled([aggregatesRetentionQueue?.close(), aggregatesRetentionWorker?.close()])
+      setInterval(() => { void safePruneAggregates() }, 60 * 60 * 1000).unref()
     }
   }
 

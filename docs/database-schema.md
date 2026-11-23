@@ -29,6 +29,49 @@ To ensure that running code never crashes at request time due to missing columns
 - If an expected table or column is absent, it fails fast and names the missing entities.
 - `/ready` and `/status` can query `verifyDatabaseSchema()` to isolate instances before they receive live traffic.
 
+## Retention policy (#691)
+
+Every table here is append/upsert-only at ingest time, so each one is bounded by
+a job rather than by a workload. The operational half — settings, what you see
+when a prune stops running, Redis-down behaviour — is in
+[`docs/RUNBOOK.md` §1a](RUNBOOK.md#1a-data-retention-policy); this section
+records the schema-level facts the jobs are written against.
+
+| Table | Written by | Row that appears unprompted | Bounded by |
+|---|---|---|---|
+| `price_points` | venue ingesters | one row per trade | `pricePointsRetention.ts` (rollup, then prune past `PRICE_POINTS_RETENTION_DAYS`) + `pricePointsPartitionJob.ts` |
+| `price_snapshots` | snapshot ingester | 1 row/pair/network/minute | `snapshotRetention.ts` |
+| `lending_rates` | rate ingesters | 1 row/pair/update | `lendingRateRetention.ts` |
+| `price_aggregates` | `aggregateRefresh.ts` | **4 rows/pair/network/minute** | `priceAggregatesRetention.ts` |
+
+`price_aggregates` is the one that grows without anyone asking. Its primary key
+is `[network, pair_key, window, bucket]` and the refresher upserts all four
+windows (`1m`, `5m`, `1h`, `24h`) every minute with `bucket` set to the current
+minute — four new keys per minute per pair per network, 172,800 rows per pair per
+month, with nothing removing any of them.
+
+The retention job deletes a row only when it is older than the retention
+horizon, **and** older than the newest-`N` floor of its own
+`(network, pair_key, window)` series, **and** not an hour-aligned `1h` row:
+
+- The series floor exists because `bucket` is a `timestamp(3) without time
+  zone` and the history route imposes no time predicate of its own
+  (`ORDER BY bucket DESC LIMIT n`): a page is by definition the newest `n` rows
+  of the series, so the newest `N` rows of every series are kept whatever their
+  age and no request can tell that a prune happened. `N` defaults to
+  `HISTORY_MAX_LIMIT` (1000) and a test asserts the two stay equal.
+- The hour-aligned `1h` rows are the long-term record. `rollupOldPricePoints`
+  writes one per `(network, pair_key, hour)` from the raw `price_points` it is
+  about to delete, under `ON CONFLICT (network, pair_key, window, bucket) DO
+  UPDATE` — after 30 days that row is the only surviving copy of that hour, and
+  it shares its primary key with the refresher's top-of-hour `1h` row, so the
+  hourly series is one row per hour, kept forever (24/pair/day, versus the
+  5,760/pair/day minute rows above it).
+
+No migration is needed for this: the job deletes rows through the existing
+primary key, and `FOR UPDATE SKIP LOCKED` keeps a batch's locks inside one
+series so the refresher never waits on the prune.
+
 ## Path Forward: Transitioning to `prisma migrate`
 
 When moving to formal multi-region enterprise production deployments:
