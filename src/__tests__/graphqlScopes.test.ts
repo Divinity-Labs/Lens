@@ -73,6 +73,8 @@ const mocks = vi.hoisted(() => {
     runScreener: vi.fn(),
     computeVolumes: vi.fn(),
     computeSpreads: vi.fn(),
+    computeCurrentTvl: vi.fn(),
+    computeTvlHistory: vi.fn(),
     pairs: [
       {
         pairKey: `USDC:${usdcIssuer}/XLM`,
@@ -110,6 +112,10 @@ vi.mock('../routes/volumes', () => ({
 vi.mock('../routes/spreads', () => ({
   computeSpreads: mocks.computeSpreads,
   SpreadsInputError: class extends Error {},
+}))
+vi.mock('../routes/tvl', () => ({
+  computeCurrentTvl: mocks.computeCurrentTvl,
+  computeTvlHistory: mocks.computeTvlHistory,
 }))
 vi.mock('../config', () => ({
   activeNetwork: 'testnet',
@@ -275,6 +281,22 @@ describe('GraphQL per-route scope enforcement (#618)', () => {
       window: '5m',
       network: 'testnet',
     })
+    mocks.computeCurrentTvl.mockResolvedValue({
+      network: 'testnet',
+      totalTvlUsd: 100,
+      unpricedPoolsCount: 0,
+      pricedPoolsCount: 0,
+      venues: {},
+      byAsset: {},
+      pools: [],
+      computedAt: new Date().toISOString(),
+    })
+    mocks.computeTvlHistory.mockResolvedValue({
+      network: 'testnet',
+      window: '24h',
+      interval: '60m',
+      points: [],
+    })
 
     const server = await buildServer()
     app = server.app
@@ -405,6 +427,34 @@ describe('GraphQL per-route scope enforcement (#618)', () => {
       const success = await queryGraphQL(app, query, 'prices')
       expect(success.statusCode).toBe(200)
       expect(success.body.data.spreads.asset).toBe('XLM')
+    })
+
+    it('tvl requires read:prices and rejects read:history', async () => {
+      const query = `{ tvl { network totalTvlUsd } }`
+
+      const refused = await queryGraphQL(app, query, 'history')
+      expect(refused.statusCode).toBe(403)
+      expect(refused.body.errors[0].extensions.code).toBe('insufficient_scope')
+      expect(refused.body.errors[0].extensions.requiredScope).toBe('read:prices')
+      expect(mocks.computeCurrentTvl).not.toHaveBeenCalled()
+
+      const success = await queryGraphQL(app, query, 'prices')
+      expect(success.statusCode).toBe(200)
+      expect(success.body.data.tvl).toMatchObject({ network: 'testnet', totalTvlUsd: '100' })
+    })
+
+    it('tvlHistory requires read:prices and rejects read:history', async () => {
+      const query = `{ tvlHistory(windowHours: 24) { network window } }`
+
+      const refused = await queryGraphQL(app, query, 'history')
+      expect(refused.statusCode).toBe(403)
+      expect(refused.body.errors[0].extensions.code).toBe('insufficient_scope')
+      expect(refused.body.errors[0].extensions.requiredScope).toBe('read:prices')
+      expect(mocks.computeTvlHistory).not.toHaveBeenCalled()
+
+      const success = await queryGraphQL(app, query, 'prices')
+      expect(success.statusCode).toBe(200)
+      expect(success.body.data.tvlHistory).toMatchObject({ network: 'testnet', window: '24h' })
     })
   })
 
