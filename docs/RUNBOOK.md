@@ -57,10 +57,10 @@ worker, ingester or scheduler process:
 
 ### 1a. Data retention policy
 
-Four tables grow on their own without anyone asking, and Lens now bounds each of
-them. The rule for every one of them is the same: **delete in bounded batches,
-per network, only what no answer can still depend on, and never let the job take
-the service down.**
+Four tables gain rows as long as the service is up, whatever anyone asks of them,
+and Lens bounds each of them. The rule for every one of them is the same:
+**delete in bounded batches, per network, only what no answer can still depend
+on, and never let the job take the service down.**
 
 | Table | What grows | What is deleted | What is never deleted | Job |
 |---|---|---|---|---|
