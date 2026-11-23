@@ -106,6 +106,15 @@ export const price_points_rolled_up_total = new Counter({
   registers: [register]
 })
 
+// Bounded like every other series here: one child per enabled network, so the
+// retention job's progress is visible without an unbounded dimension.
+export const price_aggregates_pruned_total = new Counter({
+  name: 'price_aggregates_pruned_total',
+  help: 'Total number of aggregate rows pruned by the price_aggregates retention job',
+  labelNames: ['network'],
+  registers: [register]
+})
+
 export const price_requests_total = new Counter({
   name: 'price_requests_total',
   help: 'Total number of price API requests served',

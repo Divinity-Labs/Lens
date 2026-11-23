@@ -22,7 +22,7 @@ worker, ingester or scheduler process:
 | WebSocket server | `graphql-transport-ws` subscriptions on `/graphql`; local fan-out plus cross-instance fan-out over Redis pub/sub | `src/ws/fanout.ts`, `src/ws/` |
 | Venue ingesters | One infinite poll loop per (venue × enabled network) for **SDEX**, **Horizon AMM**, **Soroswap**, **Aquarius** | registry `src/ingest/venues/index.ts`, started in `main()` (`src/index.ts`) via `startVenueAdapter` (`src/ingest/venues/runner.ts`) |
 | Snapshot ingester | Appends one `price_snapshots` row per active pair at every minute boundary, per network | `src/ingest/snapshot.ts` |
-| BullMQ workers | `aggregate-refresh` (one queue/worker per network), `snapshot-retention` (hourly), `price_points` partition maintenance (hourly) — **in the same process** | `src/jobs/aggregateRefresh.ts`, `src/jobs/snapshotRetention.ts`, `src/jobs/pricePointsPartitionJob.ts` |
+| BullMQ workers | `aggregate-refresh` (one queue/worker per network), `snapshot-retention` (hourly), `price_points` partition maintenance (hourly), `price_aggregates` retention (hourly) — **in the same process** | `src/jobs/aggregateRefresh.ts`, `src/jobs/snapshotRetention.ts`, `src/jobs/pricePointsPartitionJob.ts`, `src/jobs/priceAggregatesRetention.ts` |
 | Webhook dispatcher | Threshold alerts, delivered inline after each ingested price write | `src/webhookDispatcher.ts`, `src/alerts/delivery.ts` |
 | Schema migration | `prisma migrate deploy` runs **at every boot, before the API listens** — committed migrations only, never a diff of the live schema (#233). On a database that predates the migration history the baseline is recorded as applied first, without running it | `applyMigrations()` in `src/db/migrate.ts`, called from `main()` (`src/index.ts`) — doc: [`docs/database-migrations.md`](database-migrations.md) |
 | Middleware | Network selector, API-key auth, per-key/IP rate limits, the per-instance global request ceiling (`GLOBAL_RATE_LIMIT_MAX`, sheds with 503), x402 payment gate, cache policy, HTTP metrics | `src/app.ts` registration order |
@@ -44,12 +44,85 @@ worker, ingester or scheduler process:
 8. Snapshot retention: prune once, then schedule hourly — on Redis failure warn
    `falling back to an in-process hourly prune` and install an in-process `setInterval`.
 9. Price-points partition maintenance: same pattern, same in-process hourly fallback.
-10. Ingesters started per network through `restartIngester`: a crash is logged
+10. `price_aggregates` retention: same pattern, same in-process hourly fallback
+    (prune once, then schedule hourly; on failure warn
+    `price_aggregates retention worker unavailable; falling back to hourly
+    in-process prune`) — policy in §1a.
+11. Ingesters started per network through `restartIngester`: a crash is logged
     (`ingester crashed; restarting in 10s`) and restarted after 10 s, isolated
     per `(venue, network)` — one dying ingester does not affect the others.
-11. `markBootComplete()` — **last**, and only once every ingester above is
+12. `markBootComplete()` — **last**, and only once every ingester above is
     running: until that line `GET /ready` answers 503, keeping a starting
     instance out of the load balancer (`src/index.ts`, `src/health.ts`).
+
+### 1a. Data retention policy
+
+Four tables gain rows as long as the service is up, whatever anyone asks of them,
+and Lens bounds each of them. The rule for every one of them is the same:
+**delete in bounded batches, per network, only what no answer can still depend
+on, and never let the job take the service down.**
+
+| Table | What grows | What is deleted | What is never deleted | Job |
+|---|---|---|---|---|
+| `price_snapshots` | 1 row/pair/network/min | rows older than `SNAPSHOT_RETENTION_DAYS` (30) | — | `src/jobs/snapshotRetention.ts` |
+| `price_points` | 1 row/trade | rows older than `PRICE_POINTS_RETENTION_DAYS` (30), **after** rolling them up | the rollups it writes | `src/jobs/pricePointsRetention.ts`, partitions by `src/jobs/pricePointsPartitionJob.ts` |
+| `price_aggregates` | 4 rows/pair/network/min (`1m`, `5m`, `1h`, `24h`, one bucket per minute per window) | rows older than `PRICE_AGGREGATES_RETENTION_DAYS` (30) **and** older than the series' keep floor | hour-aligned `1h` rows (the long-term hourly rollups); the newest `PRICE_AGGREGATES_KEEP_ROWS` (1000) rows of every series | `src/jobs/priceAggregatesRetention.ts` |
+| `lending_rates` | history rows per rate update | rows past `RATE_RETENTION_DAYS` (30) | — | `src/jobs/lendingRateRetention.ts` |
+
+**`price_aggregates` in detail (#691).** `aggregateRefresh.ts` upserts one row
+per window per pair every minute, and each upsert lands on a bucket that is the
+current minute — so four new primary keys appear every minute and nothing was
+ever removed. That is 172,800 rows per pair per network per month, on every
+network, forever.
+
+The job prunes per `(network, pair_key, window)` series, and a row is deleted
+only when **all** of these hold:
+
+- it is older than the series' **keep floor**: the bucket of the
+  `PRICE_AGGREGATES_KEEP_ROWS`-th newest row of that same series. This is the
+  bound that makes the prune invisible to readers — `GET
+  /price/:assetA/:assetB/history` has **no time predicate at all** (`ORDER BY
+  bucket DESC LIMIT n`, `src/api/rest.ts`), so its answer for a series is simply
+  that series' newest `n` rows, `n ≤ HISTORY_MAX_LIMIT` (1000). Keeping 1000
+  means no page can come back shorter or different because the job ran, even for
+  a pair whose ingestion broke months ago and whose every row is therefore old.
+  A series with fewer rows than the keep count is not touched at all.
+- it is older than `PRICE_AGGREGATES_RETENTION_DAYS`, so a caller naming a
+  recent range (`from`/`to` in the GraphQL `priceHistory`, the screener's newest
+  `24h` row) is untouched whatever the row counts do. What the horizon does cost
+  is granularity in the past: a range older than 30 days is answered by the
+  hourly rollups instead of the per-minute rows, which is the whole point of
+  keeping them.
+- it is **not** an hour-aligned `1h` row. `rollupOldPricePoints`
+  (`src/jobs/pricePointsRetention.ts`) writes one `1h` row per
+  `(network, pair_key, hour)` from the raw `price_points` it is about to delete,
+  and that row is the only copy of history older than 30 days — so the shape
+  `window = '1h' AND bucket = date_trunc('hour', bucket)` is exempt whatever its
+  age. In the live table the refresher's top-of-hour `1h` row and the rollup's
+  row are the *same* primary key, so this exempts the hourly history itself, not
+  a duplicate of it; an hour-aligned `1m`/`5m`/`24h` bucket is a rolling row and
+  is pruned once it ages out.
+- it is not locked: batches use `FOR UPDATE SKIP LOCKED`, `LIMIT
+  PRICE_AGGREGATES_PRUNE_BATCH_SIZE` (1000) and yield between batches, so a
+  concurrent refresher is never made to wait and the lock footprint stays inside
+  one series.
+
+Settings: `PRICE_AGGREGATES_RETENTION_DAYS`, `PRICE_AGGREGATES_PRUNE_BATCH_SIZE`,
+`PRICE_AGGREGATES_KEEP_ROWS` (`.env.example`). Counter:
+`price_aggregates_pruned_total{network}`. One cost to expect: the run starts by
+listing the network's `(pair_key, window)` series, which is a `DISTINCT` scan of
+the table — bounded output (pairs × 4), unbounded read. Batching bounds the
+deletes, not that scan, so the first run after a long stretch of growth is the
+slow one and `db_query_duration_seconds` will show it.
+
+If Redis is down the schedule fails over to an hourly in-process prune (§2), so
+the table stays bounded with no queue; if the in-process prune itself fails it is
+logged (`price_aggregates prune failed`) and retried on the next tick —
+**startup never exits over it**. `PRICE_AGGREGATES_KEEP_ROWS` is only a promise
+while the history route caps its page there:
+`src/__tests__/priceAggregatesRetention.test.ts` asserts the two are equal, so
+raising the route limit without the env default fails a test rather than
+silently truncating someone's chart.
 
 ### Supporting services (`docker-compose.yml`)
 
@@ -268,6 +341,7 @@ Public Prometheus exposition (`src/metrics.ts`, route in `src/app.ts`).
 | `api_key_auth_failures_total{reason}`, `admin_auth_failures_total` | Auth failures by bounded reason (`missing`/`malformed`/`unknown`/`revoked`/`expired`; admin counted separately) |
 | `rate_limit_rejections_total{scope}`, `global_shed_requests_total` | Per-key/IP limiter 429s (`key`/`ip`) and per-instance ceiling sheds (503) |
 | `x402_payments_received_total`, `price_requests_total` | Payment/request counters |
+| `price_points_pruned_total{network}`, `price_points_rolled_up_total{network}`, `price_aggregates_pruned_total{network}` | Retention counters, per network (§1a). Flat while ingestion is healthy = the prune is not running (Redis fallback, or a failing job in the logs) |
 
 **Known blind spots:** no gauge for Redis state, no gauge for the pg pool
 (see #339 in §4), no queue-lag metric, no webhook-delivery metric.
