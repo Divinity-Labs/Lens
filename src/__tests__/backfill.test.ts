@@ -187,6 +187,37 @@ vi.mock('../network/clients', () => ({
   getRpcServer: () => ({}),
 }))
 
+// A backfill now begins paging at the ledger closest to `start`, which it finds
+// by asking Horizon's ledger index (#653). Serve that index from memory — no
+// test here may reach a real network — with `closed_at` advancing 6 seconds per
+// ledger, as it does on a live network.
+const LEDGER_BASE_MS = Date.parse('2026-10-01T00:00:00.000Z')
+const LEDGER_INTERVAL_MS = 6_000
+
+vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+  const url = new URL(String(input))
+  const body = (payload: unknown) =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+
+  if (url.pathname === '/ledgers' && url.searchParams.get('order') === 'desc') {
+    const tip = 60_000_000
+    return body({
+      _embedded: { records: [{ sequence: tip, closed_at: new Date(LEDGER_BASE_MS + tip * LEDGER_INTERVAL_MS).toISOString() }] },
+    })
+  }
+
+  const match = /^\/ledgers\/(\d+)$/.exec(url.pathname)
+  if (match) {
+    const sequence = Number(match[1])
+    return body({ sequence, closed_at: new Date(LEDGER_BASE_MS + sequence * LEDGER_INTERVAL_MS).toISOString() })
+  }
+
+  throw new Error(`unexpected Horizon request ${url.pathname}`)
+}))
+
 import { detectGaps, recordGaps, findOverlappingGaps, supportsHistory } from '../backfill/gaps'
 import { backfill } from '../backfill/backfillService'
 import { registerPriceRoutes } from '../routes/price'

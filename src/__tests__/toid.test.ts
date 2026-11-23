@@ -1,4 +1,4 @@
-import { ledgerFromPagingToken, resolvePageLedgers } from '../ingest/toid'
+import { ledgerFromPagingToken, resolvePageLedgers, firstPagingTokenOfLedger } from '../ingest/toid'
 
 describe('ledgerFromPagingToken', () => {
   it('derives the ledger from real Horizon trade ids', () => {
@@ -52,5 +52,35 @@ describe('resolvePageLedgers', () => {
     // The caller must skip the batch rather than write a fabricated ledger.
     expect(resolvePageLedgers(['p-1'], null)).toBeNull()
     expect(resolvePageLedgers([], null)).toBeNull()
+  })
+})
+
+describe('firstPagingTokenOfLedger', () => {
+  it('is the inverse of ledgerFromPagingToken', () => {
+    for (const ledger of [1, 512345, 64702061]) {
+      expect(ledgerFromPagingToken(firstPagingTokenOfLedger(ledger))).toBe(ledger)
+    }
+  })
+
+  it('sorts below every real trade token in its own ledger', () => {
+    // Horizon puts the transaction and operation index in the TOID's low bits,
+    // so a paging cursor at `ledger << 32` excludes nothing from that ledger —
+    // which is what lets a backfill start mid-history without losing an edge.
+    for (const token of [
+      '277893235979689985-0',
+      '277889847250190337-0',
+      `${(512345n << 32n) + 1n}-0`,
+    ]) {
+      const ledger = ledgerFromPagingToken(token)
+      const floor = firstPagingTokenOfLedger(ledger as number)
+      expect(BigInt(token.split('-')[0])).toBeGreaterThan(BigInt(floor.split('-')[0]))
+      expect(ledgerFromPagingToken(floor)).toBe(ledger)
+    }
+  })
+
+  it('refuses a sequence it cannot encode', () => {
+    expect(() => firstPagingTokenOfLedger(-1)).toThrow(RangeError)
+    expect(() => firstPagingTokenOfLedger(1.5)).toThrow(RangeError)
+    expect(() => firstPagingTokenOfLedger(Number.MAX_SAFE_INTEGER + 1)).toThrow(RangeError)
   })
 })
