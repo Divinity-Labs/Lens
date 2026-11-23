@@ -13,37 +13,14 @@ const MAINNET_USDC = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
 // Testnet ships no default watched pair, so without this the pair list is empty
 // and every assertion below passes vacuously — including the one that is
 // supposed to fail loudly if the issuer is ignored again.
-let getNetworkConfig: typeof import('../config').getNetworkConfig
+let findPair: typeof import('../api/pairResolution').findPair
 
 beforeAll(async () => {
   process.env.WATCHED_PAIRS_TESTNET = `USDC:${TESTNET_USDC}/XLM`
   vi.resetModules()
-  ;({ getNetworkConfig } = await import('../config'))
+  // The shared resolver used by both REST and GraphQL, not a test-only copy.
+  ;({ findPair } = await import('../api/pairResolution'))
 }, 30000)
-
-// Mirrors findPair in src/api/rest.ts, which is module-private.
-function findPair(assetA: string, assetB: string, network: 'testnet' | 'mainnet') {
-  const parse = (a: string) => {
-    if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
-    const [code, issuer] = a.split(':')
-    return { code: (code ?? '').toUpperCase(), issuer: issuer ?? null }
-  }
-  const qA = parse(assetA)
-  const qB = parse(assetB)
-  const matches = (
-    q: { code: string; issuer: string | null },
-    side: { code: string; issuer?: string | null },
-  ) => {
-    if (q.code !== side.code.toUpperCase()) return false
-    if (!q.issuer || !side.issuer) return true
-    return q.issuer === side.issuer
-  }
-  return getNetworkConfig(network).pairs.find(
-    p =>
-      (matches(qA, p.assetA) && matches(qB, p.assetB)) ||
-      (matches(qA, p.assetB) && matches(qB, p.assetA)),
-  )
-}
 
 describe('pair resolution honours the issuer', () => {
   it('matches the testnet pair the testnet deployment watches', () => {
