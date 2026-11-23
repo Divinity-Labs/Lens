@@ -15,8 +15,9 @@ import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
-import { config, activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, type NetworkName } from '../config'
 import { parseAssetStr, getActivePairs } from '../pairsRegistry'
+import { findPair } from './pairResolution'
 import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
 import { compareOracles } from '../services/oracleComparison'
@@ -462,17 +463,6 @@ function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
 }
 
-function findPair(assetA: string, assetB: string) {
-  const normalize = (a: string) => a.toLowerCase() === 'native' ? 'XLM' : a.split(':')[0].toUpperCase()
-  const cA = normalize(assetA)
-  const cB = normalize(assetB)
-  return config.pairs.find(p => {
-    const pA = p.assetA.code.toUpperCase()
-    const pB = p.assetB.code.toUpperCase()
-    return (cA === pA && cB === pB) || (cA === pB && cB === pA)
-  })
-}
-
 const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
 
 /** Maps a shared REST/GraphQL validation failure onto the GraphQL INVALID_INPUT error. */
@@ -579,7 +569,7 @@ export const resolvers = {
           )
         }
       }
-      const pair = findPair(assetA, assetB)
+      const pair = findPair(assetA, assetB, activeNetwork)
       if (!pair) {
         throw new ErrorWithProps(
           `Pair ${assetA}/${assetB} is not tracked on ${activeNetwork}`,
@@ -614,9 +604,33 @@ export const resolvers = {
       _: unknown,
       { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
     ) {
-      const pair = findPair(assetA, assetB)
-      if (!pair) return null
-      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
+      // Validate the identifiers and amount before resolution, so a malformed
+      // request is INVALID_INPUT regardless of whether the pair is watched.
+      for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
+        if (!parseAssetStr(value)) {
+          throw new ErrorWithProps(
+            `Invalid ${field}: expected CODE or CODE:ISSUER, got "${value}"`,
+            { code: 'INVALID_INPUT', field },
+          )
+        }
+      }
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+        throw new ErrorWithProps('amount must be a positive finite number', {
+          code: 'INVALID_INPUT',
+          field: 'amount',
+        })
+      }
+
+      // Shared issuer-aware resolution with getPrice; an unknown pair is an
+      // error, never a successful null result.
+      const pair = findPair(assetA, assetB, activeNetwork)
+      if (!pair) {
+        throw new ErrorWithProps(
+          `Pair ${assetA}/${assetB} is not tracked on ${activeNetwork}`,
+          { code: 'PAIR_NOT_FOUND' },
+        )
+      }
+      return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, activeNetwork)
     }),
 
     getPriceHistory: withScope('read:history', async function (
