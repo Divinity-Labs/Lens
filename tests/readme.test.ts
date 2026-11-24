@@ -3,7 +3,7 @@ import { readFileSync as readFileRaw } from 'node:fs'
 
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
-import { venueAdapters } from '../src/ingest/venues'
+import { registeredVenues } from '../src/ingest/venues'
 import {
   extractSection,
   renderVenuesTable,
@@ -30,25 +30,29 @@ function readFileSync(path: string, encoding: 'utf8'): string {
   return readFileRaw(path, encoding).replace(/\r\n/g, String.fromCharCode(10))
 }
 
+// The README venue table is generated from the whole registry, exchange venues
+// included (#644), not only the on-chain baseline in `venueAdapters`.
+const registryAdapters = registeredVenues.map((reg) => reg.adapter)
+
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
 const openApiPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
 
 describe('README venue list and endpoint table generators', () => {
-  it('extracts and asserts that the README venues section matches the venueAdapters registry', () => {
+  it('extracts and asserts that the README venues section matches the venue registry', () => {
     const readmeContent = readFileSync(readmePath, 'utf8')
     const venuesSection = extractSection(readmeContent, VENUES_START_TAG, VENUES_END_TAG)
 
     expect(venuesSection, 'README must contain <!-- VENUES:START --> ... <!-- VENUES:END --> tags').toBeTruthy()
 
-    const expectedVenues = renderVenuesTable(venueAdapters)
+    const expectedVenues = renderVenuesTable(registryAdapters)
     expect(venuesSection?.trim()).toBe(expectedVenues.trim())
   })
 
-  it('ensures every venue in venueAdapters is represented in the README', () => {
+  it('ensures every registered venue is represented in the README', () => {
     const readmeContent = readFileSync(readmePath, 'utf8')
     const venuesSection = extractSection(readmeContent, VENUES_START_TAG, VENUES_END_TAG) ?? ''
 
-    for (const adapter of venueAdapters) {
+    for (const adapter of registryAdapters) {
       expect(venuesSection).toContain(adapter.name)
       expect(venuesSection).toContain(`\`${adapter.source}\``)
     }
@@ -62,7 +66,7 @@ describe('README venue list and endpoint table generators', () => {
 
   it('fails when the README and venue registry diverge', () => {
     const fakeAdapters = [
-      ...venueAdapters,
+      ...registryAdapters,
       {
         name: 'NewDex',
         source: 'new_dex',

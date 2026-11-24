@@ -18,6 +18,7 @@ import {
   isPrimaryVenue,
   isAggregatorVenue,
   getVenueReasoning,
+  registeredVenues,
   type VenueAdapter,
 } from '../ingest/venues'
 
@@ -147,9 +148,14 @@ describe('venue classification has one source of truth (#244)', () => {
   // beside it. Two records of the same fact drift, and this one decides whether
   // a venue's volume is counted toward the published net total — so the
   // disagreement has to fail the build, not be resolved quietly at runtime.
+  // Every adapter the registry can start, not only the on-chain baseline in
+  // `venueAdapters`: the exchange venues (KuCoin, Gate.io, Coinbase) live only
+  // in `registeredVenues`, and their rows reach the same volume totals.
+  const allAdapters = [...new Set([...venueAdapters, ...registeredVenues.map((reg) => reg.adapter)])]
+
   it('agrees with every registered adapter', () => {
     const disagreements: string[] = []
-    for (const adapter of venueAdapters) {
+    for (const adapter of allAdapters) {
       const documented =
         VENUE_CLASSIFICATIONS[adapter.source] ?? VENUE_CLASSIFICATIONS[adapter.name]
       if (!documented) {
@@ -166,7 +172,7 @@ describe('venue classification has one source of truth (#244)', () => {
   })
 
   it('documents reasoning for every registered adapter', () => {
-    const missing = venueAdapters
+    const missing = allAdapters
       .filter((adapter) => !getVenueReasoning(adapter.source) && !getVenueReasoning(adapter.name))
       .map((adapter) => `${adapter.name} (${adapter.source})`)
     expect(missing).toEqual([])

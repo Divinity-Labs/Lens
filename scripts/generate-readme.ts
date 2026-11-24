@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
-import { venueAdapters, type VenueAdapter } from '../src/ingest/venues'
+import { registeredVenues, type VenueAdapter } from '../src/ingest/venues'
 import { isInternalRoute } from '../src/openapi/coverage'
 
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
@@ -179,9 +179,14 @@ export function extractSection(content: string, startTag: string, endTag: string
 }
 
 /**
- * Renders the markdown table of venue adapters registered in venueAdapters.
+ * Renders the markdown table of every venue in the registry (registeredVenues),
+ * including the exchange venues that only run when configured. `venueAdapters`
+ * is not used here: it is the on-chain baseline, and listing only it left the
+ * CEX venues undocumented.
  */
-export function renderVenuesTable(adapters: VenueAdapter[] = venueAdapters): string {
+export function renderVenuesTable(
+  adapters: VenueAdapter[] = registeredVenues.map((reg) => reg.adapter),
+): string {
   const lines = [
     '| Venue | Source | Type | Description |',
     '|---|---|---|---|',

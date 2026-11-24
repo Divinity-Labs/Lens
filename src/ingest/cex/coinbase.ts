@@ -22,12 +22,21 @@
  * data adapter, so nothing here needs a pasted-on-chain identifier.
  */
 
+import { createHash } from 'node:crypto'
 import { createLogger } from '../../logger'
 import { fetchWithTimeout } from '../../fetch'
 import type { NetworkName } from '../../config'
 import type { WatchedPair } from '../../types'
 import type { VenuePricePoint } from '../venues/types'
 import type { CexAdapter, CexOrderBook, CexTicker } from './index'
+import {
+  invert,
+  isPositive,
+  midpoint,
+  parseDecimal,
+  toDecimalString,
+  type ExactDecimal,
+} from './decimal'
 
 const log = createLogger('ingest:cex:coinbase')
 
@@ -183,6 +192,34 @@ interface CoinbaseBookResponse {
   time?: string
 }
 
+/** Coinbase product metadata — GET /products/{product_id}. */
+interface CoinbaseProductResponse {
+  id?: string
+  base_currency?: string
+  quote_currency?: string
+}
+
+/** A product Coinbase lists, in the exchange's own orientation (base-quote). */
+export interface CoinbaseProduct {
+  /** Exchange identifier, e.g. "XLM-USD". */
+  productId: string
+  base: string
+  quote: string
+}
+
+/**
+ * A Coinbase ticker: the CexTicker fields plus the exchange's own decimal
+ * strings. The number fields serve CexAdapter callers; `toPricePoint` prices
+ * from the strings, so a mid or an inverted quote is computed exactly rather
+ * than from a binary approximation of what the exchange sent.
+ */
+export interface CoinbaseTicker extends CexTicker {
+  /** Product the quote was read from, e.g. "XLM-USD". */
+  productId: string
+  /** Fields exactly as Coinbase sent them; a field is absent when it was missing. */
+  raw: { bid?: string; ask?: string; last?: string; time?: string }
+}
+
 export class CoinbaseAdapter implements CexAdapter {
   readonly name = 'Coinbase'
   readonly source = 'coinbase_cex'
@@ -286,7 +323,35 @@ export class CoinbaseAdapter implements CexAdapter {
     }
   }
 
-  async fetchTicker(base: string, quote: string): Promise<CexTicker | null> {
+  /**
+   * Find the product Coinbase lists for a pair, in whichever orientation the
+   * exchange uses. A Lens pair is configured as `assetA/assetB`, but Coinbase
+   * lists only one direction (it has "XLM-USD", not "USD-XLM"), so the
+   * configured order is tried first and the reverse second. Null when neither
+   * is listed or the exchange cannot be reached.
+   */
+  async resolveProduct(assetA: string, assetB: string): Promise<CoinbaseProduct | null> {
+    const candidates: [string, string][] = [
+      [assetA, assetB],
+      [assetB, assetA],
+    ]
+    for (const [base, quote] of candidates) {
+      const requested = toCoinbaseProductId(base, quote)
+      const data = await this.getJson<CoinbaseProductResponse>(`/products/${requested}`)
+      if (!data) continue
+      // Trust the exchange's description of its own product over our request.
+      const listed =
+        data.base_currency && data.quote_currency
+          ? fromCoinbaseProductId(`${data.base_currency}-${data.quote_currency}`)
+          : fromCoinbaseProductId(data.id ?? requested)
+      if (listed) {
+        return { productId: listed.productId, base: listed.base, quote: listed.quote }
+      }
+    }
+    return null
+  }
+
+  async fetchTicker(base: string, quote: string): Promise<CoinbaseTicker | null> {
     const productId = toCoinbaseProductId(base, quote)
     const data = await this.getJson<CoinbaseTickerResponse>(`/products/${productId}/ticker`)
     if (!data) return null
@@ -322,6 +387,13 @@ export class CoinbaseAdapter implements CexAdapter {
       // Coinbase reports 24h base volume only; quote volume is derived from it.
       quoteVolume: Number.isFinite(ref) ? baseVolume * ref : 0,
       timestamp: data.time ? new Date(data.time) : new Date(),
+      productId,
+      raw: {
+        bid: rawString(data.bid),
+        ask: rawString(data.ask),
+        last: rawString(data.price),
+        time: rawString(data.time),
+      },
     }
   }
 
@@ -363,19 +435,61 @@ export class CoinbaseAdapter implements CexAdapter {
    * attributed to. A CEX quote is identical across networks, so the caller
    * (running once per ENABLED_NETWORKS) decides which network owns the write.
    * `ledger` is 0 because an off-chain trade has no Stellar ledger.
+   *
+   * Issue #644:
+   * - Orientation. The stored price means units of `assetB` per one `assetA`.
+   *   When the pair is configured the other way round from the product
+   *   (pair USD/XLM, product XLM-USD), the quote is inverted. The mid and the
+   *   inversion are done on the exchange's decimal strings, exactly, and
+   *   rounded once at the price column's 18 decimal places.
+   * - Volume is zero. A ticker is a quote, not a trade: its 24h volume is a
+   *   rolling total, not volume traded at this observation, so copying it onto
+   *   every polled row would count the same day's volume again on each poll.
+   * - `eventId` is derived from the quote's content (pair, orientation,
+   *   product, the exchange's last-trade time and the derived price). Polling
+   *   an unchanged quote produces the same id, so the price_point_identity
+   *   index absorbs it instead of storing it again.
+   *
+   * Returns null when the ticker has no positive price, or when its product is
+   * not this pair in either orientation.
    */
   toPricePoint(
-    ticker: CexTicker,
+    ticker: CoinbaseTicker,
     pair: WatchedPair,
     network: NetworkName,
-  ): VenuePricePoint & { network: NetworkName } {
-    const bid = Number.isFinite(ticker.bid) ? ticker.bid : undefined
-    const ask = Number.isFinite(ticker.ask) ? ticker.ask : undefined
-    const mid = bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined
-    const price = mid ?? (Number.isFinite(ticker.last) ? ticker.last : bid ?? 0)
+  ): (VenuePricePoint & { network: NetworkName; eventId: string }) | null {
+    const product = fromCoinbaseProductId(ticker.productId)
+    if (!product) return null
 
-    const parsed = fromCoinbaseProductId(ticker.pair)
-    const productId = parsed?.productId ?? toCoinbaseProductId(pair.assetA.code, pair.assetB.code)
+    const assetA = pair.assetA.code.trim().toUpperCase()
+    const assetB = pair.assetB.code.trim().toUpperCase()
+    const direct = product.base === assetA && product.quote === assetB
+    const inverted = product.base === assetB && product.quote === assetA
+    if (!direct && !inverted) {
+      log.warn(
+        { productId: product.productId, pairKey: pair.pairKey },
+        'coinbase product is not this pair in either orientation; no price',
+      )
+      return null
+    }
+
+    // Coinbase quotes `product.quote` per one `product.base`.
+    const quoted = quotedPrice(ticker.raw)
+    const oriented = quoted && (inverted ? invert(quoted) : quoted)
+    if (!oriented) return null
+    const priceText = toDecimalString(oriented)
+    // The row's price field is a JS number; this is the one place it narrows.
+    const price = Number(priceText)
+    if (!(price > 0)) return null
+
+    const identity = [
+      pair.pairKey,
+      `${assetA}/${assetB}`,
+      product.productId,
+      ticker.raw.time ?? '',
+      priceText,
+    ].join('|')
+    const eventId = `coinbase-${product.productId}-${createHash('sha256').update(identity).digest('hex')}`
 
     return {
       network,
@@ -383,16 +497,36 @@ export class CoinbaseAdapter implements CexAdapter {
       assetB: pair.assetB.code,
       pairKey: pair.pairKey,
       source: this.source,
-      poolId: `coinbase:${productId}`,
+      poolId: `coinbase:${product.productId}`,
       price,
-      baseVolume: ticker.baseVolume,
-      counterVolume: ticker.quoteVolume,
+      baseVolume: 0,
+      counterVolume: 0,
       ledger: 0,
       observedAt: new Date(),
       sourceTime: ticker.timestamp,
       timestamp: ticker.timestamp,
+      eventId,
     }
   }
+}
+
+/**
+ * The quote's price in the product's own orientation: the bid/ask mid when
+ * both sides are present, else the last trade, else whichever side exists.
+ */
+function quotedPrice(raw: CoinbaseTicker['raw']): ExactDecimal | null {
+  const positive = (text: string | undefined): ExactDecimal | null => {
+    const value = parseDecimal(text)
+    return value && isPositive(value) ? value : null
+  }
+  const bid = positive(raw.bid)
+  const ask = positive(raw.ask)
+  if (bid && ask) return midpoint(bid, ask)
+  return positive(raw.last) ?? bid ?? ask
+}
+
+function rawString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function numOrNaN(value: string | number | undefined): number {

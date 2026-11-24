@@ -20,6 +20,7 @@ export { defindexAdapter, startDeFindexIngester } from './defindex'
 export { phoenixAdapter, startPhoenixIngester } from './phoenix'
 export { kucoinAdapter, startKuCoinIngester } from './kucoin'
 export { gateioAdapter, startGateioIngester } from './gateio'
+export { coinbaseAdapter, startCoinbaseIngester } from './coinbase'
 
 /**
  * Registry of default baseline venue adapters.
@@ -149,6 +150,20 @@ export const VENUE_CLASSIFICATIONS: Record<string, VenueClassificationInfo> = {
     classification: 'primary',
     reasoning:
       'Centralized spot exchange order book. Independent order matching establishing external market reference prices.',
+  },
+  coinbase_cex: {
+    name: 'Coinbase',
+    source: 'coinbase_cex',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book (Coinbase Exchange). Independent order matching establishing external market reference prices. Rows are ticker quotes written with zero volume, so it adds nothing to volume totals either way.',
+  },
+  Coinbase: {
+    name: 'Coinbase',
+    source: 'coinbase_cex',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book (Coinbase Exchange). Independent order matching establishing external market reference prices. Rows are ticker quotes written with zero volume, so it adds nothing to volume totals either way.',
   },
 }
 

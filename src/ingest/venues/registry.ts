@@ -1,7 +1,7 @@
 /**
  * Configuration-Driven Venue Adapter Registry
  *
- * Central registry of all venue adapters (SDEX, AMM, Soroswap, Aquarius, KuCoin, Gate.io).
+ * Central registry of all venue adapters (SDEX, AMM, Soroswap, Aquarius, KuCoin, Gate.io, Coinbase).
  * Automatically enables adapters based on environment credentials and configuration,
  * skipping unconfigured venues with a descriptive log line so that missing credentials
  * for one venue do not prevent other venues from running.
@@ -17,14 +17,21 @@ import { defindexAdapter } from './defindex'
 import { phoenixAdapter } from './phoenix'
 import { kucoinAdapter, hasKuCoinCredentials } from './kucoin'
 import { gateioAdapter, hasGateioCredentials } from './gateio'
+import { coinbaseAdapter, isCoinbaseConfigured } from './coinbase'
 import type { VenueAdapter } from './types'
+import type { NetworkName } from '../../config'
 import { createLogger } from '../../logger'
 
 const log = createLogger('venues:registry')
 
 export interface VenueRegistration {
   adapter: VenueAdapter
-  hasCredentials: () => boolean
+  /**
+   * Whether the venue's credentials or enable flag are present. A venue that is
+   * switched on per network (Coinbase) answers for `network` when one is
+   * given, and for "any network" when it is not.
+   */
+  hasCredentials: (network?: NetworkName) => boolean
 }
 
 /**
@@ -64,19 +71,28 @@ export const registeredVenues: VenueRegistration[] = [
     adapter: gateioAdapter,
     hasCredentials: hasGateioCredentials,
   },
+  {
+    // Needs no key, so it is gated on an explicit per-network switch instead
+    // (COINBASE_ENABLED_<NETWORK>, default off).
+    adapter: coinbaseAdapter,
+    hasCredentials: isCoinbaseConfigured,
+  },
 ]
 
 /**
  * Returns all adapters that have required credentials and configuration present.
  * Venues missing credentials are logged and skipped without throwing or blocking others.
+ *
+ * Pass `network` when starting ingesters for one network, so a venue switched
+ * on only for the other network is not started on this one.
  */
-export function getEnabledAdapters(): VenueAdapter[] {
+export function getEnabledAdapters(network?: NetworkName): VenueAdapter[] {
   const enabled: VenueAdapter[] = []
   for (const reg of registeredVenues) {
-    if (!reg.hasCredentials()) {
+    if (!reg.hasCredentials(network)) {
       log.info(
-        { venue: reg.adapter.name },
-        'venue credentials missing in environment; adapter skipped'
+        { venue: reg.adapter.name, network },
+        'venue credentials or enable flag missing in environment; adapter skipped'
       )
       continue
     }

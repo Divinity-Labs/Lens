@@ -83,6 +83,9 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | Aquarius | `aquarius_amm` | Liquidity Pool | Aquarius AMM liquidity pools |
 | DeFindex | `defindex_vault` | Vault | DeFindex yield vaults on Soroban, priced per share |
 | Phoenix | `phoenix_amm` | Liquidity Pool | Phoenix AMM pools on Soroban |
+| KuCoin | `KuCoin` | Order Book | KuCoin centralized spot exchange |
+| Gate.io | `Gate.io` | Order Book | Gate.io centralized spot exchange |
+| Coinbase | `coinbase_cex` | Order Book | Coinbase Exchange centralized spot exchange (public ticker, no API key); off unless enabled per network |
 <!-- VENUES:END -->
 
 ## Endpoints
