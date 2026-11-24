@@ -187,6 +187,8 @@ describe('Observation and Source Time Separation (#240)', () => {
       const pools = [
         {
           pool_hash: 'aquarius-pool-1',
+          tokens_str: ['native', 'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'],
+          pool_type: 'constant_product',
           reserves: ['1000.0', '150.0'],
         },
       ]

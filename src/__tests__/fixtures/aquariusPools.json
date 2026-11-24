@@ -1,0 +1,107 @@
+{
+  "total": 5,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "index": "b2e02fcfca6c96f8ad5cbd84e7784a777b36d9c96a2459402c4f458462aab7f0",
+      "address": "CA6PUJLBYKZKUEKLZJMKBZLEKP2OTHANDEOWSFF44FTSYLKQPIICCJBE",
+      "tokens_addresses": [
+        "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+        "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
+      ],
+      "tokens_str": [
+        "native",
+        "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+      ],
+      "pool_type": "constant_product",
+      "fee": "0.0010",
+      "a": null,
+      "reserves": [
+        "10000000.0000000",
+        "1250000.0000000"
+      ],
+      "total_share": "5000000.0000000"
+    },
+    {
+      "index": "b2e02fcfca6c96f8ad5cbd84e7784a777b36d9c96a2459402c4f458462aab7f1",
+      "address": "CA6PUJLBYKZKUEKLZJMKBZLEKP2OTHANDEOWSFF44FTSYLKQPIICCJBF",
+      "tokens_addresses": [
+        "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
+        "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
+      ],
+      "tokens_str": [
+        "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "native"
+      ],
+      "pool_type": "constant_product",
+      "fee": "0.0010",
+      "a": null,
+      "reserves": [
+        "1250000.0000000",
+        "10000000.0000000"
+      ],
+      "total_share": "5000000.0000000"
+    },
+    {
+      "index": "4d7239499047441abf522b1a663e59b0b08c25738ff2ed174f1f35d79a2ed6fb",
+      "address": "CDRRLXLBXYVENKIUCCTFUT5WW6BW43NJMAPEMGU6VIU74LV6526OLS35",
+      "tokens_addresses": [
+        "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
+        "CDTSZ2VWVPLNCTHVFK7Y2KKOYDH32NAZ5KMPZIMP3BJ2WBAVPH6SWECE"
+      ],
+      "tokens_str": [
+        "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        "USDC:GCBYVQH3RZ4JDVFMNWETE3J6U3AW6NNGTIWNVJHNQIIEGQR4K7PLUSDC"
+      ],
+      "pool_type": "stable",
+      "fee": "0.0010",
+      "a": 1500,
+      "reserves": [
+        "394945113444.0000000",
+        "376679156079.0000000"
+      ],
+      "total_share": "134003547194526.0000000"
+    },
+    {
+      "index": "49136338380911dda8f39cc141fcdbfb001149f9a9fde30c7fa6a098e6a96fd6",
+      "address": "CCGTSQ3AR4OUYET5WEIGLL5BNYMDFRNTWVCDO2BSW5Q4SYZLRFYSD2BU",
+      "tokens_addresses": [
+        "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+        "CD5F4U6CI2ROVJFGVX4JPGUOCQW7HUU5YLNDADLI5IC2L53FCGIJD6SE"
+      ],
+      "tokens_str": [
+        "native",
+        "LUMI"
+      ],
+      "pool_type": "concentrated",
+      "fee": "0.0100",
+      "a": null,
+      "reserves": [
+        "73388017583.0000000",
+        "7330670274758441.0000000"
+      ],
+      "total_share": "44819419680866.0000000"
+    },
+    {
+      "index": "9ac7a9cde23ac2ada11105eeaa42e43c2ea8332ca0aa8f41f58d7160274d718e",
+      "address": "CAB6MICC2WKRT372U3FRPKGGVB5R3FDJSMWSLPF2UJNJPYMBZ76RQVYE",
+      "tokens_addresses": [
+        "CAUIKL3IYGMERDRUN6YSCLWVAKIFG5Q4YJHUKM4S4NJZQIA3BAS6OJPK",
+        "CD25MNVTZDL4Y3XBCPCJXGXATV5WUHHOWMYFF4YBEGU5FCPGMYTVG5JY"
+      ],
+      "tokens_str": [
+        "AQUA:GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA",
+        "BLND:GDJEHTBE6ZHUXSWFI642DCGLUOECLHPF3KSXHPXTSTJ7E3JF6MQ5EZYY"
+      ],
+      "pool_type": "constant_product",
+      "fee": "0.0030",
+      "a": null,
+      "reserves": [
+        "5000000.0000000",
+        "200000.0000000"
+      ],
+      "total_share": "1000000.0000000"
+    }
+  ]
+}
