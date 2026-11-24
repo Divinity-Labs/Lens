@@ -156,6 +156,29 @@ function markCheckIncomplete(data: AssetMetadata): AssetMetadata {
   }
 }
 
+function normalizeCachedAsset(data: AssetMetadata): { data: AssetMetadata; legacy: boolean } {
+  const verificationComplete = data.verification?.checkComplete
+  const provenanceComplete = data.provenance?.checkComplete
+  if (typeof verificationComplete === 'boolean' && typeof provenanceComplete === 'boolean') {
+    return { data, legacy: false }
+  }
+
+  const checkComplete =
+    typeof verificationComplete === 'boolean'
+      ? verificationComplete
+      : typeof provenanceComplete === 'boolean'
+        ? provenanceComplete
+        : data.verified
+  return {
+    data: {
+      ...data,
+      verification: { ...data.verification, checkComplete },
+      provenance: { ...data.provenance, checkComplete },
+    },
+    legacy: true,
+  }
+}
+
 type TomlLookupResult =
   | { ok: true; toml: Record<string, unknown> }
   | { ok: false; completed: boolean; failure?: string }
@@ -300,11 +323,17 @@ export async function resolveAssetMetadata(
   const redisCached = await getCachedAsset(network, `${code}:${issuer}`)
   if (redisCached) {
     try {
-      const parsed = JSON.parse(redisCached) as AssetMetadata
-      const cachedTtl = parsed.verification?.checkComplete === false
+      const { data: parsed, legacy } = normalizeCachedAsset(JSON.parse(redisCached) as AssetMetadata)
+      const cachedTtl = !parsed.verification.checkComplete
         ? failureTtlSeconds
         : ttlSeconds
+      if (!parsed.verification.checkComplete) {
+        logFailedLookupOnce(cacheKey, { code, issuer }, network, ['cached_lookup_status_unknown'], failureTtlSeconds)
+      }
       setMemoryCached(cacheKey, parsed, cachedTtl)
+      if (legacy) {
+        await setCachedAsset(network, `${code}:${issuer}`, parsed, cachedTtl)
+      }
       return parsed
     } catch {
       // Ignore cache JSON parse failure and proceed to re-resolve

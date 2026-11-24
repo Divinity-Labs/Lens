@@ -419,6 +419,40 @@ issuer = "${ANOTHER_ISSUER}"
     expect(mockSsrfSafeFetch).toHaveBeenCalledTimes(1)
   })
 
+  it('shortens legacy unverified Redis entries that cannot report lookup completion', async () => {
+    const checkedAt = '2026-01-01T00:00:00.000Z'
+    mockGetCachedAsset.mockResolvedValueOnce(JSON.stringify({
+      code: 'USDC',
+      issuer: VALID_ISSUER,
+      name: null,
+      homeDomain: null,
+      domain: null,
+      decimals: 7,
+      displayDecimals: null,
+      status: 'unverified',
+      verified: false,
+      checkedAt,
+      dateChecked: checkedAt,
+      contractId: null,
+      tomlUrl: null,
+      verification: { status: 'unverified', verified: false, checkedAt, tomlUrl: null },
+      provenance: { source: 'horizon', checkedAt, tomlUrl: null, verified: false },
+    }))
+
+    const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+
+    expect(meta.verification.checkComplete).toBe(false)
+    expect(meta.provenance.checkComplete).toBe(false)
+    expect(mockSetCachedAsset).toHaveBeenCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
+    expect(mockLogWarn).toHaveBeenCalledOnce()
+    expect(mockLoadAccount).not.toHaveBeenCalled()
+  })
+
   it('retries a Horizon failure after the short TTL and warns once per failure window', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
