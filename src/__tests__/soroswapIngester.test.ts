@@ -40,6 +40,7 @@ vi.mock('../ingest/venues/soroswap', async (importOriginal) => {
     fetchPoolsFromFactory: vi.fn(),
     fetchSoroswapTokenList: vi.fn(),
     fetchTokenDecimals: vi.fn().mockImplementation(async () => null),
+    fetchPoolToken0: vi.fn().mockImplementation(async () => 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'),
   }
 })
 
@@ -52,9 +53,14 @@ import {
   fetchPoolReserves,
   fetchPoolsFromFactory,
   fetchTokenDecimals,
+  fetchPoolToken0,
   getCachedTokenDecimals,
   setCachedTokenDecimals,
   _resetTokenDecimalsCache,
+  getCachedPoolToken0,
+  setCachedPoolToken0,
+  _resetPoolToken0Cache,
+  soroswapAdapter,
   isPricePlausible,
   type PoolEntry,
   type SoroswapToken,
@@ -89,8 +95,16 @@ const usdcToken: SoroswapToken = {
 
 // ── calcSpotPrice ─────────────────────────────────────────────────────────────
 describe('calcSpotPrice', () => {
-  it('returns reserveA / reserveB as a number', () => {
-    expect(calcSpotPrice(1000n, 200n)).toBeCloseTo(5.0)
+  it('returns reserveB / reserveA as units of assetB per 1 assetA (#632)', () => {
+    // Lens convention: units of assetB per unit of assetA (200 / 1000 = 0.2)
+    expect(calcSpotPrice(1000n, 200n)).toBeCloseTo(0.2)
+  })
+
+  it('matches the Horizon AMM formula for the same reserves (#632)', () => {
+    const reserveA = 10_000_000n
+    const reserveB = 2_000_000n
+    const horizonAmmPrice = Number(reserveB) / Number(reserveA)
+    expect(calcSpotPrice(reserveA, reserveB)).toBeCloseTo(horizonAmmPrice, 8)
   })
 
   it('returns 0 when reserveA is zero (empty pool guard)', () => {
@@ -101,31 +115,40 @@ describe('calcSpotPrice', () => {
     expect(calcSpotPrice(1000n, 0n)).toBe(0)
   })
 
-  it('handles large i128 reserves correctly', () => {
-    // 10_000_000 / 2_000_000 = 5.0 (7-decimal precision amounts)
-    expect(calcSpotPrice(10_000_000n, 2_000_000n)).toBeCloseTo(5.0)
+  it('handles large i128 reserves correctly without float loss (#632)', () => {
+    // 2_000_000 / 10_000_000 = 0.2 (7-decimal precision amounts)
+    expect(calcSpotPrice(10_000_000n, 2_000_000n)).toBeCloseTo(0.2)
+
+    // Arbitrary large amounts
+    expect(calcSpotPrice(100_000_000_000_000_000n, 50_000_000_000_000_000n)).toBeCloseTo(0.5)
   })
 
   it('handles 1:1 ratio', () => {
     expect(calcSpotPrice(5000n, 5000n)).toBe(1)
   })
 
-  it('scales reserves correctly when token decimals differ from 7 (#227)', () => {
-    // Token A (USDC) has 6 decimals, Token B (XLM) has 7 decimals
-    // 10 USDC (10 * 10^6 = 10,000,000) and 100 XLM (100 * 10^7 = 1,000,000,000)
+  it('scales reserves correctly when token decimals differ from 7 (#227, #632)', () => {
+    // Token A (XLM) has 7 decimals, Token B (USDC) has 6 decimals
+    // 100 XLM (100 * 10^7 = 1,000,000,000) and 10 USDC (10 * 10^6 = 10,000,000)
     // Price = 10 USDC / 100 XLM = 0.1 USDC per XLM
-    const priceA = calcSpotPrice(10_000_000n, 1_000_000_000n, 6, 7)
+    const priceA = calcSpotPrice(1_000_000_000n, 10_000_000n, 7, 6)
     expect(priceA).toBeCloseTo(0.1, 5)
 
+    // Token A has 6 decimals, Token B has 7 decimals
+    // 10 units of A (10 * 10^6 = 10_000_000) and 100 units of B (100 * 10^7 = 1_000_000_000)
+    // Price = 100 B / 10 A = 10.0 B per A
+    const priceB = calcSpotPrice(10_000_000n, 1_000_000_000n, 6, 7)
+    expect(priceB).toBeCloseTo(10.0, 5)
+
     // Token A has 18 decimals, Token B has 7 decimals
-    // 5 * 10^18 A and 10 * 10^7 B -> price = 5 / 10 = 0.5
-    const priceB = calcSpotPrice(5_000_000_000_000_000_000n, 100_000_000n, 18, 7)
-    expect(priceB).toBeCloseTo(0.5, 5)
+    // 5 * 10^18 A (5 units) and 10 * 10^7 B (10 units) -> price = 10 / 5 = 2.0
+    const priceC = calcSpotPrice(5_000_000_000_000_000_000n, 100_000_000n, 18, 7)
+    expect(priceC).toBeCloseTo(2.0, 5)
 
     // Token A has 7 decimals, Token B has 6 decimals
-    // 20 * 10^7 A and 10 * 10^6 B -> price = 20 / 10 = 2.0
-    const priceC = calcSpotPrice(200_000_000n, 10_000_000n, 7, 6)
-    expect(priceC).toBeCloseTo(2.0, 5)
+    // 20 * 10^7 A (20 units) and 10 * 10^6 B (10 units) -> price = 10 / 20 = 0.5
+    const priceD = calcSpotPrice(200_000_000n, 10_000_000n, 7, 6)
+    expect(priceD).toBeCloseTo(0.5, 5)
   })
 })
 
@@ -171,18 +194,9 @@ describe('ingestPool', () => {
   }
 
   beforeEach(() => {
-    // `clearAllMocks` clears calls but leaves implementations in place, so the
-    // `mockRejectedValue` set by the "does not throw when upsertPricePoints
-    // rejects" case below would otherwise survive into whichever test runs
-    // next. Under a shuffled run that poisons this test (upsertPricePoints
-    // rejects, ingestPool bails early, dispatchPriceUpdate is never called),
-    // so re-establish the default resolution every time.
     vi.clearAllMocks()
-    ;(upsertPricePoints as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
-    // clearAllMocks resets call history but not implementations, so restore the
-    // default resolved behavior each test starts from. Without this, a prior
-    // test's mockRejectedValue could survive into the next one under shuffled
-    // ordering.
+    _resetPoolToken0Cache()
+    setCachedPoolToken0(mockPoolEntry.poolAddress, mockPoolEntry.tokenA.address)
     ;(upsertPricePoints as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
     ;(dispatchPriceUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
   })
@@ -198,7 +212,7 @@ describe('ingestPool', () => {
       expect.arrayContaining([
         expect.objectContaining({
           source: 'soroswap_amm',
-          price: expect.closeTo(5.0, 5),
+          price: expect.closeTo(0.2, 5),
           poolId: mockPoolEntry.poolAddress,
         }),
       ]),
@@ -238,10 +252,10 @@ describe('ingestPool', () => {
     await expect(ingestPool(mockPoolEntry, mockPair as any, mockFetch)).resolves.toBeUndefined()
   })
 
-  it('correctly reads and scales for tokens with decimals other than 7 (#227)', async () => {
+  it('correctly reads and scales for tokens with decimals other than 7 (#227, #632)', async () => {
     // 10_000_000 raw tokenA (with 6 decimals = 10 units)
     // 1_000_000_000 raw tokenB (with 7 decimals = 100 units)
-    // spotPrice = 10 / 100 = 0.1
+    // spotPrice = 100 / 10 = 10.0 units of assetB per 1 unit of assetA
     const mockFetch = vi.fn().mockResolvedValue([10_000_000n, 1_000_000_000n])
     const mockDecimals = vi.fn().mockImplementation(async (addr: string) => {
       if (addr === mockPoolEntry.tokenA.address) return 6
@@ -257,7 +271,7 @@ describe('ingestPool', () => {
       expect.arrayContaining([
         expect.objectContaining({
           source: 'soroswap_amm',
-          price: expect.closeTo(0.1, 5),
+          price: expect.closeTo(10.0, 5),
           poolId: mockPoolEntry.poolAddress,
         }),
       ]),
@@ -267,7 +281,7 @@ describe('ingestPool', () => {
 
   it('rejects derived price outside plausible sanity range and increments metric (#227)', async () => {
     // Extremely small price (1n / 100_000_000_000_000n = 1e-14 < 1e-10 min)
-    const mockFetch = vi.fn().mockResolvedValue([1n, 100_000_000_000_000n])
+    const mockFetch = vi.fn().mockResolvedValue([100_000_000_000_000n, 1n])
 
     await ingestPool(mockPoolEntry, mockPair as any, mockFetch, 'testnet')
 
@@ -345,5 +359,268 @@ describe('fetchSoroswapTokenList', () => {
 
     const result = await fetchSoroswapTokenList()
     expect(result).toEqual([])
+  })
+})
+
+// ── Token matching & reserve ordering (#632) ──────────────────────────────────
+describe('Soroswap token matching and reserve ordering (#632)', () => {
+  const poolForward: PoolEntry = {
+    poolAddress: 'CPOOL_FORWARD_0000000000000000000000000000000000000000000001',
+    tokenA: xlmToken,
+    tokenB: usdcToken,
+  }
+
+  const poolReverse: PoolEntry = {
+    poolAddress: 'CPOOL_REVERSE_0000000000000000000000000000000000000000000002',
+    tokenA: xlmToken,
+    tokenB: usdcToken,
+  }
+
+  const token6Decimals: SoroswapToken = {
+    address: 'CUSDC6DECIMALS0000000000000000000000000000000000000000000000',
+    symbol: 'USDC',
+    name: 'USD Coin',
+    decimals: 6,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetPoolToken0Cache()
+    ;(upsertPricePoints as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    ;(dispatchPriceUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+  })
+
+  it('produces the same price whether token_0 is assetA or assetB', async () => {
+    // 10 XLM (assetA) and 2 USDC (assetB) -> price = 2 / 10 = 0.2 USDC per XLM
+    // Forward pool: token_0 = assetA (XLM), reserves = [10_000_000n, 2_000_000n]
+    const fetchForward = vi.fn().mockResolvedValue([10_000_000n, 2_000_000n])
+    const fetchToken0Forward = vi.fn().mockResolvedValue(xlmToken.address)
+
+    await ingestPool(
+      poolForward,
+      mockPair as any,
+      fetchForward,
+      'mainnet',
+      undefined,
+      undefined,
+      fetchToken0Forward
+    )
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          poolId: poolForward.poolAddress,
+          price: expect.closeTo(0.2, 5),
+        }),
+      ]),
+      'mainnet'
+    )
+
+    // Reverse pool: token_0 = assetB (USDC), reserves = [2_000_000n, 10_000_000n]
+    const fetchReverse = vi.fn().mockResolvedValue([2_000_000n, 10_000_000n])
+    const fetchToken0Reverse = vi.fn().mockResolvedValue(usdcToken.address)
+
+    await ingestPool(
+      poolReverse,
+      mockPair as any,
+      fetchReverse,
+      'mainnet',
+      undefined,
+      undefined,
+      fetchToken0Reverse
+    )
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          poolId: poolReverse.poolAddress,
+          price: expect.closeTo(0.2, 5),
+        }),
+      ]),
+      'mainnet'
+    )
+  })
+
+  it('compares directly against the Horizon AMM formula (reserveB / reserveA)', async () => {
+    const rawReserveA = 25_000_000n
+    const rawReserveB = 5_000_000n
+    const horizonPrice = Number(rawReserveB) / Number(rawReserveA) // 0.2
+
+    // Forward: token_0 = assetA
+    setCachedPoolToken0(poolForward.poolAddress, xlmToken.address)
+    const fetchForward = vi.fn().mockResolvedValue([rawReserveA, rawReserveB])
+    await ingestPool(poolForward, mockPair as any, fetchForward, 'mainnet')
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          price: expect.closeTo(horizonPrice, 6),
+        }),
+      ]),
+      'mainnet'
+    )
+
+    // Reverse: token_0 = assetB
+    setCachedPoolToken0(poolReverse.poolAddress, usdcToken.address)
+    const fetchReverse = vi.fn().mockResolvedValue([rawReserveB, rawReserveA])
+    await ingestPool(poolReverse, mockPair as any, fetchReverse, 'mainnet')
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          price: expect.closeTo(horizonPrice, 6),
+        }),
+      ]),
+      'mainnet'
+    )
+  })
+
+  it('scales tokens with different decimals on the correct side in both orders', async () => {
+    // XLM has 7 decimals: 100 XLM = 1_000_000_000n
+    // USDC has 6 decimals: 10 USDC = 10_000_000n
+    // Price = 10 USDC / 100 XLM = 0.1 USDC per XLM
+    const entryDiffDecimalsForward: PoolEntry = {
+      poolAddress: 'CPOOL_DIFF_FORWARD_000000000000000000000000000000000000001',
+      tokenA: xlmToken, // decimals 7
+      tokenB: token6Decimals, // decimals 6
+    }
+    const entryDiffDecimalsReverse: PoolEntry = {
+      poolAddress: 'CPOOL_DIFF_REVERSE_000000000000000000000000000000000000002',
+      tokenA: xlmToken,
+      tokenB: token6Decimals,
+    }
+
+    // Forward order: token_0 = tokenA (7 dec), token_1 = tokenB (6 dec)
+    setCachedPoolToken0(entryDiffDecimalsForward.poolAddress, xlmToken.address)
+    const fetchForward = vi.fn().mockResolvedValue([1_000_000_000n, 10_000_000n])
+    await ingestPool(entryDiffDecimalsForward, mockPair as any, fetchForward, 'mainnet')
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          poolId: entryDiffDecimalsForward.poolAddress,
+          price: expect.closeTo(0.1, 5),
+        }),
+      ]),
+      'mainnet'
+    )
+
+    // Reverse order: token_0 = tokenB (6 dec), token_1 = tokenA (7 dec)
+    setCachedPoolToken0(entryDiffDecimalsReverse.poolAddress, token6Decimals.address)
+    const fetchReverse = vi.fn().mockResolvedValue([10_000_000n, 1_000_000_000n])
+    await ingestPool(entryDiffDecimalsReverse, mockPair as any, fetchReverse, 'mainnet')
+
+    expect(upsertPricePoints).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          poolId: entryDiffDecimalsReverse.poolAddress,
+          price: expect.closeTo(0.1, 5),
+        }),
+      ]),
+      'mainnet'
+    )
+  })
+
+  it('skips a pool whose tokens do not match the pair', async () => {
+    const poolUnmatched: PoolEntry = {
+      poolAddress: 'CPOOL_UNMATCHED_00000000000000000000000000000000000000000001',
+      tokenA: xlmToken,
+      tokenB: usdcToken,
+    }
+    const fetchReserves = vi.fn().mockResolvedValue([10_000_000n, 2_000_000n])
+    const fetchToken0 = vi.fn().mockResolvedValue('CSOMEOTHERTOKEN0000000000000000000000000000000000000000000')
+
+    await ingestPool(
+      poolUnmatched,
+      mockPair as any,
+      fetchReserves,
+      'mainnet',
+      undefined,
+      undefined,
+      fetchToken0
+    )
+
+    expect(upsertPricePoints).not.toHaveBeenCalled()
+  })
+
+  it('reads token_0 once per pool and caches it across cycles', async () => {
+    const poolAddr = 'CPOOL_CACHE_TEST_00000000000000000000000000000000000000001'
+    const poolEntry: PoolEntry = {
+      poolAddress: poolAddr,
+      tokenA: xlmToken,
+      tokenB: usdcToken,
+    }
+
+    const fetchToken0Mock = vi.fn().mockResolvedValue(xlmToken.address)
+    const fetchReservesMock = vi.fn().mockResolvedValue([10_000_000n, 2_000_000n])
+
+    // Cycle 1: token_0 is fetched and cached
+    await ingestPool(
+      poolEntry,
+      mockPair as any,
+      fetchReservesMock,
+      'mainnet',
+      undefined,
+      undefined,
+      fetchToken0Mock
+    )
+    expect(fetchToken0Mock).toHaveBeenCalledTimes(1)
+    expect(getCachedPoolToken0(poolAddr)).toBe(xlmToken.address)
+
+    // Cycle 2: ingestPool is called again, but token_0 is served from cache without calling fetchToken0Mock
+    await ingestPool(
+      poolEntry,
+      mockPair as any,
+      fetchReservesMock,
+      'mainnet',
+      undefined,
+      undefined,
+      fetchToken0Mock
+    )
+    expect(fetchToken0Mock).toHaveBeenCalledTimes(1)
+    expect(getCachedPoolToken0(poolAddr)).toBe(xlmToken.address)
+  })
+
+  it('derives price in soroswapAdapter.derive with correct mapping in both directions', () => {
+    const poolAddr = 'CPOOL_DERIVE_TEST_00000000000000000000000000000000000000001'
+    const target: PoolEntry = {
+      poolAddress: poolAddr,
+      tokenA: xlmToken,
+      tokenB: usdcToken,
+    }
+
+    // Forward: token_0 is tokenA
+    setCachedPoolToken0(poolAddr, xlmToken.address)
+    const forwardPoints = soroswapAdapter.derive(
+      [10_000_000n, 2_000_000n],
+      target,
+      mockPair as any,
+      'mainnet'
+    )
+    expect(forwardPoints).toHaveLength(1)
+    expect(forwardPoints[0].price).toBeCloseTo(0.2, 5)
+    expect(forwardPoints[0].eventId).toBe(`soroswap-${poolAddr}-10000000-2000000`)
+
+    // Reverse: token_0 is tokenB
+    setCachedPoolToken0(poolAddr, usdcToken.address)
+    const reversePoints = soroswapAdapter.derive(
+      [2_000_000n, 10_000_000n],
+      target,
+      mockPair as any,
+      'mainnet'
+    )
+    expect(reversePoints).toHaveLength(1)
+    expect(reversePoints[0].price).toBeCloseTo(0.2, 5)
+    expect(reversePoints[0].eventId).toBe(`soroswap-${poolAddr}-2000000-10000000`)
+
+    // Unknown token_0
+    setCachedPoolToken0(poolAddr, 'CUNKNOWN_TOKEN')
+    const unmatchedPoints = soroswapAdapter.derive(
+      [10_000_000n, 2_000_000n],
+      target,
+      mockPair as any,
+      'mainnet'
+    )
+    expect(unmatchedPoints).toHaveLength(0)
   })
 })

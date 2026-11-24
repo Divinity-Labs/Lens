@@ -198,6 +198,76 @@ export async function fetchPoolReserves(
   }
 }
 
+// ── Token 0 reading & caching ────────────────────────────────────────────────
+
+const poolToken0Cache = new Map<string, string>()
+
+export function _resetPoolToken0Cache(): void {
+  poolToken0Cache.clear()
+}
+
+export function getCachedPoolToken0(poolAddress: string): string | undefined {
+  return poolToken0Cache.get(poolAddress)
+}
+
+export function setCachedPoolToken0(poolAddress: string, token0Address: string): void {
+  poolToken0Cache.set(poolAddress, token0Address)
+}
+
+/**
+ * Read a Soroswap pool's token_0 contract address via Soroban RPC simulation, with caching.
+ * A pool's token_0 address is immutable on-chain.
+ */
+export async function fetchPoolToken0(
+  poolAddress: string,
+  network: NetworkName = activeNetwork
+): Promise<string | null> {
+  const cached = getCachedPoolToken0(poolAddress)
+  if (cached !== undefined) return cached
+
+  try {
+    if (typeof getRpcServer !== 'function') return null
+    const rpc = getRpcServer(network)
+    if (!rpc) return null
+    const pool = new Contract(poolAddress)
+    const account = new Account(FEE_PAYER_KEYPAIR.publicKey(), '0')
+    const networkPassphrase =
+      getNetworkConfig(network).network.passphrase ?? Networks.PUBLIC
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(pool.call('token_0'))
+      .setTimeout(30)
+      .build()
+
+    const sim = await rpc.simulateTransaction(tx)
+
+    if (SorobanRpc.Api.isSimulationError(sim)) {
+      log.debug(
+        { pool: poolAddress, error: sim.error },
+        'token_0 simulation error'
+      )
+      return null
+    }
+
+    if (!sim.result?.retval) return null
+
+    const token0Val = scValToNative(sim.result.retval)
+    if (typeof token0Val !== 'string') return null
+
+    setCachedPoolToken0(poolAddress, token0Val)
+    return token0Val
+  } catch (err) {
+    log.debug(
+      { pool: poolAddress, err },
+      'fetchPoolToken0 error'
+    )
+    return null
+  }
+}
+
 // ── Token decimals reading & caching ──────────────────────────────────────────
 
 const tokenDecimalsCache = new Map<string, number>()
@@ -277,9 +347,9 @@ export async function fetchTokenDecimals(
  * Pure function: calculate spot price from constant-product reserves scaled by token decimals.
  * Returns 0 if either reserve is zero (empty pool guard).
  *
- * price = (reserveA / 10^decimalsA) / (reserveB / 10^decimalsB)
- *       = (reserveA / reserveB) * 10^(decimalsB - decimalsA)
- * (price of assetB denominated in assetA)
+ * Follows the standard Lens convention: units of assetB per 1 unit of assetA.
+ * price = (reserveB / 10^decimalsB) / (reserveA / 10^decimalsA)
+ *       = (reserveB / reserveA) * 10^(decimalsA - decimalsB)
  */
 export function calcSpotPrice(
   reserveA: bigint,
@@ -287,12 +357,23 @@ export function calcSpotPrice(
   decimalsA: number = 7,
   decimalsB: number = 7
 ): number {
-  if (reserveA === 0n || reserveB === 0n) return 0
-  if (decimalsA === decimalsB) {
-    return Number(reserveA) / Number(reserveB)
+  if (reserveA <= 0n || reserveB <= 0n) return 0
+
+  let num = reserveB
+  let den = reserveA
+
+  if (decimalsA > decimalsB) {
+    num = num * (10n ** BigInt(decimalsA - decimalsB))
+  } else if (decimalsB > decimalsA) {
+    den = den * (10n ** BigInt(decimalsB - decimalsA))
   }
-  const scale = Math.pow(10, decimalsB - decimalsA)
-  return (Number(reserveA) / Number(reserveB)) * scale
+
+  // Exact division scaled by 10^18 to prevent precision loss before the ratio is taken
+  const scaled = (num * 10n ** 18n) / den
+  if (scaled > 0n) {
+    return Number(scaled) / 1e18
+  }
+  return Number(num) / Number(den)
 }
 
 /**
@@ -309,8 +390,8 @@ export function isPricePlausible(
 // ── Per-pool ingestion ────────────────────────────────────────────────────────
 
 /**
- * Fetch reserves for a single pool, compute spot price, and store a price point.
- * Skips silently on empty pool or RPC failure — does not throw.
+ * Fetch reserves for a single pool, map them by token identity, compute spot price, and store a price point.
+ * Skips silently on empty pool, unmatchable tokens, or RPC failure — does not throw.
  */
 export async function ingestPool(
   poolEntry: PoolEntry,
@@ -318,7 +399,8 @@ export async function ingestPool(
   _fetchReserves: (poolAddress: string, network?: NetworkName) => Promise<[bigint, bigint] | null> = fetchPoolReserves,
   network: NetworkName = activeNetwork,
   _fetchDecimals: (tokenAddress: string, network?: NetworkName) => Promise<number | null> = fetchTokenDecimals,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  _fetchToken0: (poolAddress: string, network?: NetworkName) => Promise<string | null> = fetchPoolToken0
 ): Promise<void> {
   try {
     // Cycle-deadline checkpoint (#351): an abandoned cycle does not start
@@ -328,16 +410,56 @@ export async function ingestPool(
     const reserves = await _fetchReserves(poolEntry.poolAddress, network)
     if (!reserves) return
 
-    const [reserveA, reserveB] = reserves
+    const [reserve0, reserve1] = reserves
+
+    let token0Address = getCachedPoolToken0(poolEntry.poolAddress)
+    if (!token0Address) {
+      const fetched = await _fetchToken0(poolEntry.poolAddress, network)
+      if (fetched) {
+        setCachedPoolToken0(poolEntry.poolAddress, fetched)
+        token0Address = fetched
+      }
+    }
+    if (!token0Address) {
+      log.debug({ pool: poolEntry.poolAddress }, 'could not determine token_0; skipping')
+      return
+    }
+
+    let reserveA: bigint
+    let reserveB: bigint
+    let tokenAAddress: string
+    let tokenBAddress: string
+    let tokenADecimalsHint: number
+    let tokenBDecimalsHint: number
+
+    if (token0Address === poolEntry.tokenA.address) {
+      reserveA = reserve0
+      reserveB = reserve1
+      tokenAAddress = poolEntry.tokenA.address
+      tokenBAddress = poolEntry.tokenB.address
+      tokenADecimalsHint = poolEntry.tokenA.decimals ?? 7
+      tokenBDecimalsHint = poolEntry.tokenB.decimals ?? 7
+    } else if (token0Address === poolEntry.tokenB.address) {
+      reserveA = reserve1
+      reserveB = reserve0
+      tokenAAddress = poolEntry.tokenA.address
+      tokenBAddress = poolEntry.tokenB.address
+      tokenADecimalsHint = poolEntry.tokenA.decimals ?? 7
+      tokenBDecimalsHint = poolEntry.tokenB.decimals ?? 7
+    } else {
+      log.debug(
+        { pool: poolEntry.poolAddress, token0: token0Address, pair: pair.pairKey },
+        'pool token_0 does not match pair tokens; skipping'
+      )
+      return
+    }
 
     const decimalsA =
-      (await _fetchDecimals(poolEntry.tokenA.address, network)) ??
-      poolEntry.tokenA.decimals ??
-      7
+      (await _fetchDecimals(tokenAAddress, network)) ??
+      tokenADecimalsHint
     const decimalsB =
-      (await _fetchDecimals(poolEntry.tokenB.address, network)) ??
-      poolEntry.tokenB.decimals ??
-      7
+      (await _fetchDecimals(tokenBAddress, network)) ??
+      tokenBDecimalsHint
 
     const spotPrice = calcSpotPrice(reserveA, reserveB, decimalsA, decimalsB)
 
@@ -389,7 +511,7 @@ export async function ingestPool(
           // makes a replayed batch (or an overlapping second instance reading
           // the same state) collide on the unique index instead of inserting
           // a duplicate. Must never be Date.now()/random.
-          eventId: `soroswap-${poolEntry.poolAddress}-${reserveA}-${reserveB}`,
+          eventId: `soroswap-${poolEntry.poolAddress}-${reserve0}-${reserve1}`,
         },
       ],
       network
@@ -529,16 +651,38 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
   },
 
   async read(target: PoolEntry, _pair: WatchedPair, network: NetworkName): Promise<[bigint, bigint] | null> {
+    await fetchPoolToken0(target.poolAddress, network)
     return fetchPoolReserves(target.poolAddress, network)
   },
 
   derive(raw: [bigint, bigint], target: PoolEntry, pair: WatchedPair, _network: NetworkName): VenuePricePoint[] {
-    const [reserveA, reserveB] = raw
+    const [reserve0, reserve1] = raw
+    const token0Address = getCachedPoolToken0(target.poolAddress) ?? target.tokenA.address
+
+    let reserveA: bigint
+    let reserveB: bigint
+    let decimalsA: number
+    let decimalsB: number
+
+    if (token0Address === target.tokenA.address) {
+      reserveA = reserve0
+      reserveB = reserve1
+      decimalsA = target.tokenA.decimals ?? 7
+      decimalsB = target.tokenB.decimals ?? 7
+    } else if (token0Address === target.tokenB.address) {
+      reserveA = reserve1
+      reserveB = reserve0
+      decimalsA = target.tokenA.decimals ?? 7
+      decimalsB = target.tokenB.decimals ?? 7
+    } else {
+      return []
+    }
+
     const spotPrice = calcSpotPrice(
       reserveA,
       reserveB,
-      target.tokenA.decimals ?? 7,
-      target.tokenB.decimals ?? 7
+      decimalsA,
+      decimalsB
     )
     if (spotPrice === 0) return []
 
@@ -573,7 +717,7 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
         timestamp: now,
         // Same content-derived key as ingestPool above (#237): reserves, not
         // the clock, so the adapter path and the legacy path agree on identity.
-        eventId: `soroswap-${target.poolAddress}-${reserveA}-${reserveB}`,
+        eventId: `soroswap-${target.poolAddress}-${reserve0}-${reserve1}`,
       },
     ]
   },
