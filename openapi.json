@@ -8399,6 +8399,7 @@
             "required": [
               "status",
               "verified",
+              "checkComplete",
               "checkedAt",
               "tomlUrl"
             ],
@@ -8412,6 +8413,10 @@
               },
               "verified": {
                 "type": "boolean"
+              },
+              "checkComplete": {
+                "type": "boolean",
+                "description": "Whether the Horizon and stellar.toml checks completed successfully"
               },
               "checkedAt": {
                 "type": "string",
@@ -8429,7 +8434,8 @@
               "source",
               "checkedAt",
               "tomlUrl",
-              "verified"
+              "verified",
+              "checkComplete"
             ],
             "properties": {
               "source": {
@@ -8445,6 +8451,10 @@
               },
               "verified": {
                 "type": "boolean"
+              },
+              "checkComplete": {
+                "type": "boolean",
+                "description": "Whether the metadata lookup completed successfully"
               }
             }
           }

@@ -94,10 +94,20 @@ export async function setCachedSnapshot(network: NetworkName, data: object, ttlS
  *
  * Both sides swallow their errors: an unreachable Redis means a slower lookup,
  * never a failed one.
+ * Verified responses are also held under a separate, longer-lived key so an
+ * upstream outage during refresh can reuse the last known good result.
  */
 export async function getCachedAsset(network: string, assetKey: string): Promise<string | null> {
   try {
     return await redis.get(`lens:${network}:asset:${assetKey}`)
+  } catch {
+    return null
+  }
+}
+
+export async function getCachedLastGoodAsset(network: string, assetKey: string): Promise<string | null> {
+  try {
+    return await redis.get(`lens:${network}:asset:last-good:${assetKey}`)
   } catch {
     return null
   }
@@ -110,7 +120,23 @@ export async function setCachedAsset(
   ttlSeconds: number
 ): Promise<void> {
   try {
-    await redis.set(`lens:${network}:asset:${assetKey}`, JSON.stringify(data), 'EX', ttlSeconds)
+    const serialized = JSON.stringify(data)
+    await redis.set(`lens:${network}:asset:${assetKey}`, serialized, 'EX', ttlSeconds)
+    const hasGoodVerification =
+      'verified' in data &&
+      data.verified === true &&
+      'verification' in data &&
+      typeof data.verification === 'object' &&
+      data.verification !== null &&
+      (!('checkComplete' in data.verification) || data.verification.checkComplete !== false)
+    if (hasGoodVerification) {
+      await redis.set(
+        `lens:${network}:asset:last-good:${assetKey}`,
+        serialized,
+        'EX',
+        Math.max(1, ttlSeconds * 2)
+      )
+    }
   } catch {
     // Redis cache miss is non-fatal
   }

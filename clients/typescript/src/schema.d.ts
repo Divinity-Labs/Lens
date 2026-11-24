@@ -2059,6 +2059,8 @@ export interface components {
                 /** @enum {string} */
                 status: "verified" | "unverified";
                 verified: boolean;
+                /** @description Whether the Horizon and stellar.toml checks completed successfully */
+                checkComplete: boolean;
                 /** Format: date-time */
                 checkedAt: string;
                 tomlUrl: string | null;
@@ -2069,6 +2071,8 @@ export interface components {
                 checkedAt: string;
                 tomlUrl: string | null;
                 verified: boolean;
+                /** @description Whether the metadata lookup completed successfully */
+                checkComplete: boolean;
             };
         };
         AssetsResponse: {

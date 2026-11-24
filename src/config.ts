@@ -685,6 +685,8 @@ const globalConfig = {
     // toml do not move minute to minute, and re-fetching them per request would
     // put a network round trip in front of every asset lookup.
     assetTtl: parseInt(process.env.ASSET_CACHE_TTL ?? '3600', 10),
+    // Failed verification lookups are retried after this short cache window.
+    assetFailureTtl: parseInt(process.env.ASSET_FAILURE_CACHE_TTL ?? '60', 10),
   },
   plausibility: {
     minPrice: parseFloat(process.env.PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
