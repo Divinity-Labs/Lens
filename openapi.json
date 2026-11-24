@@ -7199,6 +7199,7 @@
           "worstDeviationPct",
           "timeOutsideBandSeconds",
           "outsideBandPct",
+          "noDataSeconds",
           "bandPct",
           "samples",
           "venues",
@@ -7235,6 +7236,10 @@
             "type": "number",
             "nullable": true,
             "description": "Percentage of window duration spent outside bandPct"
+          },
+          "noDataSeconds": {
+            "type": "integer",
+            "description": "Seconds in the window not covered by a valid, interval-capped sample"
           },
           "bandPct": {
             "type": "number",

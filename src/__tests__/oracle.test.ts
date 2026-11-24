@@ -4,7 +4,10 @@ import Fastify from 'fastify'
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
 vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
-vi.mock('../config', () => ({ activeNetwork: 'testnet' }))
+vi.mock('../config', () => ({
+  activeNetwork: 'testnet',
+  config: { oracleComparison: { intervalMs: 60_000 } },
+}))
 vi.mock('../ingest/oracles/reflector', () => ({
   reflectorOracleAdapter: {
     name: 'reflector',
@@ -61,6 +64,7 @@ describe('GET /compare/:asset', () => {
       },
     ])
     expect(mockQuery.mock.calls[0][1]).toEqual(['XLM', 'testnet'])
+    expect(mockQuery).toHaveBeenCalledTimes(1)
     await app.close()
   })
 

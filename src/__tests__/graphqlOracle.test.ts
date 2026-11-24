@@ -76,6 +76,7 @@ describe('GraphQL Query.oracle', () => {
     })
     expect(source.ageSeconds).toBeGreaterThanOrEqual(30)
     expect(source.ageSeconds).toBeLessThan(40)
+    expect(mockQuery).toHaveBeenCalledTimes(1)
   })
 
   it('reports UNREACHABLE when the adapter throws', async () => {

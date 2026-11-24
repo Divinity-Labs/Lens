@@ -9,6 +9,7 @@ vi.mock('../db', () => ({
 
 vi.mock('../config', () => ({
   activeNetwork: 'testnet',
+  config: { oracleComparison: { intervalMs: 60_000 } },
 }))
 
 import { registerOracleRoutes } from '../routes/oracle'
@@ -105,15 +106,15 @@ describe('Oracle drift and return calculation', () => {
 
     expect(summary).toBeDefined()
     expect(summary.oracle).toBe('reflector')
-    // Mean: (0.1 + 5.0 + 8.0 + 0.5 + 0.0) / 5 = 2.72
-    expect(summary.meanDeviationPct).toBe(2.72)
+    // The four samples each cover at most two minutes; the final point is at the window end.
+    expect(summary.meanDeviationPct).toBe(3.4)
     // Worst deviation: 8.0
     expect(summary.worstDeviationPct).toBe(8.0)
-    // Point 2 (1h = 3600s) + Point 3 (1h = 3600s) outside band = 7200s
-    expect(summary.timeOutsideBandSeconds).toBe(7200)
-    expect(summary.outsideBandSeconds).toBe(7200)
-    // Window duration: 4 hours = 14400s; outside: 7200s (50%)
-    expect(summary.outsideBandPct).toBe(50)
+    // Point 2 and point 3 each contribute at most the two-minute sample cap.
+    expect(summary.timeOutsideBandSeconds).toBe(240)
+    expect(summary.outsideBandSeconds).toBe(240)
+    expect(summary.outsideBandPct).toBe(1.67)
+    expect(summary.noDataSeconds).toBe(13_920)
     expect(summary.bandPct).toBe(1.0)
     // Returned to aligned: status of freshest point is 'aligned'
     expect(summary.status).toBe('aligned')
@@ -147,8 +148,44 @@ describe('Oracle drift and return calculation', () => {
     expect(summary.meanDeviationPct).toBeNull()
     expect(summary.worstDeviationPct).toBeNull()
     expect(summary.timeOutsideBandSeconds).toBeNull()
+    expect(summary.noDataSeconds).toBe(3600)
     expect(summary.status).toBe('insufficient_data')
     expect(summary.samples).toBe(1)
+  })
+
+  it('does not count a long gap as time outside the band and reports it as unsampled', () => {
+    const t0 = new Date('2026-10-19T00:00:00.000Z')
+    const t1 = new Date(t0.getTime() + 2 * 60 * 60 * 1000)
+    const points: OracleHistoryPoint[] = [
+      {
+        timestamp: t0.toISOString(),
+        oracle: 'reflector',
+        lensPrice: 100,
+        oraclePrice: 105,
+        deviationPct: 5,
+        status: 'major_deviation',
+        venues: ['sdex'],
+        sampleCount: 1,
+        oracleTimestamp: t0.toISOString(),
+        ageSeconds: 0,
+      },
+      {
+        timestamp: t1.toISOString(),
+        oracle: 'reflector',
+        lensPrice: 100,
+        oraclePrice: 100,
+        deviationPct: 0,
+        status: 'aligned',
+        venues: ['sdex'],
+        sampleCount: 1,
+        oracleTimestamp: t1.toISOString(),
+        ageSeconds: 0,
+      },
+    ]
+
+    const [summary] = computeOracleSummaryStatistics(points, 1, t0, t1, 60_000)
+    expect(summary.timeOutsideBandSeconds).toBe(120)
+    expect(summary.noDataSeconds).toBe(7_080)
   })
 })
 
@@ -316,6 +353,7 @@ describe('GET /compare/:asset/history and /compare/:asset/summary endpoints', ()
     expect(json.window).toBe('1h')
     expect(json.summary).toHaveLength(1)
     expect(json.summary[0].meanDeviationPct).toBe(0.2)
+    expect(json.summary[0].noDataSeconds).toBeGreaterThanOrEqual(0)
     expect(json.points).toBeUndefined()
   })
 
@@ -395,6 +433,7 @@ describe('GET /compare/:asset/history and /compare/:asset/summary endpoints', ()
         timeOutsideBandSeconds: null,
         outsideBandSeconds: null,
         outsideBandPct: null,
+        noDataSeconds: 86_400,
         bandPct: 1,
         samples: 0,
         venues: [],

@@ -713,6 +713,9 @@ const globalConfig = {
     cooldownSeconds: parseInt(process.env.RECONCILIATION_ALERT_COOLDOWN_SECONDS ?? '300', 10),
     pairThresholds: parsePairThresholds(process.env.RECONCILIATION_PAIR_THRESHOLDS),
   },
+  oracleComparison: {
+    intervalMs: parseInt(process.env.ORACLE_COMPARISON_INTERVAL_MS ?? '60000', 10),
+  },
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
     maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
@@ -830,6 +833,7 @@ export const config = {
   premium: globalConfig.premium,
   http:    globalConfig.http,
   reconciliation: globalConfig.reconciliation,
+  oracleComparison: globalConfig.oracleComparison,
   ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,

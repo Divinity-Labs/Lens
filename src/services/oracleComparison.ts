@@ -68,6 +68,7 @@ export interface OracleSummaryStatistic {
   timeOutsideBandSeconds: number | null
   outsideBandSeconds: number | null
   outsideBandPct: number | null
+  noDataSeconds: number
   bandPct: number
   samples: number
   venues: string[]
@@ -99,6 +100,8 @@ export type OracleHistoryWindow = keyof typeof ORACLE_HISTORY_WINDOWS
 export interface CompareOraclesOptions {
   persist?: boolean
 }
+
+export const DEFAULT_ORACLE_COMPARISON_INTERVAL_MS = 60_000
 
 export function deviationPct(lens: number | null, oracle: number | null): number | null {
   if (lens === null || oracle === null || oracle === 0) return null
@@ -147,10 +150,10 @@ type SourceResult =
   | { name: string; status: 'available'; quote: { price: number; timestamp: number } }
 
 async function fetchSource(adapter: OracleAdapter, assetCode: string, network: NetworkName): Promise<SourceResult> {
-  if (!adapter.isConfigured(network)) {
-    return { name: adapter.name, status: 'not_configured', quote: null }
-  }
   try {
+    if (!adapter.isConfigured(network)) {
+      return { name: adapter.name, status: 'not_configured', quote: null }
+    }
     const quote = await adapter.getPrice(assetCode, network)
     // A configured oracle that answers with nothing is different from one we
     // could not reach, so the two are reported separately.
@@ -197,13 +200,14 @@ export async function persistComparisons(records: OracleComparisonRecord[]): Pro
  * Returns null when there is neither a Lens price nor a configured oracle,
  * which callers map to their own "not found" response.
  *
- * Persists comparison observations to oracle_comparisons for historical tracking.
+ * Persists comparison observations only when explicitly requested by the
+ * scheduled history job.
  */
 export async function compareOracles(
   assetCode: string,
   network: NetworkName,
   adapters: OracleAdapter[],
-  options: CompareOraclesOptions = { persist: true }
+  options: CompareOraclesOptions = { persist: false }
 ): Promise<OracleComparison | null> {
   const [lensResult, sources] = await Promise.all([
     fetchLensPrice(assetCode, network),
@@ -322,7 +326,8 @@ export function computeOracleSummaryStatistics(
   points: OracleHistoryPoint[],
   bandPct: number,
   windowStart: Date,
-  windowEnd: Date
+  windowEnd: Date,
+  sampleIntervalMs: number = DEFAULT_ORACLE_COMPARISON_INTERVAL_MS
 ): OracleSummaryStatistic[] {
   const byOracle = new Map<string, OracleHistoryPoint[]>()
   for (const p of points) {
@@ -332,6 +337,12 @@ export function computeOracleSummaryStatistics(
   }
 
   const results: OracleSummaryStatistic[] = []
+  const totalWindowSeconds = Math.max(
+    0,
+    Math.floor((windowEnd.getTime() - windowStart.getTime()) / 1000),
+  )
+  const maxSampleDurationMs = Math.max(0, sampleIntervalMs * 2)
+
   for (const [oracle, oraclePoints] of byOracle.entries()) {
     oraclePoints.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
 
@@ -351,6 +362,7 @@ export function computeOracleSummaryStatistics(
         timeOutsideBandSeconds: null,
         outsideBandSeconds: null,
         outsideBandPct: null,
+        noDataSeconds: totalWindowSeconds,
         bandPct,
         samples: oraclePoints.length,
         venues: allVenues,
@@ -361,30 +373,36 @@ export function computeOracleSummaryStatistics(
       continue
     }
 
-    const mean = validDeviations.reduce((sum, v) => sum + v, 0) / validDeviations.length
-    const meanDeviationPct = parseFloat(mean.toFixed(4))
     const worstDeviationPct = parseFloat(Math.max(...validDeviations).toFixed(4))
 
     let outsideSeconds = 0
+    let sampledSeconds = 0
+    let weightedDeviationSum = 0
     for (let i = 0; i < oraclePoints.length; i++) {
       const p = oraclePoints[i]
       const dev = p.deviationPct
-      const isOutside = dev !== null && dev > bandPct
-      if (isOutside) {
-        const ptTime = new Date(p.timestamp).getTime()
-        let nextTime: number
-        if (i < oraclePoints.length - 1) {
-          nextTime = new Date(oraclePoints[i + 1].timestamp).getTime()
-        } else {
-          nextTime = Math.min(Date.now(), windowEnd.getTime())
-        }
-        const durationSec = Math.max(0, Math.floor((nextTime - ptTime) / 1000))
-        outsideSeconds += durationSec
-      }
+      if (dev === null || !Number.isFinite(dev)) continue
+
+      const pointTime = new Date(p.timestamp).getTime()
+      const nextTime = i < oraclePoints.length - 1
+        ? new Date(oraclePoints[i + 1].timestamp).getTime()
+        : Math.min(Date.now(), windowEnd.getTime())
+      const sampleStart = Math.max(pointTime, windowStart.getTime())
+      const sampleEnd = Math.min(nextTime, windowEnd.getTime(), pointTime + maxSampleDurationMs)
+      const durationSec = Math.max(0, Math.floor((sampleEnd - sampleStart) / 1000))
+      if (durationSec === 0) continue
+
+      sampledSeconds += durationSec
+      weightedDeviationSum += dev * durationSec
+      if (dev > bandPct) outsideSeconds += durationSec
     }
 
-    const totalWindowSeconds = Math.max(1, Math.floor((windowEnd.getTime() - windowStart.getTime()) / 1000))
-    const outsideBandPct = parseFloat(Math.min(100, (outsideSeconds / totalWindowSeconds) * 100).toFixed(2))
+    const unweightedMean = validDeviations.reduce((sum, value) => sum + value, 0) / validDeviations.length
+    const mean = sampledSeconds > 0 ? weightedDeviationSum / sampledSeconds : unweightedMean
+    const meanDeviationPct = parseFloat(mean.toFixed(4))
+    const outsideBandPct = parseFloat(
+      Math.min(100, (outsideSeconds / Math.max(1, totalWindowSeconds)) * 100).toFixed(2)
+    )
 
     const latestPoint = oraclePoints[oraclePoints.length - 1]
     const currentStatus =
@@ -399,6 +417,7 @@ export function computeOracleSummaryStatistics(
       timeOutsideBandSeconds: outsideSeconds,
       outsideBandSeconds: outsideSeconds,
       outsideBandPct,
+      noDataSeconds: Math.max(0, totalWindowSeconds - sampledSeconds),
       bandPct,
       samples: oraclePoints.length,
       venues: allVenues,

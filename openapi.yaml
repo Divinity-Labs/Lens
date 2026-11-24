@@ -4666,7 +4666,7 @@ components:
 
     OracleSummaryStatistic:
       type: object
-      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, bandPct, samples, venues, freshestComparison, oldestComparison, status]
+      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, noDataSeconds, bandPct, samples, venues, freshestComparison, oldestComparison, status]
       additionalProperties: true
       properties:
         oracle:
@@ -4691,6 +4691,9 @@ components:
           type: number
           nullable: true
           description: Percentage of window duration spent outside bandPct
+        noDataSeconds:
+          type: integer
+          description: Seconds in the window not covered by a valid, interval-capped sample
         bandPct:
           type: number
           description: Deviation percentage threshold applied for outside-band calculations

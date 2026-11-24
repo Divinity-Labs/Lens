@@ -1716,6 +1716,8 @@ export interface components {
             outsideBandSeconds?: number | null;
             /** @description Percentage of window duration spent outside bandPct */
             outsideBandPct: number | null;
+            /** @description Seconds in the window not covered by a valid, interval-capped sample */
+            noDataSeconds: number;
             /** @description Deviation percentage threshold applied for outside-band calculations */
             bandPct: number;
             /** @description Number of comparison samples in the window */
