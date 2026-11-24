@@ -9,6 +9,13 @@ import {
   ORACLE_HISTORY_WINDOWS,
   type OracleHistoryWindow,
 } from '../services/oracleComparison'
+import {
+  HISTORY_DEFAULT_LIMIT,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+  slicePage,
+} from '../pagination'
 
 import { apiError } from '../errors'
 const oracleAdapters: OracleAdapter[] = [reflectorOracleAdapter]
@@ -21,11 +28,27 @@ interface HistoryQuery {
   to?: string
   band?: string
   limit?: string
+  cursor?: string
+}
+
+interface SummaryQuery {
+  network?: string
+  oracle?: string
+  window?: string
+  from?: string
+  to?: string
+  band?: string
+}
+
+interface ParseHistoryOptions {
+  allowLimit?: boolean
+  allowCursor?: boolean
 }
 
 function parseHistoryQueryParams(
   req: FastifyRequest<{ Params: { asset: string }; Querystring: HistoryQuery }>,
-  reply: FastifyReply
+  reply: FastifyReply,
+  options: ParseHistoryOptions = { allowLimit: true, allowCursor: true }
 ) {
   const { asset } = req.params
   if (!asset) {
@@ -111,14 +134,38 @@ function parseHistoryQueryParams(
     bandPct = parsedBand
   }
 
-  let limit = 1000
-  if (req.query.limit !== undefined) {
-    const parsedLimit = parseInt(req.query.limit, 10)
-    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 5000) {
-      reply.status(400).send(apiError('invalid_parameter', 'limit must be an integer between 1 and 5000'))
+  let limit: number | undefined
+  if (options.allowLimit) {
+    if (req.query.limit !== undefined) {
+      const parsedLimit = parseInt(req.query.limit, 10)
+      if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 5000) {
+        reply.status(400).send(apiError('invalid_parameter', 'limit must be an integer between 1 and 5000'))
+        return null
+      }
+    }
+    const parsed = parseLimit(req.query.limit, HISTORY_DEFAULT_LIMIT, 5000)
+    if ('error' in parsed) {
+      reply.status(400).send(apiError('invalid_parameter', parsed.error))
       return null
     }
-    limit = parsedLimit
+    limit = parsed.limit
+  }
+
+  let cursor: string | undefined
+  if (options.allowCursor && req.query.cursor) {
+    const decoded = decodeCursor(req.query.cursor)
+    if (decoded === null) {
+      reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
+      return null
+    }
+    if (decoded !== 'skip') {
+      const cursorTs = new Date(String(decoded.value))
+      if (isNaN(cursorTs.getTime())) {
+        reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
+        return null
+      }
+    }
+    cursor = req.query.cursor
   }
 
   return {
@@ -130,6 +177,7 @@ function parseHistoryQueryParams(
     windowLabel,
     bandPct,
     limit,
+    cursor,
   }
 }
 
@@ -155,7 +203,7 @@ export async function registerOracleRoutes(
       const comparison = await compareOracles(assetCode, network, adapters)
       // CHANGE FROM UPSTREAM (#262): Return 200 with status:"no_data" instead of 404
       // when both Lens and all oracles have no data. The asset code itself is valid,
-      // the query succeeded — there is just no data yet. A 404 would imply the asset
+      // the query succeeded â€” there is just no data yet. A 404 would imply the asset
       // is invalid or the endpoint does not exist.
       if (!comparison) {
         return {
@@ -177,21 +225,30 @@ export async function registerOracleRoutes(
     Params: { asset: string }
     Querystring: HistoryQuery
   }>('/compare/:asset/history', { config: { scope: 'read:prices' } }, async (req, reply) => {
-    const parsed = parseHistoryQueryParams(req, reply)
+    const parsed = parseHistoryQueryParams(req, reply, { allowLimit: true, allowCursor: true })
     if (!parsed) return
 
-    const { assetCode, network, oracle, from, to, windowLabel, bandPct, limit } = parsed
+    const { assetCode, network, oracle, from, to, windowLabel, bandPct, limit = HISTORY_DEFAULT_LIMIT, cursor } = parsed
 
-    const points = await queryOracleComparisonHistory({
+    const rows = await queryOracleComparisonHistory({
       asset: assetCode,
       network,
       oracle,
       from,
       to,
-      limit,
+      cursor,
+      limit: limit + 1,
     })
 
-    const summary = computeOracleSummaryStatistics(points, bandPct, from, to)
+    const { data: points, hasMore } = slicePage(rows, limit)
+    const last = hasMore && points.length > 0 ? points[points.length - 1] : null
+    const nextCursor = last && last.id ? encodeCursor(last.timestamp, last.id) : null
+
+    const nextSampleTime = hasMore && rows.length > limit ? rows[limit].timestamp : undefined
+    const summary = computeOracleSummaryStatistics(points, bandPct, from, to, {
+      hasMore,
+      nextSampleTime,
+    })
     if (summary.length === 0 && oracle) {
       summary.push({
         oracle,
@@ -217,18 +274,24 @@ export async function registerOracleRoutes(
       to: to.toISOString(),
       band: bandPct,
       points,
+      nextCursor,
+      hasMore,
       summary,
     }
   })
 
   app.get<{
     Params: { asset: string }
-    Querystring: HistoryQuery
+    Querystring: SummaryQuery
   }>('/compare/:asset/summary', { config: { scope: 'read:prices' } }, async (req, reply) => {
-    const parsed = parseHistoryQueryParams(req, reply)
+    const parsed = parseHistoryQueryParams(
+      req as FastifyRequest<{ Params: { asset: string }; Querystring: HistoryQuery }>,
+      reply,
+      { allowLimit: false, allowCursor: false }
+    )
     if (!parsed) return
 
-    const { assetCode, network, oracle, from, to, windowLabel, bandPct, limit } = parsed
+    const { assetCode, network, oracle, from, to, windowLabel, bandPct } = parsed
 
     const points = await queryOracleComparisonHistory({
       asset: assetCode,
@@ -236,7 +299,6 @@ export async function registerOracleRoutes(
       oracle,
       from,
       to,
-      limit,
     })
 
     const summary = computeOracleSummaryStatistics(points, bandPct, from, to)
@@ -265,6 +327,7 @@ export async function registerOracleRoutes(
       to: to.toISOString(),
       band: bandPct,
       summary,
+      truncated: false,
     }
   })
 }

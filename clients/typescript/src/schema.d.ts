@@ -1742,6 +1742,10 @@ export interface components {
             to: string;
             band: number;
             points: components["schemas"]["OracleComparisonPoint"][];
+            /** @description Opaque cursor for fetching the next page of comparison points */
+            nextCursor?: string | null;
+            /** @description Whether additional points exist beyond this page */
+            hasMore: boolean;
             summary: components["schemas"]["OracleSummaryStatistic"][];
         } & {
             [key: string]: unknown;
@@ -1756,6 +1760,8 @@ export interface components {
             /** Format: date-time */
             to: string;
             band: number;
+            /** @description Whether the summary was computed over a truncated sample set */
+            truncated?: boolean;
             summary: components["schemas"]["OracleSummaryStatistic"][];
         } & {
             [key: string]: unknown;
@@ -3600,6 +3606,8 @@ export interface operations {
                 band?: number;
                 /** @description Maximum number of history points to return */
                 limit?: number;
+                /** @description Keyset pagination cursor from nextCursor */
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -3651,8 +3659,6 @@ export interface operations {
                 to?: string;
                 /** @description Deviation percentage threshold for outside-band duration calculation */
                 band?: number;
-                /** @description Maximum number of comparisons evaluated */
-                limit?: number;
             };
             header?: never;
             path: {

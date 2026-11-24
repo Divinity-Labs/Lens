@@ -404,4 +404,187 @@ describe('GET /compare/:asset/history and /compare/:asset/summary endpoints', ()
       },
     ])
   })
+
+  it('GET /compare/:asset/summary uses all samples when window has more than 1000 samples and does not cut', async () => {
+    const t0 = new Date('2026-10-19T00:00:00.000Z')
+    const rows = Array.from({ length: 1200 }, (_, i) => ({
+      id: `sample-${i}`,
+      network: 'testnet',
+      asset: 'XLM',
+      oracle: 'reflector',
+      lens_price: '0.125',
+      oracle_price: '0.126',
+      deviation_pct: '0.8',
+      status: 'aligned',
+      venues: ['sdex'],
+      sample_count: 10,
+      oracle_timestamp: new Date(t0.getTime() + i * 1000).toISOString(),
+      age_seconds: 5,
+      timestamp: new Date(t0.getTime() + i * 1000).toISOString(),
+    }))
+
+    mockQuery.mockResolvedValueOnce({ rows })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/compare/xlm/summary?network=testnet&window=24h',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const json = res.json()
+    expect(json.summary).toHaveLength(1)
+    expect(json.summary[0].samples).toBe(1200)
+    expect(json.truncated).toBe(false)
+
+    // Verify DB query had no LIMIT clause
+    const [sql] = mockQuery.mock.calls[0]
+    expect(sql).not.toMatch(/LIMIT/)
+  })
+
+  it('does not inflate timeOutsideBandSeconds when the last sample read is outside the band and later samples exist', async () => {
+    const baseTime = new Date('2026-10-19T00:00:00.000Z')
+    const t0 = new Date(baseTime.getTime())
+    const t1 = new Date(baseTime.getTime() + 1 * 3600 * 1000)
+    const t2 = new Date(baseTime.getTime() + 2 * 3600 * 1000)
+    const windowEnd = new Date(baseTime.getTime() + 24 * 3600 * 1000)
+
+    // Three rows in database:
+    // t0 (00:00): outside band
+    // t1 (01:00): outside band (this will be the last sample on page of limit=2)
+    // t2 (02:00): aligned (inside band) - proves later samples exist in the window
+    const rows = [
+      {
+        id: 'p-1',
+        network: 'testnet',
+        asset: 'XLM',
+        oracle: 'reflector',
+        lens_price: '100',
+        oracle_price: '105',
+        deviation_pct: '5.0',
+        status: 'major_deviation',
+        venues: ['sdex'],
+        sample_count: 10,
+        oracle_timestamp: t0.toISOString(),
+        age_seconds: 5,
+        timestamp: t0.toISOString(),
+      },
+      {
+        id: 'p-2',
+        network: 'testnet',
+        asset: 'XLM',
+        oracle: 'reflector',
+        lens_price: '100',
+        oracle_price: '105',
+        deviation_pct: '5.0',
+        status: 'major_deviation',
+        venues: ['sdex'],
+        sample_count: 10,
+        oracle_timestamp: t1.toISOString(),
+        age_seconds: 5,
+        timestamp: t1.toISOString(),
+      },
+      {
+        id: 'p-3',
+        network: 'testnet',
+        asset: 'XLM',
+        oracle: 'reflector',
+        lens_price: '100',
+        oracle_price: '100',
+        deviation_pct: '0.0',
+        status: 'aligned',
+        venues: ['sdex'],
+        sample_count: 10,
+        oracle_timestamp: t2.toISOString(),
+        age_seconds: 5,
+        timestamp: t2.toISOString(),
+      },
+    ]
+
+    mockQuery.mockResolvedValueOnce({ rows })
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/compare/xlm/history?network=testnet&from=${t0.toISOString()}&to=${windowEnd.toISOString()}&limit=2&band=1.0`,
+    })
+
+    expect(res.statusCode).toBe(200)
+    const json = res.json()
+    expect(json.points).toHaveLength(2)
+    expect(json.hasMore).toBe(true)
+
+    // Point 1 (t0->t1 = 3600s) + Point 2 (t1->t2 = 3600s) = 7200s.
+    // Must NOT be inflated to the end of the 24h window (86,400s)!
+    expect(json.summary[0].timeOutsideBandSeconds).toBe(7200)
+    expect(json.summary[0].timeOutsideBandSeconds).toBeLessThan(86400)
+  })
+
+  it('GET /compare/:asset/history returns nextCursor and hasMore and pages through a window without duplicate or gap', async () => {
+    const baseTime = new Date('2026-10-19T00:00:00.000Z')
+    const t0 = new Date(baseTime.getTime()).toISOString()
+    const t1 = new Date(baseTime.getTime() + 1000).toISOString()
+    const t2 = new Date(baseTime.getTime() + 2000).toISOString()
+    const t3 = new Date(baseTime.getTime() + 3000).toISOString()
+
+    const makeRow = (id: string, ts: string) => ({
+      id,
+      network: 'testnet',
+      asset: 'XLM',
+      oracle: 'reflector',
+      lens_price: '0.125',
+      oracle_price: '0.126',
+      deviation_pct: '0.8',
+      status: 'aligned',
+      venues: ['sdex'],
+      sample_count: 10,
+      oracle_timestamp: ts,
+      age_seconds: 5,
+      timestamp: ts,
+    })
+
+    const allRows = [
+      makeRow('id-1', t0),
+      makeRow('id-2', t1),
+      makeRow('id-3', t2),
+      makeRow('id-4', t3),
+    ]
+
+    // Page 1: limit=2. Fetch limit + 1 = 3 rows (id-1, id-2, id-3)
+    mockQuery.mockResolvedValueOnce({ rows: allRows.slice(0, 3) })
+
+    const res1 = await app.inject({
+      method: 'GET',
+      url: '/compare/xlm/history?limit=2',
+    })
+
+    expect(res1.statusCode).toBe(200)
+    const json1 = res1.json()
+    expect(json1.points).toHaveLength(2)
+    expect(json1.points.map((p: any) => p.id)).toEqual(['id-1', 'id-2'])
+    expect(json1.hasMore).toBe(true)
+    expect(json1.nextCursor).toBeDefined()
+    expect(typeof json1.nextCursor).toBe('string')
+
+    // Page 2: with cursor. Fetch remaining limit + 1 = 2 rows (id-3, id-4)
+    mockQuery.mockResolvedValueOnce({ rows: allRows.slice(2, 4) })
+
+    const res2 = await app.inject({
+      method: 'GET',
+      url: `/compare/xlm/history?limit=2&cursor=${encodeURIComponent(json1.nextCursor)}`,
+    })
+
+    expect(res2.statusCode).toBe(200)
+    const json2 = res2.json()
+    expect(json2.points).toHaveLength(2)
+    expect(json2.points.map((p: any) => p.id)).toEqual(['id-3', 'id-4'])
+    expect(json2.hasMore).toBe(false)
+    expect(json2.nextCursor).toBeNull()
+
+    // Assert no duplicate or gap across the pages
+    const combinedIds = [...json1.points, ...json2.points].map((p: any) => p.id)
+    expect(combinedIds).toEqual(['id-1', 'id-2', 'id-3', 'id-4'])
+
+    // Verify cursor was passed to SQL
+    const [, page2Params] = mockQuery.mock.calls[1]
+    expect(page2Params).toContain('id-2')
+  })
 })

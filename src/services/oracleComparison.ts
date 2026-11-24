@@ -1,6 +1,7 @@
 import type { NetworkName } from '../config'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
 import { pgPool } from '../db'
+import { decodeCursor } from '../pagination'
 
 export type OracleSourceStatus = 'not_configured' | 'available' | 'unreachable' | 'empty'
 export type DeviationStatus = 'aligned' | 'minor_deviation' | 'major_deviation' | 'partial'
@@ -82,7 +83,8 @@ export interface QueryHistoryOptions {
   oracle?: string
   from: Date
   to: Date
-  limit?: number
+  limit?: number | null
+  cursor?: string
 }
 
 export const ORACLE_HISTORY_WINDOWS = {
@@ -269,7 +271,7 @@ export async function compareOracles(
 export async function queryOracleComparisonHistory(
   options: QueryHistoryOptions
 ): Promise<OracleHistoryPoint[]> {
-  const { asset, network, oracle, from, to, limit = 1000 } = options
+  const { asset, network, oracle, from, to, limit, cursor } = options
   const params: unknown[] = [network, asset, from, to]
   let sql = `
     SELECT
@@ -296,8 +298,24 @@ export async function queryOracleComparisonHistory(
     params.push(oracle)
     sql += ` AND oracle = $${params.length}`
   }
-  params.push(limit)
-  sql += ` ORDER BY timestamp ASC LIMIT $${params.length}`
+  if (cursor) {
+    const decoded = decodeCursor(cursor)
+    if (decoded && decoded !== 'skip') {
+      const cursorTs = new Date(String(decoded.value))
+      if (!isNaN(cursorTs.getTime()) && decoded.id !== undefined && decoded.id !== null) {
+        params.push(cursorTs)
+        const tsIdx = params.length
+        params.push(String(decoded.id))
+        const idIdx = params.length
+        sql += ` AND (timestamp > $${tsIdx} OR (timestamp = $${tsIdx} AND id > $${idIdx}))`
+      }
+    }
+  }
+  sql += ` ORDER BY timestamp ASC, id ASC`
+  if (limit !== undefined && limit !== null) {
+    params.push(limit)
+    sql += ` LIMIT $${params.length}`
+  }
 
   const result = await pgPool.query(sql, params)
   return result.rows.map(row => ({
@@ -315,6 +333,12 @@ export async function queryOracleComparisonHistory(
   }))
 }
 
+export interface SummaryStatisticsOptions {
+  hasMore?: boolean
+  truncated?: boolean
+  nextSampleTime?: Date | string
+}
+
 /**
  * Computes window summary statistics per oracle over a set of historical comparison points.
  */
@@ -322,8 +346,15 @@ export function computeOracleSummaryStatistics(
   points: OracleHistoryPoint[],
   bandPct: number,
   windowStart: Date,
-  windowEnd: Date
+  windowEnd: Date,
+  options?: SummaryStatisticsOptions | boolean
 ): OracleSummaryStatistic[] {
+  const isCut = typeof options === 'boolean' ? options : Boolean(options?.hasMore || options?.truncated)
+  const nextSampleTime =
+    typeof options === 'object' && options?.nextSampleTime
+      ? new Date(options.nextSampleTime).getTime()
+      : null
+
   const byOracle = new Map<string, OracleHistoryPoint[]>()
   for (const p of points) {
     const list = byOracle.get(p.oracle) ?? []
@@ -375,8 +406,27 @@ export function computeOracleSummaryStatistics(
         let nextTime: number
         if (i < oraclePoints.length - 1) {
           nextTime = new Date(oraclePoints[i + 1].timestamp).getTime()
+        } else if (nextSampleTime !== null && !isNaN(nextSampleTime)) {
+          nextTime = Math.min(nextSampleTime, windowEnd.getTime())
+        } else if (isCut) {
+          if (i > 0) {
+            const prevTime = new Date(oraclePoints[i - 1].timestamp).getTime()
+            const interval = Math.max(0, ptTime - prevTime)
+            nextTime = Math.min(ptTime + interval, windowEnd.getTime())
+          } else {
+            nextTime = ptTime
+          }
         } else {
-          nextTime = Math.min(Date.now(), windowEnd.getTime())
+          if (i > 0) {
+            const prevTime = new Date(oraclePoints[i - 1].timestamp).getTime()
+            const cadence = Math.max(0, ptTime - prevTime)
+            const remainingToWindowEnd = Math.max(0, Math.min(Date.now(), windowEnd.getTime()) - ptTime)
+            const allowedDuration = Math.min(remainingToWindowEnd, cadence)
+            nextTime = ptTime + allowedDuration
+          } else {
+            const remainingToWindowEnd = Math.max(0, Math.min(Date.now(), windowEnd.getTime()) - ptTime)
+            nextTime = ptTime + Math.min(remainingToWindowEnd, 300_000)
+          }
         }
         const durationSec = Math.max(0, Math.floor((nextTime - ptTime) / 1000))
         outsideSeconds += durationSec
