@@ -29,6 +29,42 @@ export function getMaxGraphQLQueryDepth(env: NodeJS.ProcessEnv = process.env): n
   return value
 }
 
+/** Whether the public GraphQL endpoint may accept arbitrary unregistered documents. */
+export function getAllowArbitraryGraphQLDocuments(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS
+  if (raw === undefined) return env.NODE_ENV !== 'production'
+
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === 'true') return true
+  if (normalized === 'false') return false
+
+  throw new Error('GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS must be either "true" or "false".')
+}
+
+/** Reads the server-side persisted GraphQL document map. */
+export function getPersistedGraphQLQueries(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const raw = env.GRAPHQL_PERSISTED_QUERIES
+  if (raw === undefined || raw.trim() === '') return {}
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Expected object map.')
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).map(([hash, query]) => {
+        if (typeof query !== 'string') {
+          throw new Error('Persisted GraphQL queries must map a hash to a string.')
+        }
+        return [String(hash), query]
+      }),
+    )
+  } catch {
+    throw new Error('GRAPHQL_PERSISTED_QUERIES must be valid JSON mapping hash to query string.')
+  }
+}
+
 function selectedOperation(document: DocumentNode, operationName?: string | null): OperationDefinitionNode | undefined {
   const operations = document.definitions.filter(
     (definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION,

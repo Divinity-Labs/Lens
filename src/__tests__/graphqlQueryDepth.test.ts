@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 
@@ -21,7 +22,12 @@ vi.mock('../ingest/oracles/reflector', () => ({ reflectorOracleAdapter: {} }))
 vi.mock('../services/oracleComparison', () => ({ compareOracles: vi.fn() }))
 
 import { registerGraphQL } from '../api/graphql'
-import { getMaxGraphQLQueryDepth, DEFAULT_MAX_GRAPHQL_QUERY_DEPTH } from '../api/queryDepth'
+import {
+  DEFAULT_MAX_GRAPHQL_QUERY_DEPTH,
+  getAllowArbitraryGraphQLDocuments,
+  getMaxGraphQLQueryDepth,
+  getPersistedGraphQLQueries,
+} from '../api/queryDepth'
 import { getCachedPrice } from '../redis'
 import { compareOracles } from '../services/oracleComparison'
 
@@ -148,5 +154,53 @@ describe('GraphQL query depth limit', () => {
     )
     await invalidApp.close()
     process.env.GRAPHQL_MAX_QUERY_DEPTH = '2'
+  })
+
+  it('defaults arbitrary GraphQL documents to production-safe mode and parses persisted hashes from config', () => {
+    expect(getAllowArbitraryGraphQLDocuments({ NODE_ENV: 'production' })).toBe(false)
+    expect(getAllowArbitraryGraphQLDocuments({ NODE_ENV: 'development' })).toBe(true)
+    expect(getAllowArbitraryGraphQLDocuments({ NODE_ENV: 'production', GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS: 'true' })).toBe(true)
+
+    const query = '{ listPairs }'
+    const hash = crypto.createHash('sha256').update(query, 'utf8').digest('hex')
+    expect(getPersistedGraphQLQueries({ GRAPHQL_PERSISTED_QUERIES: JSON.stringify({ [hash]: query }) })).toEqual({ [hash]: query })
+    expect(() => getPersistedGraphQLQueries({ GRAPHQL_PERSISTED_QUERIES: '{not-json}' })).toThrow(
+      'GRAPHQL_PERSISTED_QUERIES must be valid JSON mapping hash to query string.',
+    )
+  })
+
+  it('supports persisted queries and rejects arbitrary documents when the policy disables them', async () => {
+    const query = '{ listPairs }'
+    const hash = crypto.createHash('sha256').update(query, 'utf8').digest('hex')
+    const persistedApp = Fastify({ logger: false })
+    process.env.GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS = 'false'
+    process.env.GRAPHQL_PERSISTED_QUERIES = JSON.stringify({ [hash]: query })
+
+    await registerGraphQL(persistedApp)
+    const persistedResponse = await persistedApp.inject({
+      method: 'POST',
+      url: '/graphql',
+      payload: {
+        persisted: true,
+        query: hash,
+      },
+    })
+
+    expect(persistedResponse.statusCode).toBe(200)
+    expect(persistedResponse.json()).toEqual({ data: { listPairs: ['USDC/XLM'] } })
+
+    const rejectedResponse = await persistedApp.inject({
+      method: 'POST',
+      url: '/graphql',
+      payload: { query },
+    })
+
+    expect(rejectedResponse.statusCode).toBe(400)
+    expect(Array.isArray(rejectedResponse.json().errors)).toBe(true)
+    expect(rejectedResponse.json().errors.length).toBeGreaterThan(0)
+
+    await persistedApp.close()
+    delete process.env.GRAPHQL_ALLOW_ARBITRARY_DOCUMENTS
+    delete process.env.GRAPHQL_PERSISTED_QUERIES
   })
 })
