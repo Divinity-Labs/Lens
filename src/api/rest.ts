@@ -3,6 +3,7 @@ import { resolveDecimalFormat, formatDecimal } from '../utils/decimals'
 import { listCrashes } from '../ingester/restart'
 import { listSourceFailures } from '../ingest/sourceFailures'
 import { isBootComplete } from '../health'
+import { getCachedSchemaVerification } from '../db/schemaVerify'
 import { price_requests_total } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -198,6 +199,18 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           subject: f.subject,
           at: f.at.toISOString(),
         })),
+        schema: (() => {
+          const cached = getCachedSchemaVerification()
+          return cached
+            ? {
+                valid: cached.valid,
+                coreValid: cached.coreValid,
+                missingTables: cached.missingTables,
+                missingColumns: cached.missingColumns,
+                checkedAt: cached.checkedAt,
+              }
+            : null
+        })(),
       }
     }
   )

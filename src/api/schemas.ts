@@ -151,6 +151,18 @@ export const statusResponseSchema = {
         },
       },
     },
+    schema: {
+      type: ['object', 'null'],
+      required: ['valid', 'coreValid', 'missingTables', 'missingColumns', 'checkedAt'],
+      additionalProperties: false,
+      properties: {
+        valid: { type: 'boolean' },
+        coreValid: { type: 'boolean' },
+        missingTables: { type: 'array', items: { type: 'string' } },
+        missingColumns: { type: 'array', items: { type: 'string' } },
+        checkedAt: { type: 'string' },
+      },
+    },
   },
 } as const
 
