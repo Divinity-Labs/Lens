@@ -15,6 +15,7 @@ vi.mock('../db', () => ({
 
 import { buildApp } from '../app'
 import { markBootComplete, resetHealthState } from '../health'
+import { verifyDatabaseSchema, resetSchemaVerificationCache, EXPECTED_SCHEMA } from '../db/schemaVerify'
 
 describe('GET /status contract & health separation (#273)', () => {
   let app: FastifyInstance
@@ -152,5 +153,34 @@ describe('GET /status contract & health separation (#273)', () => {
     expect(raw).not.toContain('db.internal.example')
     expect(raw).not.toContain('postgresql://')
     expect(res.json().error).toBe('Database unavailable')
+  })
+
+  it('exposes cached schema verification details including non-core drift', async () => {
+    resetSchemaVerificationCache()
+    const tablesWithoutApiKeys = Object.keys(EXPECTED_SCHEMA).filter((t) => t !== 'api_keys')
+    const colsWithoutApiKeys = tablesWithoutApiKeys.flatMap((table) =>
+      EXPECTED_SCHEMA[table].map((col) => ({ table_name: table, column_name: col })),
+    )
+    const verifyPool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: tablesWithoutApiKeys.map((table_name) => ({ table_name })) })
+        .mockResolvedValueOnce({ rows: colsWithoutApiKeys }),
+    }
+    await verifyDatabaseSchema(verifyPool)
+
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ last_ledger: 123456, last_processed_at: new Date() }],
+    })
+
+    const res = await app.inject({ method: 'GET', url: '/status' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.schema).toMatchObject({
+      valid: false,
+      coreValid: true,
+      missingTables: ['api_keys'],
+      missingColumns: [],
+    })
+    resetSchemaVerificationCache()
   })
 })

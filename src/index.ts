@@ -78,8 +78,15 @@ async function main() {
   log.info('postgresql connected')
 
   // Verify database schema matches expected tables and columns (#352)
-  await assertSchemaValid()
-  log.info('database schema verified')
+  const schemaResult = await assertSchemaValid()
+  log.info(
+    {
+      valid: schemaResult.valid,
+      missingTables: schemaResult.missingTables.length,
+      missingColumns: schemaResult.missingColumns.length,
+    },
+    schemaResult.valid ? 'database schema verified' : 'database core schema verified with non-core warnings',
+  )
 
   // ── Load persisted runtime pairs ──────────────────────────────────────────
   await loadPersistedPairs()

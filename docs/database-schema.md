@@ -24,10 +24,10 @@
 ## Startup Verification Guard (#352)
 
 To ensure that running code never crashes at request time due to missing columns or unapplied schema changes:
-- `src/db/schemaVerify.ts` runs on boot via `assertSchemaValid()` / `verifyDatabaseSchema()`.
+- `src/db/schemaVerify.ts` derives the expected tables and columns from Prisma's model metadata (`Prisma.dmmf.datamodel.models`) and runs once at boot via `assertSchemaValid()` / `verifyDatabaseSchema()`.
 - It performs a low-overhead inspection against PostgreSQL `information_schema.tables` and `information_schema.columns`.
-- If an expected table or column is absent, it fails fast and names the missing entities.
-- `/ready` and `/status` can query `verifyDatabaseSchema()` to isolate instances before they receive live traffic.
+- Missing parts of the five core tables (`price_points`, `pool_snapshots`, `price_aggregates`, `price_snapshots`, `indexer_state`) fail startup fast with `DatabaseSchemaMismatchError`.
+- Missing non-core tables or columns are logged with their table and column names without stopping startup, recorded in the `schema_missing_entities` Prometheus gauge, and exposed in `/status` via `getCachedSchemaVerification()` (while `/ready` checks `indexer_state` directly via `to_regclass`).
 
 ## Path Forward: Transitioning to `prisma migrate`
 

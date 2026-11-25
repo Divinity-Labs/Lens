@@ -242,6 +242,13 @@ export const snapshot_retention_path = new Gauge({
   registers: [register],
 })
 
+export const schema_missing_entities = new Gauge({
+  name: 'schema_missing_entities',
+  help: 'Number of missing database tables and columns detected by schema verification',
+  labelNames: ['kind'],
+  registers: [register],
+})
+
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests served, by method, route template and status class',
