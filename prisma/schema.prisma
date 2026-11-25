@@ -93,6 +93,7 @@ model LendingRate {
   reserves      Decimal? @db.Decimal(36, 7)
 
   @@id([id, timestamp])
+  @@index([network, timestamp])
   @@index([network, asset, timestamp(sort: Desc)])
   @@index([network, asset, venue, timestamp(sort: Desc)])
   @@index([network, poolId, asset, timestamp(sort: Desc)])
@@ -171,7 +172,7 @@ model PriceSnapshot {
   volume Decimal  @default(0) @db.Decimal(36, 7)
 
   @@id([network, pair, ts])
-  @@index([network, pair, ts])
+  @@index([network, ts])
   @@map("price_snapshots")
 }
 
@@ -506,6 +507,7 @@ model OracleComparison {
   ageSeconds      Int?      @map("age_seconds")
   timestamp       DateTime  @default(now())
 
+  @@index([network, timestamp])
   @@index([network, asset, timestamp(sort: Desc)])
   @@index([network, asset, oracle, timestamp(sort: Desc)])
   @@map("oracle_comparisons")

@@ -3,42 +3,7 @@ import fp from 'fastify-plugin'
 // Single source of truth for candle intervals — shared with the candles
 // route module, so the two can never drift apart (issue #266 review).
 import { INTERVAL_SECONDS as CANDLE_INTERVAL_SECONDS } from '../candleIntervals'
-
-/**
- * Whether x402 payment gating is active. Mirrors isX402Configured() in
- * ../x402/network.ts (which checks the same env vars) — inlined here to
- * avoid pulling the @x402 packages into the middleware bundle.
- */
-function isX402Active(): boolean {
-  return Boolean(
-    process.env.ORACLE_PAYMENT_ADDRESS_TESTNET ||
-      process.env.ORACLE_PAYMENT_ADDRESS_MAINNET ||
-      process.env.ORACLE_PAYMENT_ADDRESS,
-  )
-}
-
-// x402-gated route prefixes (mirrors GATED_ROUTES in ./x402.ts).
-// Kept as a local list instead of importing matchGatedRoute from ./x402,
-// because that module pulls in DB dependencies (via ../x402/metering) that
-// break unit tests and bloat the middleware. If GATED_ROUTES changes, update
-// this list. Note: /graphql is POST-only and already no-store, so it is
-// omitted here.
-const X402_GATED_PREFIXES = ['/price', '/pools', '/candles'] as const
-
-/**
- * Whether a route+method falls behind the x402 payment gate.
- * Matches on path-segment boundaries, same as matchGatedRoute in ./x402.ts.
- */
-function isX402GatedRoute(routePath: string, method: string): boolean {
-  if (method !== 'GET' && method !== 'HEAD') return false
-  const segments = routePath.split('/').filter(Boolean)
-  return X402_GATED_PREFIXES.some(prefix =>
-    prefix
-      .split('/')
-      .filter(Boolean)
-      .every((seg, i) => segments[i] === seg),
-  )
-}
+import { isX402Configured, matchGatedRoute } from '../x402/policy'
 
 /**
  * Per-route Cache-Control policy (issue #266).
@@ -61,7 +26,7 @@ function isX402GatedRoute(routePath: string, method: string): boolean {
  * response to a testnet request.
  *
  * x402: routes behind the x402 payment gate (`/price*`, `/pools*`,
- * `/candles*`, see GATED_ROUTES in `./x402`) return the same market data
+ * `/candles*`, see GATED_ROUTES in `../x402/policy`) return the same market data
  * regardless of who pays — the response does not vary by payer identity, so
  * no `Vary` on payment headers is needed. But when x402 gating is active,
  * these routes use `private` instead of `public`: a shared cache serving a
@@ -194,7 +159,8 @@ export function cachePolicyFor(
 
   // x402-gated routes must not sit in a shared cache when gating is active:
   // the next caller would get the response without paying.
-  if (opts.x402Active && policy.startsWith('public') && isX402GatedRoute(routePath, method)) {
+  const gatedMethod = method === 'HEAD' ? 'GET' : method
+  if (opts.x402Active && policy.startsWith('public') && matchGatedRoute(routePath, gatedMethod)) {
     return policy.replace('public', 'private')
   }
   return policy
@@ -216,7 +182,7 @@ export function varyFor(cacheControl: string): string | null {
 
 async function cachePolicyPlugin(app: FastifyInstance) {
   // x402 gating is configured via env, not per-request — read once.
-  const x402Active = isX402Active()
+  const x402Active = isX402Configured()
 
   app.addHook('onSend', async (req: FastifyRequest, reply: FastifyReply, payload) => {
     // A route that sets its own Cache-Control keeps it — the middleware

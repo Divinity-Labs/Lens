@@ -23,10 +23,7 @@ export function paymentAddressFor(network: NetworkName): string | undefined {
   return process.env[`ORACLE_PAYMENT_ADDRESS_${suffix}`] || process.env.ORACLE_PAYMENT_ADDRESS
 }
 
-/** True if x402 gating should be active for at least one network. */
-export function isX402Configured(): boolean {
-  return Boolean(paymentAddressFor('testnet') || paymentAddressFor('mainnet'))
-}
+export { isX402Configured } from './policy'
 
 // One resource server per network, built and initialised lazily on first use
 // so a network that's never requested never pays the initialize() cost.
