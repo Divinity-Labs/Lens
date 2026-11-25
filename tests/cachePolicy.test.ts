@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { cachePolicyFor, varyFor } from '../src/middleware/cachePolicy'
 import { INTERVAL_SECONDS } from '../src/candleIntervals'
+import { GATED_ROUTES, isX402Configured, type GatedRoute } from '../src/x402/policy'
 
 // Unit tests for the per-route Cache-Control policy (issue #266).
 // cachePolicyFor / varyFor are pure functions — no server boot needed.
@@ -90,6 +91,25 @@ describe('cachePolicyFor', () => {
     ).toBe('private, max-age=3600, stale-while-revalidate=86400')
   })
 
+  it('derives cache privacy from the shared paid-route list', () => {
+    const routes = GATED_ROUTES as GatedRoute[]
+    const madeUpRoute: GatedRoute = {
+      path: '/benchmark',
+      method: 'GET',
+      price: '$9.99',
+      description: 'Made-up paid route for cache-policy coverage',
+    }
+    routes.push(madeUpRoute)
+    try {
+      expect(cachePolicyFor('GET', '/benchmark/:asset', 200)).toBe('public, max-age=300')
+      expect(cachePolicyFor('GET', '/benchmark/:asset', 200, {}, { x402Active: true })).toBe(
+        'private, max-age=300',
+      )
+    } finally {
+      routes.splice(routes.indexOf(madeUpRoute), 1)
+    }
+  })
+
   it('does not downgrade non-gated public routes when x402 is active', () => {
     // /pairs is not in GATED_ROUTES — stays public even with x402 on.
     expect(cachePolicyFor('GET', '/pairs', 200, {}, { x402Active: true })).toBe('public, max-age=300')
@@ -111,6 +131,32 @@ describe('cachePolicyFor', () => {
     expect(cachePolicyFor('GET', '/candles/:assetA/:assetB', 200, closed)).toBe(
       'public, max-age=3600, stale-while-revalidate=86400',
     )
+  })
+})
+
+describe('isX402Configured', () => {
+  it('checks every combination of payment-address environment variables', () => {
+    const names = [
+      'ORACLE_PAYMENT_ADDRESS_TESTNET',
+      'ORACLE_PAYMENT_ADDRESS_MAINNET',
+      'ORACLE_PAYMENT_ADDRESS',
+    ] as const
+    const previous = names.map(name => [name, process.env[name]] as const)
+
+    try {
+      for (let mask = 0; mask < 8; mask++) {
+        for (const name of names) delete process.env[name]
+        names.forEach((name, index) => {
+          if (mask & (1 << index)) process.env[name] = `GPAYMENTADDRESS${index}`
+        })
+        expect(isX402Configured()).toBe(mask !== 0)
+      }
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
   })
 })
 
