@@ -5,16 +5,29 @@ import { activeNetwork, config, type NetworkName } from '../config'
 import { X402_NETWORK_LABEL, paymentAddressFor, getX402ResourceServer } from '../x402/network'
 import { resolveNetworkName } from '../middleware/network'
 import { fanOutManager } from '../ws/fanout'
+import { hashApiKey, lookupApiKey, extractBearer } from './auth'
+import { connectionRegistry, CLOSE_CODE_KEY_REVOKED, CLOSE_REASON_KEY_REVOKED } from '../ws/connectionRegistry'
 import { v4 as uuid } from 'uuid'
 import { createInternalErrorBody, getCorrelationId } from '../errors'
 
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
 
+function extractTokenFromRequest(req: FastifyRequest): string | null {
+  const authHeader = req.headers['authorization']
+  const bearer = extractBearer(authHeader)
+  if (bearer) return bearer
+  if (typeof req.headers['x-api-key'] === 'string') return req.headers['x-api-key'].trim()
+  const query = req.query as Record<string, string | undefined> | undefined
+  if (query?.apiKey) return query.apiKey.trim()
+  if (query?.key) return query.key.trim()
+  if (query?.token) return query.token.trim()
+  return null
+}
 export async function registerWebSocket(app: FastifyInstance) {
   await app.register(websocket)
 
   // @fastify/websocket v11: handler receives (socket, req) directly — no connection wrapper
-  app.get('/ws', { websocket: true, config: { public: true } }, (socket: any, req: FastifyRequest) => {
+  app.get('/ws', { websocket: true, config: { public: true } }, async (socket: any, req: FastifyRequest) => {
     app.log.info('[ws] New connection attempt')
 
     const rawNetwork = (req.query as any)?.network ?? (req.headers['x-network'] as string | undefined)
@@ -25,6 +38,18 @@ export async function registerWebSocket(app: FastifyInstance) {
       return
     }
     const network: NetworkName = resolved.network
+
+    const rawKey = extractTokenFromRequest(req)
+    let authenticatedKeyHash: string | null = null
+    if (rawKey) {
+      const keyContext = await lookupApiKey(rawKey)
+      if (!keyContext) {
+        socket.send(JSON.stringify({ type: 'error', status: 401, message: 'Invalid or revoked API key' }))
+        socket.close(CLOSE_CODE_KEY_REVOKED, CLOSE_REASON_KEY_REVOKED)
+        return
+      }
+      authenticatedKeyHash = hashApiKey(rawKey)
+    }
 
     // This process only ingests and streams live prices for `activeNetwork`
     // (see src/config.ts) — the underlying price events carry no network tag
@@ -69,7 +94,7 @@ export async function registerWebSocket(app: FastifyInstance) {
             socket.send(JSON.stringify({ type: 'error', message: 'Invalid payment' }))
             socket.close()
           } else {
-            setupStream(socket, req)
+            setupStream(socket, req, authenticatedKeyHash)
           }
         })
         .catch(err => {
@@ -87,10 +112,14 @@ export async function registerWebSocket(app: FastifyInstance) {
       return
     }
 
-    setupStream(socket, req)
+    setupStream(socket, req, authenticatedKeyHash)
   })
 
-  function setupStream(socket: any, req: FastifyRequest) {
+  function setupStream(socket: any, req: FastifyRequest, keyHash?: string | null) {
+    if (keyHash) {
+      const deregisterKey = connectionRegistry.register(keyHash, socket)
+      socket.on('close', deregisterKey)
+    }
     app.log.info('[ws] Connection authorized')
     socket.send(JSON.stringify({ type: 'status', message: 'Streaming active' }))
 
@@ -98,6 +127,7 @@ export async function registerWebSocket(app: FastifyInstance) {
     const clientId = uuid()
     const unsubscribe = fanOutManager.register('*', {
       id: clientId,
+      keyHash: keyHash ?? undefined,
       send: (data: string, cb?: (err?: Error | null) => void) => {
         if (socket.readyState !== 1) { // OPEN
           // Tell the fan-out rather than silently swallowing it: a socket that
