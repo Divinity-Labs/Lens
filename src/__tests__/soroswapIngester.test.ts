@@ -292,17 +292,33 @@ describe('ingestPair', () => {
     vi.clearAllMocks()
   })
 
-  it('calls fetchPoolsFromFactory with correct token addresses', async () => {
+  it('calls fetchPoolsFromFactory with the watched assets\' contract ids', async () => {
     const mockFetchPools = vi.fn().mockResolvedValue([])
+    // A real mainnet pair: tokens are matched on contract id (code + issuer +
+    // network), not symbol, so the watched USDC must be the issuer whose
+    // contract the list carries - Circle's mainnet USDC.
+    const mainnetPair = {
+      pairKey: 'USDC/XLM',
+      assetA: { code: 'XLM', issuer: null },
+      assetB: { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' },
+    }
 
-    await ingestPair(mockPair as any, tokens, factory, mockFetchPools)
+    await ingestPair(mainnetPair as any, tokens, factory, mockFetchPools, 'mainnet')
 
     expect(mockFetchPools).toHaveBeenCalledWith(
       factory,
-      xlmToken.address,
+      // Native XLM's Stellar Asset Contract on mainnet (not in Soroswap's list).
+      'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
       usdcToken.address,
-      expect.any(String)
+      'mainnet'
     )
+  })
+
+  it('does not price a testnet asset from a mainnet token by symbol', async () => {
+    const mockFetchPools = vi.fn().mockResolvedValue([])
+    // mockPair's USDC is Circle's testnet issuer; usdcToken is mainnet USDC.
+    await ingestPair(mockPair as any, tokens, factory, mockFetchPools, 'mainnet')
+    expect(mockFetchPools).not.toHaveBeenCalled()
   })
 
   it('skips silently when one token is not in the token list', async () => {
