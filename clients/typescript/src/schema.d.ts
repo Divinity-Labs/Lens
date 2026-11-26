@@ -75,7 +75,7 @@ export interface paths {
         };
         /**
          * Total Value Locked across Stellar DeFi venues
-         * @description Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, and Aquarius. Reports totals, breakdown by venue, breakdown by asset with valuation sources named, and marks pools with unpriceable assets as unpriced rather than zero. Querying `?history=true` returns historical hourly TVL samples.
+         * @description Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, Aquarius and Phoenix on the requested network. Reports the total, a breakdown by venue and by asset, and names the price source used to value every asset (`valuationSources`, per-venue `valuationSources`, per-pool `valuationSources`). Assets are valued from their freshest observation against USDC/USD within `maxPriceAgeSeconds`, or through XLM with both legs named; USDC/USD are valued at 1 (`STABLECOIN_PEG`). A pool Lens cannot value is reported with `priced: false`, `tvlUsd: null` and an `unpricedReason` (`unpriced_asset`, `no_reserves`, `invalid_reserves`); it is never counted as zero. Totals cover priced pools only, and `complete` says whether any pool was left out. Soroswap, Aquarius and Phoenix ingesters do not yet persist reserves, so their pools are listed with `no_reserves`. Querying `?history=true` returns hourly TVL samples valued at current prices.
          */
         get: operations["getTvl"];
         put?: never;
@@ -1838,6 +1838,97 @@ export interface components {
             /** Format: date-time */
             computedAt: string;
         };
+        TvlValuationSource: {
+            /** @description USD price used to value the asset */
+            price: number;
+            /** @description Where the price came from (a price_points source, `<source>->XLM`, or STABLECOIN_PEG) */
+            source: string;
+            /** Format: date-time */
+            timestamp: string;
+            /** @description Present when the price was derived through XLM; names XLM's own USD source */
+            via?: {
+                /** @enum {string} */
+                asset: "XLM";
+                source: string;
+                /** Format: date-time */
+                timestamp: string;
+            };
+        };
+        TvlPool: {
+            poolId: string;
+            venue: string;
+            pairKey: string;
+            assetA: string;
+            assetB: string;
+            /** @description Null when the venue does not record reserves or they could not be read; never 0 as a stand-in */
+            reserveA: number | null;
+            reserveB: number | null;
+            priced: boolean;
+            tvlUsd: number | null;
+            /** @enum {string|null} */
+            unpricedReason: "unpriced_asset" | "no_reserves" | "invalid_reserves" | null;
+            /** @description Assets in this pool Lens has no fresh price for */
+            unpricedAssets: string[];
+            valuationSources: {
+                assetA: components["schemas"]["TvlValuationSource"] | null;
+                assetB: components["schemas"]["TvlValuationSource"] | null;
+            };
+        };
+        TvlResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            /** @enum {string} */
+            currency: "USD";
+            /** @description Sum over priced pools only; a lower bound when complete is false */
+            totalTvlUsd: number;
+            /** @description True when no pool was left unpriced */
+            complete: boolean;
+            unpricedPoolsCount: number;
+            pricedPoolsCount: number;
+            /** @description Oldest price observation used for valuation */
+            maxPriceAgeSeconds: number;
+            /** @description Every asset price used in this response, keyed by asset code */
+            valuationSources: {
+                [key: string]: components["schemas"]["TvlValuationSource"];
+            };
+            /** @description TVL per venue */
+            venues: {
+                [key: string]: {
+                    tvlUsd: number;
+                    poolCount: number;
+                    pricedPoolCount: number;
+                    unpricedPoolCount: number;
+                    complete: boolean;
+                    /** @description Distinct price sources used to value this venue's priced pools */
+                    valuationSources: string[];
+                };
+            };
+            byAsset: {
+                [key: string]: {
+                    amount: number;
+                    priceUsd: number | null;
+                    priceSource: string | null;
+                    tvlUsd: number | null;
+                    priced: boolean;
+                };
+            };
+            pools: components["schemas"]["TvlPool"][];
+            /** Format: date-time */
+            computedAt: string;
+        };
+        TvlHistoryResponse: {
+            /** @enum {string} */
+            network: "testnet" | "mainnet";
+            window: string;
+            interval: string;
+            points: {
+                /** Format: date-time */
+                bucket: string;
+                tvlUsd: number;
+                pricedPoolsCount: number;
+                unpricedPoolsCount: number;
+            }[];
+        };
         CorrelationResponse: {
             /** @enum {string} */
             network: "testnet" | "mainnet";
@@ -2303,15 +2394,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        ok: boolean;
-                        /**
-                         * @description Seconds since the process started.
-                         * @example 3600
-                         */
-                        uptimeSeconds: number;
-                    };
+                    "application/json": components["schemas"]["TvlResponse"] | components["schemas"]["TvlHistoryResponse"];
+                };
+            };
+            /** @description Invalid network */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

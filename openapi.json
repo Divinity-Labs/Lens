@@ -196,7 +196,7 @@
         "x-category": "Market Overview & Liquidity Pools",
         "operationId": "getTvl",
         "summary": "Total Value Locked across Stellar DeFi venues",
-        "description": "Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, and Aquarius. Reports totals, breakdown by venue, breakdown by asset with valuation sources named, and marks pools with unpriceable assets as unpriced rather than zero. Querying `?history=true` returns historical hourly TVL samples.",
+        "description": "Aggregates Total Value Locked (TVL) in USD across Stellar Classic AMM, Soroswap, Aquarius and Phoenix on the requested network. Reports the total, a breakdown by venue and by asset, and names the price source used to value every asset (`valuationSources`, per-venue `valuationSources`, per-pool `valuationSources`). Assets are valued from their freshest observation against USDC/USD within `maxPriceAgeSeconds`, or through XLM with both legs named; USDC/USD are valued at 1 (`STABLECOIN_PEG`). A pool Lens cannot value is reported with `priced: false`, `tvlUsd: null` and an `unpricedReason` (`unpriced_asset`, `no_reserves`, `invalid_reserves`); it is never counted as zero. Totals cover priced pools only, and `complete` says whether any pool was left out. Soroswap, Aquarius and Phoenix ingesters do not yet persist reserves, so their pools are listed with `no_reserves`. Querying `?history=true` returns hourly TVL samples valued at current prices.",
         "security": [],
         "parameters": [
           {
@@ -234,22 +234,24 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok",
-                    "uptimeSeconds"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "type": "boolean",
-                      "example": true
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TvlResponse"
                     },
-                    "uptimeSeconds": {
-                      "type": "integer",
-                      "description": "Seconds since the process started.",
-                      "example": 3600
+                    {
+                      "$ref": "#/components/schemas/TvlHistoryResponse"
                     }
-                  }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -7661,6 +7663,343 @@
           "computedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "TvlValuationSource": {
+        "type": "object",
+        "required": [
+          "price",
+          "source",
+          "timestamp"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "price": {
+            "type": "number",
+            "description": "USD price used to value the asset"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the price came from (a price_points source, `<source>->XLM`, or STABLECOIN_PEG)"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "via": {
+            "type": "object",
+            "description": "Present when the price was derived through XLM; names XLM's own USD source",
+            "required": [
+              "asset",
+              "source",
+              "timestamp"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "asset": {
+                "type": "string",
+                "enum": [
+                  "XLM"
+                ]
+              },
+              "source": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "TvlPool": {
+        "type": "object",
+        "required": [
+          "poolId",
+          "venue",
+          "pairKey",
+          "assetA",
+          "assetB",
+          "reserveA",
+          "reserveB",
+          "priced",
+          "tvlUsd",
+          "unpricedReason",
+          "unpricedAssets",
+          "valuationSources"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "poolId": {
+            "type": "string"
+          },
+          "venue": {
+            "type": "string"
+          },
+          "pairKey": {
+            "type": "string"
+          },
+          "assetA": {
+            "type": "string"
+          },
+          "assetB": {
+            "type": "string"
+          },
+          "reserveA": {
+            "type": "number",
+            "nullable": true,
+            "description": "Null when the venue does not record reserves or they could not be read; never 0 as a stand-in"
+          },
+          "reserveB": {
+            "type": "number",
+            "nullable": true
+          },
+          "priced": {
+            "type": "boolean"
+          },
+          "tvlUsd": {
+            "type": "number",
+            "nullable": true
+          },
+          "unpricedReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "unpriced_asset",
+              "no_reserves",
+              "invalid_reserves",
+              null
+            ]
+          },
+          "unpricedAssets": {
+            "type": "array",
+            "description": "Assets in this pool Lens has no fresh price for",
+            "items": {
+              "type": "string"
+            }
+          },
+          "valuationSources": {
+            "type": "object",
+            "required": [
+              "assetA",
+              "assetB"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "assetA": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/TvlValuationSource"
+                  }
+                ],
+                "nullable": true
+              },
+              "assetB": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/TvlValuationSource"
+                  }
+                ],
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "TvlResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "currency",
+          "totalTvlUsd",
+          "complete",
+          "unpricedPoolsCount",
+          "pricedPoolsCount",
+          "maxPriceAgeSeconds",
+          "valuationSources",
+          "venues",
+          "byAsset",
+          "pools",
+          "computedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD"
+            ]
+          },
+          "totalTvlUsd": {
+            "type": "number",
+            "description": "Sum over priced pools only; a lower bound when complete is false"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True when no pool was left unpriced"
+          },
+          "unpricedPoolsCount": {
+            "type": "integer"
+          },
+          "pricedPoolsCount": {
+            "type": "integer"
+          },
+          "maxPriceAgeSeconds": {
+            "type": "integer",
+            "description": "Oldest price observation used for valuation"
+          },
+          "valuationSources": {
+            "type": "object",
+            "description": "Every asset price used in this response, keyed by asset code",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TvlValuationSource"
+            }
+          },
+          "venues": {
+            "type": "object",
+            "description": "TVL per venue",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "tvlUsd",
+                "poolCount",
+                "pricedPoolCount",
+                "unpricedPoolCount",
+                "complete",
+                "valuationSources"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "tvlUsd": {
+                  "type": "number"
+                },
+                "poolCount": {
+                  "type": "integer"
+                },
+                "pricedPoolCount": {
+                  "type": "integer"
+                },
+                "unpricedPoolCount": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "valuationSources": {
+                  "type": "array",
+                  "description": "Distinct price sources used to value this venue's priced pools",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "byAsset": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "amount",
+                "priceUsd",
+                "priceSource",
+                "tvlUsd",
+                "priced"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "priceUsd": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "priceSource": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "tvlUsd": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "priced": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TvlPool"
+            }
+          },
+          "computedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TvlHistoryResponse": {
+        "type": "object",
+        "required": [
+          "network",
+          "window",
+          "interval",
+          "points"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "window": {
+            "type": "string"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "bucket",
+                "tvlUsd",
+                "pricedPoolsCount",
+                "unpricedPoolsCount"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "bucket": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "tvlUsd": {
+                  "type": "number"
+                },
+                "pricedPoolsCount": {
+                  "type": "integer"
+                },
+                "unpricedPoolsCount": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       },

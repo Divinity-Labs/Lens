@@ -3,12 +3,47 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network'
 
-import { apiError } from '../errors'
+/** Currency every TVL figure is stated in. */
+export const TVL_VALUATION_CURRENCY = 'USD'
+
+/**
+ * Oldest price observation used to value a pool. A price older than this is
+ * not used at all: a dead venue's last print is not a valuation.
+ */
+export const TVL_MAX_PRICE_AGE_SECONDS = 24 * 60 * 60
+
+/** Source named on assets valued by peg rather than by an observed price. */
+export const STABLECOIN_PEG_SOURCE = 'STABLECOIN_PEG'
+
+/** Venue name for each `price_points.source` that carries a Soroban/AMM pool id. */
+export const EXTERNAL_POOL_VENUES: Record<string, string> = {
+  soroswap_amm: 'Soroswap',
+  aquarius_amm: 'Aquarius',
+  phoenix_amm: 'Phoenix',
+}
+
+/** Venue name for pools read from `pool_snapshots` (the Horizon classic AMM ingester). */
+export const CLASSIC_AMM_VENUE = 'Stellar Classic AMM'
+
 export interface ValuationPriceSource {
   price: number
+  /** Where the number came from: a `price_points.source`, `<source>->XLM`, or STABLECOIN_PEG. */
   source: string
   timestamp: string
+  /**
+   * Set when the price was derived through XLM: the asset's XLM price came
+   * from `source`, and XLM's USD price came from `via.source`.
+   */
+  via?: { asset: 'XLM'; source: string; timestamp: string }
 }
+
+/**
+ * Why a pool has no TVL:
+ * - `unpriced_asset`: Lens has no fresh price for one or both assets (see `unpricedAssets`).
+ * - `no_reserves`: the venue's ingester records prices but not reserves, so there is nothing to value.
+ * - `invalid_reserves`: the stored reserves could not be read as numbers.
+ */
+export type UnpricedReason = 'unpriced_asset' | 'no_reserves' | 'invalid_reserves'
 
 export interface PoolTvlBreakdown {
   poolId: string
@@ -16,30 +51,44 @@ export interface PoolTvlBreakdown {
   pairKey: string
   assetA: string
   assetB: string
-  reserveA: number
-  reserveB: number
+  /** Null when the venue does not record reserves or they could not be read. Never 0 as a stand-in. */
+  reserveA: number | null
+  reserveB: number | null
   priced: boolean
   tvlUsd: number | null
+  unpricedReason: UnpricedReason | null
+  unpricedAssets: string[]
   valuationSources: {
     assetA: ValuationPriceSource | null
     assetB: ValuationPriceSource | null
   }
 }
 
+export interface VenueTvl {
+  /** Sum over this venue's priced pools only. A lower bound when `complete` is false. */
+  tvlUsd: number
+  poolCount: number
+  pricedPoolCount: number
+  unpricedPoolCount: number
+  /** True when every pool at this venue was valued. */
+  complete: boolean
+  /** Distinct price sources used to value this venue's priced pools. */
+  valuationSources: string[]
+}
+
 export interface TvlResponse {
   network: NetworkName
+  currency: typeof TVL_VALUATION_CURRENCY
+  /** Sum over priced pools only. A lower bound when `complete` is false. */
   totalTvlUsd: number
+  /** True when no pool was left unpriced. */
+  complete: boolean
   unpricedPoolsCount: number
   pricedPoolsCount: number
-  venues: Record<
-    string,
-    {
-      tvlUsd: number
-      poolCount: number
-      pricedPoolCount: number
-      unpricedPoolCount: number
-    }
-  >
+  maxPriceAgeSeconds: number
+  /** Every asset price used for this response, keyed by asset code, with its source. */
+  valuationSources: Record<string, ValuationPriceSource>
+  venues: Record<string, VenueTvl>
   byAsset: Record<
     string,
     {
@@ -80,20 +129,37 @@ export function normalizeAssetCode(asset: string): string {
   return code.toUpperCase()
 }
 
+function isUsdCode(code: string): boolean {
+  return code === 'USDC' || code === 'USD'
+}
+
+/** Reads a stored reserve; null when it is missing or not a finite, non-negative number. */
+function readReserve(raw: unknown): number | null {
+  if (raw == null || raw === '') return null
+  const n = parseFloat(String(raw))
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
 /**
- * Fetches latest prices in USD for known assets on the specified network.
- * If an asset is USDC or USD, it is pegged at 1.0 with source 'STABLECOIN_PEG'.
- * Otherwise, resolves the latest price point where the asset is traded against USDC or USD.
+ * Fetches the latest USD price for each asset Lens can price on `network`.
+ *
+ * - USDC and USD are valued at 1.0 with source STABLECOIN_PEG.
+ * - Otherwise the asset's freshest direct observation against USDC/USD is
+ *   used, from whichever venue printed it most recently (ties broken by
+ *   source name, so the choice is deterministic). The venue is named.
+ * - Failing that, an asset quoted against XLM is valued through XLM's USD
+ *   price; both legs are named (`source` and `via`).
+ * - Only observations newer than {@link TVL_MAX_PRICE_AGE_SECONDS} are used.
+ *   An asset with no fresh observation is absent from the map: unpriced.
  */
 export async function getAssetUsdPrices(
   network: NetworkName
 ): Promise<Map<string, ValuationPriceSource>> {
   const priceMap = new Map<string, ValuationPriceSource>()
 
-  // Native stables default to 1.0
   const nowIso = new Date().toISOString()
-  priceMap.set('USDC', { price: 1.0, source: 'STABLECOIN_PEG', timestamp: nowIso })
-  priceMap.set('USD', { price: 1.0, source: 'STABLECOIN_PEG', timestamp: nowIso })
+  priceMap.set('USDC', { price: 1.0, source: STABLECOIN_PEG_SOURCE, timestamp: nowIso })
+  priceMap.set('USD', { price: 1.0, source: STABLECOIN_PEG_SOURCE, timestamp: nowIso })
 
   const { rows } = await pgPool.query<{
     asset_a: string
@@ -106,53 +172,43 @@ export async function getAssetUsdPrices(
             asset_a, asset_b, price, source, timestamp
        FROM price_points
       WHERE network = $1
+        AND timestamp >= NOW() - ($2 || ' seconds')::interval
       ORDER BY pair_key, source, timestamp DESC`,
-    [network]
+    [network, String(TVL_MAX_PRICE_AGE_SECONDS)]
   )
 
-  for (const row of rows) {
-    const rawPrice = parseFloat(row.price)
-    if (!Number.isFinite(rawPrice) || rawPrice <= 0) continue
+  // Freshest first; source name breaks ties so the pick never depends on row order.
+  const observations = rows
+    .map((row) => ({
+      codeA: normalizeAssetCode(row.asset_a),
+      codeB: normalizeAssetCode(row.asset_b),
+      price: parseFloat(row.price),
+      source: String(row.source),
+      ts: new Date(row.timestamp).getTime(),
+    }))
+    .filter((o) => Number.isFinite(o.price) && o.price > 0 && Number.isFinite(o.ts))
+    .sort((x, y) => y.ts - x.ts || x.source.localeCompare(y.source))
 
-    const codeA = normalizeAssetCode(row.asset_a)
-    const codeB = normalizeAssetCode(row.asset_b)
-    const tsIso = new Date(row.timestamp).toISOString()
-
-    // If paired with USDC or USD
-    if (codeB === 'USDC' || codeB === 'USD') {
-      if (!priceMap.has(codeA)) {
-        priceMap.set(codeA, { price: rawPrice, source: row.source, timestamp: tsIso })
-      }
-    } else if (codeA === 'USDC' || codeA === 'USD') {
-      if (!priceMap.has(codeB)) {
-        priceMap.set(codeB, { price: 1.0 / rawPrice, source: row.source, timestamp: tsIso })
-      }
+  // First pass: direct USD-stable quotes. Stored price is assetB per assetA.
+  for (const o of observations) {
+    const timestamp = new Date(o.ts).toISOString()
+    if (isUsdCode(o.codeB) && !priceMap.has(o.codeA)) {
+      priceMap.set(o.codeA, { price: o.price, source: o.source, timestamp })
+    } else if (isUsdCode(o.codeA) && !priceMap.has(o.codeB)) {
+      priceMap.set(o.codeB, { price: 1.0 / o.price, source: o.source, timestamp })
     }
   }
 
-  // Second pass: if XLM is priced, price assets paired with XLM
-  const xlmPriceObj = priceMap.get('XLM')
-  if (xlmPriceObj) {
-    for (const row of rows) {
-      const rawPrice = parseFloat(row.price)
-      if (!Number.isFinite(rawPrice) || rawPrice <= 0) continue
-
-      const codeA = normalizeAssetCode(row.asset_a)
-      const codeB = normalizeAssetCode(row.asset_b)
-      const tsIso = new Date(row.timestamp).toISOString()
-
-      if (codeB === 'XLM' && !priceMap.has(codeA)) {
-        priceMap.set(codeA, {
-          price: rawPrice * xlmPriceObj.price,
-          source: `${row.source}->XLM`,
-          timestamp: tsIso,
-        })
-      } else if (codeA === 'XLM' && !priceMap.has(codeB)) {
-        priceMap.set(codeB, {
-          price: (1.0 / rawPrice) * xlmPriceObj.price,
-          source: `${row.source}->XLM`,
-          timestamp: tsIso,
-        })
+  // Second pass: assets quoted against XLM, valued through XLM's USD price.
+  const xlm = priceMap.get('XLM')
+  if (xlm) {
+    const via = { asset: 'XLM' as const, source: xlm.source, timestamp: xlm.timestamp }
+    for (const o of observations) {
+      const timestamp = new Date(o.ts).toISOString()
+      if (o.codeB === 'XLM' && !priceMap.has(o.codeA)) {
+        priceMap.set(o.codeA, { price: o.price * xlm.price, source: `${o.source}->XLM`, timestamp, via })
+      } else if (o.codeA === 'XLM' && !priceMap.has(o.codeB)) {
+        priceMap.set(o.codeB, { price: (1.0 / o.price) * xlm.price, source: `${o.source}->XLM`, timestamp, via })
       }
     }
   }
@@ -163,13 +219,13 @@ export async function getAssetUsdPrices(
 export async function computeCurrentTvl(network: NetworkName): Promise<TvlResponse> {
   const prices = await getAssetUsdPrices(network)
 
-  // 1. Fetch latest snapshot per pool in pool_snapshots (Stellar Classic AMM)
+  // 1. Latest snapshot per pool in pool_snapshots (Stellar Classic AMM, with reserves)
   const ammResult = await pgPool.query<{
     pool_id: string
     asset_a: string
     asset_b: string
-    reserve_a: string | number
-    reserve_b: string | number
+    reserve_a: string | number | null
+    reserve_b: string | number | null
     timestamp: Date | string
   }>(
     `SELECT DISTINCT ON (ps.pool_id)
@@ -181,7 +237,9 @@ export async function computeCurrentTvl(network: NetworkName): Promise<TvlRespon
     [network]
   )
 
-  // 2. Fetch distinct pools from price_points for Soroswap and Aquarius (which tag pool_id)
+  // 2. Pools seen through price_points at venues that tag a pool id but do not
+  //    persist reserves (Soroswap, Aquarius, Phoenix). They are listed so the
+  //    venue is visible, and reported unpriced with reason no_reserves.
   const externalPoolsResult = await pgPool.query<{
     pool_id: string
     pair_key: string
@@ -194,71 +252,73 @@ export async function computeCurrentTvl(network: NetworkName): Promise<TvlRespon
             pool_id, pair_key, asset_a, asset_b, source, timestamp
        FROM price_points
       WHERE network = $1
-        AND source IN ('soroswap_amm', 'aquarius_amm')
+        AND source = ANY($2::text[])
         AND pool_id IS NOT NULL
       ORDER BY pool_id, timestamp DESC`,
-    [network]
+    [network, Object.keys(EXTERNAL_POOL_VENUES)]
   )
 
   const poolBreakdowns: PoolTvlBreakdown[] = []
 
-  // Add AMM pools
   for (const row of ammResult.rows) {
-    const reserveA = parseFloat(String(row.reserve_a)) || 0
-    const reserveB = parseFloat(String(row.reserve_b)) || 0
+    const reserveA = readReserve(row.reserve_a)
+    const reserveB = readReserve(row.reserve_b)
     const codeA = normalizeAssetCode(row.asset_a)
     const codeB = normalizeAssetCode(row.asset_b)
 
     const priceA = prices.get(codeA) ?? null
     const priceB = prices.get(codeB) ?? null
+    const unpricedAssets = [priceA ? null : row.asset_a, priceB ? null : row.asset_b].filter(
+      (a): a is string => a !== null
+    )
 
-    const priced = priceA !== null && priceB !== null
-    const tvlUsd = priced ? reserveA * priceA.price + reserveB * priceB.price : null
+    let unpricedReason: UnpricedReason | null = null
+    if (reserveA === null || reserveB === null) unpricedReason = 'invalid_reserves'
+    else if (unpricedAssets.length > 0) unpricedReason = 'unpriced_asset'
+
+    const priced = unpricedReason === null
+    const tvlUsd = priced ? reserveA! * priceA!.price + reserveB! * priceB!.price : null
 
     poolBreakdowns.push({
       poolId: row.pool_id,
-      venue: 'Stellar Classic AMM',
+      venue: CLASSIC_AMM_VENUE,
       pairKey: `${row.asset_a}/${row.asset_b}`,
       assetA: row.asset_a,
       assetB: row.asset_b,
       reserveA,
       reserveB,
       priced,
-      tvlUsd: priced && tvlUsd !== null ? parseFloat(tvlUsd.toFixed(2)) : null,
-      valuationSources: {
-        assetA: priceA,
-        assetB: priceB,
-      },
+      tvlUsd: tvlUsd !== null ? parseFloat(tvlUsd.toFixed(2)) : null,
+      unpricedReason,
+      unpricedAssets,
+      valuationSources: { assetA: priceA, assetB: priceB },
     })
   }
 
-  // Add Soroswap and Aquarius pools that are not in pool_snapshots
   const existingPoolIds = new Set(poolBreakdowns.map((p) => p.poolId))
   for (const row of externalPoolsResult.rows) {
     if (existingPoolIds.has(row.pool_id)) continue
 
-    const venue = row.source === 'soroswap_amm' ? 'Soroswap' : 'Aquarius'
-    const codeA = normalizeAssetCode(row.asset_a)
-    const codeB = normalizeAssetCode(row.asset_b)
+    const venue = EXTERNAL_POOL_VENUES[row.source] ?? row.source
+    const priceA = prices.get(normalizeAssetCode(row.asset_a)) ?? null
+    const priceB = prices.get(normalizeAssetCode(row.asset_b)) ?? null
+    const unpricedAssets = [priceA ? null : row.asset_a, priceB ? null : row.asset_b].filter(
+      (a): a is string => a !== null
+    )
 
-    const priceA = prices.get(codeA) ?? null
-    const priceB = prices.get(codeB) ?? null
-
-    // For external AMM pools without reserves snapshot, report unpriced / 0 reserve
     poolBreakdowns.push({
       poolId: row.pool_id,
       venue,
       pairKey: row.pair_key,
       assetA: row.asset_a,
       assetB: row.asset_b,
-      reserveA: 0,
-      reserveB: 0,
+      reserveA: null,
+      reserveB: null,
       priced: false,
       tvlUsd: null,
-      valuationSources: {
-        assetA: priceA,
-        assetB: priceB,
-      },
+      unpricedReason: 'no_reserves',
+      unpricedAssets,
+      valuationSources: { assetA: priceA, assetB: priceB },
     })
   }
 
@@ -268,7 +328,24 @@ export async function computeCurrentTvl(network: NetworkName): Promise<TvlRespon
   let unpricedPoolsCount = 0
 
   const venues: TvlResponse['venues'] = {}
+  const venueSources = new Map<string, Set<string>>()
   const byAsset: TvlResponse['byAsset'] = {}
+  const valuationSources: Record<string, ValuationPriceSource> = {}
+
+  const addAsset = (raw: string, amount: number | null) => {
+    const code = normalizeAssetCode(raw)
+    if (!byAsset[code]) {
+      const src = prices.get(code)
+      byAsset[code] = {
+        amount: 0,
+        priceUsd: src?.price ?? null,
+        priceSource: src?.source ?? null,
+        tvlUsd: null,
+        priced: src !== undefined,
+      }
+    }
+    if (amount !== null) byAsset[code].amount += amount
+  }
 
   for (const p of poolBreakdowns) {
     if (!venues[p.venue]) {
@@ -277,50 +354,41 @@ export async function computeCurrentTvl(network: NetworkName): Promise<TvlRespon
         poolCount: 0,
         pricedPoolCount: 0,
         unpricedPoolCount: 0,
+        complete: true,
+        valuationSources: [],
       }
+      venueSources.set(p.venue, new Set())
     }
-    venues[p.venue].poolCount++
+    const v = venues[p.venue]
+    v.poolCount++
 
     if (p.priced && p.tvlUsd !== null) {
       totalTvlUsd += p.tvlUsd
       pricedPoolsCount++
-      venues[p.venue].tvlUsd = parseFloat((venues[p.venue].tvlUsd + p.tvlUsd).toFixed(2))
-      venues[p.venue].pricedPoolCount++
+      v.tvlUsd = parseFloat((v.tvlUsd + p.tvlUsd).toFixed(2))
+      v.pricedPoolCount++
+      for (const [raw, src] of [
+        [p.assetA, p.valuationSources.assetA],
+        [p.assetB, p.valuationSources.assetB],
+      ] as const) {
+        if (!src) continue
+        venueSources.get(p.venue)!.add(src.source)
+        valuationSources[normalizeAssetCode(raw)] = src
+      }
     } else {
       unpricedPoolsCount++
-      venues[p.venue].unpricedPoolCount++
+      v.unpricedPoolCount++
+      v.complete = false
     }
 
-    // Asset breakdowns
-    const codeA = normalizeAssetCode(p.assetA)
-    const codeB = normalizeAssetCode(p.assetB)
-
-    if (!byAsset[codeA]) {
-      const srcA = prices.get(codeA)
-      byAsset[codeA] = {
-        amount: 0,
-        priceUsd: srcA?.price ?? null,
-        priceSource: srcA?.source ?? null,
-        tvlUsd: null,
-        priced: srcA !== undefined,
-      }
-    }
-    byAsset[codeA].amount += p.reserveA
-
-    if (!byAsset[codeB]) {
-      const srcB = prices.get(codeB)
-      byAsset[codeB] = {
-        amount: 0,
-        priceUsd: srcB?.price ?? null,
-        priceSource: srcB?.source ?? null,
-        tvlUsd: null,
-        priced: srcB !== undefined,
-      }
-    }
-    byAsset[codeB].amount += p.reserveB
+    addAsset(p.assetA, p.reserveA)
+    addAsset(p.assetB, p.reserveB)
   }
 
-  // Compute final asset tvlUsd
+  for (const [venue, set] of venueSources) {
+    venues[venue].valuationSources = Array.from(set).sort()
+  }
+
   for (const code of Object.keys(byAsset)) {
     const item = byAsset[code]
     item.amount = parseFloat(item.amount.toFixed(7))
@@ -331,9 +399,13 @@ export async function computeCurrentTvl(network: NetworkName): Promise<TvlRespon
 
   return {
     network,
+    currency: TVL_VALUATION_CURRENCY,
     totalTvlUsd: parseFloat(totalTvlUsd.toFixed(2)),
+    complete: unpricedPoolsCount === 0,
     pricedPoolsCount,
     unpricedPoolsCount,
+    maxPriceAgeSeconds: TVL_MAX_PRICE_AGE_SECONDS,
+    valuationSources,
     venues,
     byAsset,
     pools: poolBreakdowns,
@@ -353,8 +425,8 @@ export async function computeTvlHistory(
     pool_id: string
     asset_a: string
     asset_b: string
-    reserve_a: string | number
-    reserve_b: string | number
+    reserve_a: string | number | null
+    reserve_b: string | number | null
   }>(
     `SELECT date_trunc('hour', ps.timestamp) AS bucket,
             ps.pool_id, ps.asset_a, ps.asset_b,
@@ -368,10 +440,7 @@ export async function computeTvlHistory(
     [network, windowHours.toString()]
   )
 
-  const bucketsMap = new Map<
-    string,
-    { tvlUsd: number; pricedCount: number; unpricedCount: number }
-  >()
+  const bucketsMap = new Map<string, { tvlUsd: number; pricedCount: number; unpricedCount: number }>()
 
   for (const row of rows) {
     const bKey = new Date(row.bucket).toISOString()
@@ -380,15 +449,12 @@ export async function computeTvlHistory(
     }
     const b = bucketsMap.get(bKey)!
 
-    const codeA = normalizeAssetCode(row.asset_a)
-    const codeB = normalizeAssetCode(row.asset_b)
-    const priceA = prices.get(codeA)
-    const priceB = prices.get(codeB)
+    const priceA = prices.get(normalizeAssetCode(row.asset_a))
+    const priceB = prices.get(normalizeAssetCode(row.asset_b))
+    const reserveA = readReserve(row.reserve_a)
+    const reserveB = readReserve(row.reserve_b)
 
-    const reserveA = parseFloat(String(row.reserve_a)) || 0
-    const reserveB = parseFloat(String(row.reserve_b)) || 0
-
-    if (priceA && priceB) {
+    if (priceA && priceB && reserveA !== null && reserveB !== null) {
       b.tvlUsd += reserveA * priceA.price + reserveB * priceB.price
       b.pricedCount++
     } else {
@@ -418,11 +484,9 @@ export async function registerTvlRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
     Querystring: { network?: string; history?: string; window?: string }
   }>('/tvl', { config: { public: true } }, async (req, reply) => {
-    const requested = req.query.network
-    if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
-    }
-    const network: NetworkName = (requested as NetworkName) ?? req.network ?? activeNetwork
+    // The network selector middleware resolves ?network= / x-network and
+    // rejects an unknown value with 400 before this handler runs.
+    const network: NetworkName = req.network ?? activeNetwork
 
     const isHistory = req.query.history === 'true'
     if (isHistory) {
