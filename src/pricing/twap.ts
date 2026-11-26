@@ -92,23 +92,23 @@ export async function computeTWAP(
               NOW() AS window_end
      ),
      carry_in AS (
-       SELECT p.price::numeric as price, p.timestamp, COALESCE(p.observed_at, p.timestamp) as observed_at
-       FROM price_points p, bounds b
-       WHERE p.pair_key = $1
-         AND p.network = $3
-         AND COALESCE(p.observed_at, p.timestamp) >= b.window_start - ($4 || ' minutes')::interval
-         AND COALESCE(p.observed_at, p.timestamp) < b.window_start
-       ORDER BY COALESCE(p.observed_at, p.timestamp) DESC
+       SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $3
+         AND COALESCE(observed_at, timestamp) >= b.window_start - ($4 || ' minutes')::interval
+         AND COALESCE(observed_at, timestamp) < b.window_start
+       ORDER BY COALESCE(observed_at, timestamp) DESC
        LIMIT 1
      ),
      in_window AS (
-       SELECT p.price::numeric as price, p.timestamp, COALESCE(p.observed_at, p.timestamp) as observed_at
-       FROM price_points p, bounds b
-       WHERE p.pair_key = $1
-         AND p.network = $3
-         AND COALESCE(p.observed_at, p.timestamp) >= b.window_start
-         AND COALESCE(p.observed_at, p.timestamp) < b.window_end
-       ORDER BY COALESCE(p.observed_at, p.timestamp) ASC
+       SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $3
+         AND COALESCE(observed_at, timestamp) >= b.window_start
+         AND COALESCE(observed_at, timestamp) < b.window_end
+       ORDER BY COALESCE(observed_at, timestamp) ASC
      )
      SELECT price::numeric as price, timestamp, observed_at FROM carry_in
      UNION ALL
@@ -158,10 +158,12 @@ export async function computeTWAP(
     .map((r: any, i: number) => ({
       ts: new Date(r.observed_at ?? r.timestamp).getTime(),
       price: rawPrices[i],
+      // The decimal string as the database returned it, for exact string output.
+      raw: String(r.price),
       rejected: rejectedIndices.has(i),
     }))
     .filter((point: any) => !point.rejected)
-    .map(({ ts, price }: any) => ({ ts, price }))
+    .map(({ ts, price, raw }: any) => ({ ts, price, raw }))
     .sort((a: any, b: any) => a.ts - b.ts)
 
   if (validPoints.length === 0) {
@@ -182,12 +184,12 @@ export async function computeTWAP(
 
   const carryInFloorMs = windowStartMs - TWAP_CARRY_IN_LOOKBACK_MS
   let twap = 0
+  let weightedSum = 0
+  let totalWeightMs = 0
 
   if (sampleIntervalSeconds !== undefined) {
     // Explicit discrete sub-sampling mode over [windowStartMs, windowEndMs) in one forward pass.
     const sampleIntervalMs = sampleIntervalSeconds * 1000
-    let weightedSum = 0
-    let totalWeightMs = 0
     let activePrice: number | null = null
     let ptr = 0
 
@@ -210,12 +212,8 @@ export async function computeTWAP(
         totalWeightMs += dt
       }
     }
-
-    twap = totalWeightMs > 0 ? weightedSum / totalWeightMs : 0
   } else {
     // Continuous step-function integration in one pass over the rows.
-    let weightedSum = 0
-    let totalWeightMs = 0
     let currentPrice: number | null = null
     let currentTs = windowStartMs
 
@@ -248,12 +246,33 @@ export async function computeTWAP(
         totalWeightMs += tailDt
       }
     }
+  }
 
-    twap = totalWeightMs > 0 ? weightedSum / totalWeightMs : 0
+  // Prices the window may use: nothing older than the carry-in look-back.
+  const usable = validPoints.filter((p: any) => p.ts >= carryInFloorMs)
+  let exactTwap: string | null = null
+
+  if (totalWeightMs > 0) {
+    twap = weightedSum / totalWeightMs
+  } else if (usable.length > 0) {
+    // No price held for any measurable time inside the window: the only row
+    // landed on or after windowEnd (written while this request was in flight).
+    // Report that newest price, as a single-row series always has, instead of
+    // a TWAP of 0 next to a non-zero sampleCount.
+    const newest = usable[usable.length - 1]
+    twap = newest.price
+    exactTwap = newest.raw
+  }
+
+  // One price in force for the whole window averages to itself. Return its
+  // decimal string unchanged so string format keeps every decimal place
+  // instead of going through a float.
+  if (exactTwap === null && usable.length > 0 && usable.every((p: any) => p.raw === usable[0].raw)) {
+    exactTwap = usable[0].raw
   }
 
   return {
-    twap: isString ? String(twap) : twap,
+    twap: isString ? (exactTwap ?? String(twap)) : twap,
     startTime,
     endTime,
     sampleCount: rawPrices.length,
