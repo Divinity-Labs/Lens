@@ -30,6 +30,21 @@ import { getMetrics, register } from '../metrics.js';
 import { checkPaidCallTarget, parsePaidCallAllowlist, type PaidCallAllowRule } from './paidCallAllowlist.js';
 import { LENS_PRICE_TOOL_NAME, lensPriceToolDefinition, readLensPrice, type LensPriceQueries } from './priceTool.js';
 import {
+  LENS_QUOTE_TOOL_NAME,
+  lensQuoteToolDefinition,
+  readLensQuote,
+  type LensQuoteQueries,
+} from './quoteTool.js';
+import {
+  LENS_GET_POOLS_TOOL_NAME,
+  LENS_LIST_PAIRS_TOOL_NAME,
+  LENS_SCREEN_PAIRS_TOOL_NAME,
+  callLensDataTool,
+  isLensDataToolName,
+  lensDataToolDefinitions,
+  type LensDataQueries,
+} from './lensTools.js';
+import {
   BAZAAR_SEARCH_ARGUMENTS_SCHEMA,
   PAID_CALL_ARGUMENTS_SCHEMA,
   zodToToolInputSchema,
@@ -94,7 +109,7 @@ export const VALID_TOOL_NAMES = ['bazaar_search', 'paid_call'] as const;
 export type ValidToolName = (typeof VALID_TOOL_NAMES)[number];
 
 export interface McpServerConfig {
-  fetchWithPayment: typeof fetch;
+  fetchWithPayment?: typeof fetch;
   /**
    * Cumulative ceiling over paid calls. Optional so a server can still run with
    * per-call limits only, but leaving it out means nothing bounds a day: the
@@ -119,6 +134,20 @@ export interface McpServerConfig {
    * not advertise the tool, so an agent is never offered a price it cannot get.
    */
   priceQueries?: LensPriceQueries;
+  /**
+   * Lens's own pairs, pools and screener, for `lens_list_pairs`,
+   * `lens_get_pools` and `lens_screen_pairs` (#409). Hosts that can read the
+   * data pass {@link createLensDataQueries}; leaving it out does not advertise
+   * the tools, so an agent is never offered a listing this server cannot produce.
+   */
+  dataQueries?: LensDataQueries;
+  /**
+   * Lens's own route, depth and impact reads, for `lens_quote` (#685). Hosts
+   * that can price an order pass {@link createLensQuoteQueries}; leaving it out
+   * does not advertise the tool, so an agent is never offered a quote this
+   * server cannot produce.
+   */
+  quoteQueries?: LensQuoteQueries;
   /**
    * Outbound fetch policy for `bazaar_search`. Falls back to the operator's
    * shared `OUTBOUND_ALLOWED_HOSTS` allowlist. `lookup`/`fetchImpl` exist so
@@ -270,10 +299,12 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 export class BazaarMcpServer {
   private server: Server;
-  private fetchWithPayment: typeof fetch;
+  private fetchWithPayment?: typeof fetch;
   private paidCallRules: PaidCallAllowRule[];
   private bazaarFetchOptions: SsrfFetchOptions;
   private priceQueries?: LensPriceQueries;
+  private dataQueries?: LensDataQueries;
+  private quoteQueries?: LensQuoteQueries;
   private budget?: SpendBudget;
   private limits: McpLimits;
   private resources: LensResourceDescriptor[];
@@ -283,6 +314,8 @@ export class BazaarMcpServer {
   constructor(config_: McpServerConfig) {
     this.fetchWithPayment = config_.fetchWithPayment;
     this.priceQueries = config_.priceQueries;
+    this.dataQueries = config_.dataQueries;
+    this.quoteQueries = config_.quoteQueries;
     this.budget = config_.budget;
     this.paymentLedger = config_.paymentLedger ?? new PaymentLedger();
     this.limits = { ...config.mcp, ...config_.limits };
@@ -374,6 +407,20 @@ export class BazaarMcpServer {
       // feed while being unable to state Lens's own.
       if (this.priceQueries) {
         tools.push(lensPriceToolDefinition());
+      }
+
+      // #409: the same reasoning one question later — an agent that can read a
+      // price still cannot ask what is quotable, what liquidity backs it, or what
+      // is moving. Advertised only when this process can read Lens's data.
+      if (this.dataQueries) {
+        tools.push(...lensDataToolDefinitions());
+      }
+
+      // #685: one question the price tool cannot answer — what a trade of a
+      // *given size* costs. Advertised only where the host can price an order,
+      // so an agent is never offered a quote it would have to compute itself.
+      if (this.quoteQueries) {
+        tools.push(lensQuoteToolDefinition());
       }
 
       return { tools };
@@ -511,6 +558,100 @@ export class BazaarMcpServer {
         }
       }
 
+      if (request.params.name === LENS_QUOTE_TOOL_NAME) {
+        if (!this.quoteQueries) {
+          return this.createErrorResponse(
+            'ERR_INTERNAL_FAILURE',
+            'lens_quote is not available: this server has no Lens quote source configured.'
+          );
+        }
+
+        try {
+          const outcome = await readLensQuote(request.params.arguments, this.quoteQueries);
+
+          if (!outcome.ok) {
+            return this.createErrorResponse(outcome.error.code, outcome.error.reason);
+          }
+
+          // A quote carries three ladders — depth levels, impact sizes and the
+          // threshold answers — so it is the largest of the read-only tools.
+          // Over the output budget it is labelled as truncated rather than
+          // shipped whole, exactly as the price tool answers #416.
+          const bounded = boundSerialized(outcome.result, {
+            maxBytes: this.limits.maxResultBytes,
+            maxItems: Number.MAX_SAFE_INTEGER,
+            offset: 0,
+            notice: `A Lens quote was truncated to fit a ${this.limits.maxResultBytes}-byte tool output limit; the depth and impact ladders are the part that was cut.`,
+          });
+          return bounded.truncated
+            ? { content: [{ type: 'text', text: bounded.text }] }
+            : { content: [{ type: 'text', text: bounded.text }], structuredContent: outcome.result };
+        } catch (e: any) {
+          // Every leg reads Postgres and Horizon, so a throw here means the data
+          // layer was unreachable — which is not the same answer as a pair with
+          // no liquidity, and must not reach the agent as one. The driver error
+          // belongs in the log, not in a transcript: it can carry the connection
+          // string.
+          console.error(`[mcp-server] ${request.params.name} failed:`, e);
+          return this.createErrorResponse(
+            'ERR_SERVICE_UNREACHABLE',
+            'lens_quote could not price this order: the backing store is unreachable. Retry later rather than treating the missing numbers as zero liquidity.'
+          );
+        }
+      }
+
+      if (isLensDataToolName(request.params.name)) {
+        if (!this.dataQueries) {
+          return this.createErrorResponse(
+            'ERR_INTERNAL_FAILURE',
+            `${request.params.name} is not available: this server has no Lens data source configured.`
+          );
+        }
+
+        try {
+          const outcome = await callLensDataTool(request.params.name, request.params.arguments, this.dataQueries, {
+            defaultLimit: this.limits.defaultPageLimit,
+            maxLimit: this.limits.maxPageLimit,
+          });
+
+          if (!outcome.ok) {
+            return this.createErrorResponse(outcome.error.code, outcome.error.reason);
+          }
+
+          // Same rule as the price tool: a page that does not fit the output
+          // budget is reported as truncated rather than shipped whole, because
+          // the point of #409 is that an agent is not handed 500 pairs at once.
+          // The cursor goes first: it names the end of the page that was
+          // fetched, not of the prefix that survives, so following it would
+          // skip rows silently. `hasMore` plus the notice tell the agent to
+          // re-run the same call with a smaller limit instead.
+          const budget: ResultBudget = {
+            maxBytes: this.limits.maxResultBytes,
+            maxItems: Number.MAX_SAFE_INTEGER,
+            offset: 0,
+            notice: `A Lens data page was truncated to fit a ${this.limits.maxResultBytes}-byte tool output limit; ask again with a smaller limit for the rest.`,
+          };
+          const page =
+            Buffer.byteLength(JSON.stringify(outcome.result), 'utf8') > budget.maxBytes
+              ? { ...outcome.result, nextCursor: null }
+              : outcome.result;
+          const bounded = boundSerialized(page, budget);
+          return bounded.truncated
+            ? { content: [{ type: 'text', text: bounded.text }] }
+            : { content: [{ type: 'text', text: bounded.text }], structuredContent: outcome.result };
+        } catch (e: any) {
+          // These pages come from Postgres, so a throw means the data layer is
+          // unreachable. The reason says that and nothing more: a driver error
+          // carries the connection string, and an agent's transcript is not where
+          // it belongs. The operator sees the real failure in the log.
+          console.error(`[mcp-server] ${request.params.name} failed:`, e);
+          return this.createErrorResponse(
+            'ERR_SERVICE_UNREACHABLE',
+            `${request.params.name} could not read Lens data: the backing store is unreachable. Retry later rather than assuming the answer is empty.`
+          );
+        }
+      }
+
       if (request.params.name === 'bazaar_search') {
         const parsed = BAZAAR_SEARCH_ARGUMENTS_SCHEMA.safeParse(request.params.arguments ?? {});
         if (!parsed.success) {
@@ -616,6 +757,13 @@ export class BazaarMcpServer {
           const method = request.params.arguments?.method ? String(request.params.arguments?.method) : 'GET';
           
       if (request.params.name === 'paid_call') {
+        if (!this.fetchWithPayment) {
+          return this.createErrorResponse(
+            'ERR_PAYMENT_REJECTED',
+            'paid_call is disabled: no payment keys configured on this server.'
+          );
+        }
+
         const parsed = PAID_CALL_ARGUMENTS_SCHEMA.safeParse(request.params.arguments ?? {});
         if (!parsed.success) {
           return this.createErrorResponse('ERR_BAD_REQUEST', formatZodError(parsed.error));
@@ -820,6 +968,10 @@ export class BazaarMcpServer {
   private paymentCouldNotHaveSettled(e: any): boolean {
     const msg = String(e?.message || e).toLowerCase();
     return (
+      msg.includes('no network/scheme registered') ||
+      msg.includes('no scheme registered') ||
+      msg.includes('missing key') ||
+      msg.includes('not configured for network') ||
       msg.includes('failed to parse payment requirements') ||
       msg.includes('failed to create payment payload') ||
       msg.includes('signatureexpirationledger') ||

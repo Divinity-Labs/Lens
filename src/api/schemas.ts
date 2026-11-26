@@ -116,6 +116,10 @@ export const statusResponseSchema = {
     lastIndexedLedger: { type: ['integer', 'null'] },
     lastProcessedAt: {},
     ingestLagSeconds: { type: ['integer', 'null'] },
+    // Which scheduler is actually pruning snapshots (#399). Reported so a
+    // silent fall back to the in-process timer is visible rather than inferred
+    // from the absence of queue activity.
+    retentionPath: { type: 'string', enum: ['starting', 'redis_queue', 'in_process'] },
     adminConfigured: { type: 'boolean' },
     crashes: {
       type: 'array',
@@ -127,6 +131,22 @@ export const statusResponseSchema = {
           name: { type: 'string' },
           network: { type: 'string', enum: ['testnet', 'mainnet'] },
           message: { type: 'string' },
+          at: { type: 'string' },
+        },
+      },
+    },
+    /** #329: sources whose latest fetch failed, per (source, subject). */
+    failedSources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'network', 'subject', 'at'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          network: { type: 'string', enum: ['testnet', 'mainnet'] },
+          /** The pair key for a venue, the asset code for an oracle. */
+          subject: { type: 'string' },
           at: { type: 'string' },
         },
       },
@@ -176,6 +196,9 @@ export const priceResponseSchema = {
     'sources',
     'confidence',
     'lastTradeAgeSeconds',
+    'newestInputObservedAt',
+    'inputCount',
+    'stalenessThresholdSeconds',
     'stale',
     'bestRoute',
     'lastUpdated',
@@ -200,6 +223,9 @@ export const priceResponseSchema = {
     sources: { type: 'integer' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
     lastTradeAgeSeconds: { type: ['integer', 'null'] },
+    newestInputObservedAt: { type: ['string', 'null'] },
+    inputCount: { type: 'integer' },
+    stalenessThresholdSeconds: { type: 'integer' },
     stale: { type: 'boolean' },
     bestRoute: { type: 'string', enum: ['SDEX', 'AMM', 'SPLIT', 'UNKNOWN'] },
     lastUpdated: { type: 'string' },
@@ -332,6 +358,21 @@ export const historyResponseSchema = {
     pairKey: { type: 'string' },
     network: { type: 'string', enum: ['testnet', 'mainnet'] },
     window: { type: 'string', enum: ['1m', '5m', '1h', '24h'] },
+    incomplete: { type: 'boolean' },
+    gaps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['source', 'start', 'end', 'status'],
+        additionalProperties: false,
+        properties: {
+          source: { type: 'string' },
+          start: { type: 'string' },
+          end: { type: 'string' },
+          status: { type: 'string', enum: ['open', 'permanent'] },
+        },
+      },
+    },
     buckets: {
       type: 'array',
       items: {
@@ -371,11 +412,12 @@ export const historyResponseSchema = {
  *
  * Rows come straight from a raw SQL query whose column set may evolve, so the
  * row shape is intentionally permissive (additionalProperties allowed). The
- * envelope, however, is validated.
+ * envelope, however, is validated — including the cursor-pagination fields
+ * every list route carries alongside its own key.
  */
 export const poolsResponseSchema = {
   type: 'object',
-  required: ['pools'],
+  required: ['pools', 'nextCursor', 'hasMore'],
   additionalProperties: false,
   properties: {
     pools: {
@@ -391,15 +433,25 @@ export const poolsResponseSchema = {
           reserve_b: { type: ['number', 'string', 'null'] },
           spot_price: { type: ['number', 'string', 'null'] },
           fee_bp: { type: ['integer', 'null'] },
+          window: { type: 'string', enum: ['24h'] },
+          feeAprPct: { type: ['number', 'null'] },
+          impermanentLossPct: { type: ['number', 'null'] },
+          netReturn24hPct: { type: ['number', 'null'] },
+          estimate: { type: 'boolean' },
         },
       },
     },
+    nextCursor: { type: ['string', 'null'] },
+    hasMore: { type: 'boolean' },
   },
 } as const
 
 export const depthResponseSchema = {
   type: 'object',
-  required: ['assetA', 'assetB', 'pairKey', 'spotPrice', 'executionPrice', 'slippagePct', 'asks', 'bids', 'source'],
+  // `status` discriminates the two arms. The priced fields are not required,
+  // because an unavailable answer deliberately carries no numbers — reporting
+  // a spotPrice of 0 for "no pool could price this" is the bug #219 is about.
+  required: ['assetA', 'assetB', 'pairKey', 'status'],
   additionalProperties: false,
   properties: {
     assetA: { type: 'string' },
@@ -433,6 +485,33 @@ export const depthResponseSchema = {
       },
     },
     source: { type: 'string', enum: ['AMM', 'SDEX', 'BOTH'] },
+    status: { type: 'string', enum: ['ok', 'unavailable'] },
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    reason: { type: 'string' },
+    pool: {
+      type: 'object',
+      required: ['poolId', 'feeBp', 'feeReadAt', 'reservesObservedAt'],
+      additionalProperties: false,
+      properties: {
+        poolId: { type: 'string' },
+        // Read from the venue per pool, never assumed — see src/pricing/pool-fee.ts.
+        feeBp: { type: 'number' },
+        feeReadAt: { type: 'string' },
+        reservesObservedAt: { type: 'string' },
+      },
+    },
+    excludedPools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['poolId', 'reason'],
+        additionalProperties: false,
+        properties: {
+          poolId: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
   },
 } as const
 
@@ -868,6 +947,177 @@ export const snapshotResponseSchema = {
   },
 } as const
 
+export const venuesResponseSchema = {
+  type: 'object',
+  required: ['network', 'window', 'venues', 'excludedVenues', 'totalVolume', 'marketShares', 'periodOverPeriodPctChange'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    window: { type: 'string', enum: ['24h', '7d', '30d'] },
+    venues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['venue', 'baseVolume', 'counterVolume', 'samples', 'pairs', 'marketShare', 'periodOverPeriodPctChange', 'lastUpdated', 'ageSeconds'],
+        additionalProperties: false,
+        properties: {
+          venue: { type: 'string' },
+          baseVolume: { type: ['number', 'string'] },
+          counterVolume: { type: ['number', 'string'] },
+          samples: { type: 'integer' },
+          pairs: { type: 'integer' },
+          marketShare: { type: 'number' },
+          periodOverPeriodPctChange: { type: 'number' },
+          lastUpdated: { type: ['string', 'null'] },
+          ageSeconds: { type: ['integer', 'null'] },
+        },
+      },
+    },
+    excludedVenues: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    totalVolume: {
+      type: 'object',
+      required: ['value', 'unit', 'reason'],
+      additionalProperties: false,
+      properties: {
+        value: { type: ['number', 'null'] },
+        unit: { type: ['object', 'null'], properties: { code: { type: 'string' }, issuer: { type: ['string', 'null'] } } },
+        reason: { type: ['string', 'null'] },
+      },
+    },
+    marketShares: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        total: { type: 'number' },
+        variance: { type: 'number' },
+      },
+    },
+    periodOverPeriodPctChange: { type: 'number' },
+  },
+} as const
+
+/** GET /pegs */
+export const pegsResponseSchema = {
+  type: 'object',
+  required: ['network', 'pegs'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    pegs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: [
+          'asset',
+          'code',
+          'issuer',
+          'target',
+          'targetPrice',
+          'pairKey',
+          'currentPrice',
+          'currentDeviationBps',
+          'worstDeviationBps',
+          'status',
+          'reason',
+          'window',
+          'provenance',
+        ],
+        additionalProperties: false,
+        properties: {
+          asset: { type: 'string' },
+          code: { type: 'string' },
+          issuer: { type: ['string', 'null'] },
+          target: { type: 'string' },
+          targetPrice: { type: 'number' },
+          pairKey: { type: ['string', 'null'] },
+          currentPrice: { type: ['number', 'null'] },
+          currentDeviationBps: { type: ['number', 'null'] },
+          worstDeviationBps: { type: ['number', 'null'] },
+          status: {
+            type: 'string',
+            enum: ['on_peg', 'off_peg', 'no_reference', 'no_data', 'error'],
+          },
+          reason: { type: ['string', 'null'] },
+          window: { type: 'string' },
+          provenance: {
+            type: 'object',
+            required: ['venues', 'sampleCount', 'freshnessSeconds', 'lastSampleTimestamp'],
+            additionalProperties: false,
+            properties: {
+              venues: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              sampleCount: { type: 'integer' },
+              freshnessSeconds: { type: ['integer', 'null'] },
+              lastSampleTimestamp: { type: ['string', 'null'] },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const
+
+/** GET /movers */
+const moverItemSchema = {
+  type: 'object',
+  required: [
+    'pairKey',
+    'assetA',
+    'assetB',
+    'priceChangePct',
+    'startPrice',
+    'endPrice',
+    'currentVolume',
+    'previousVolume',
+    'volumeChangePct',
+    'hasPreviousVolume',
+    'venues',
+    'isSingleVenue',
+    'sampleCount',
+    'lastUpdated',
+  ],
+  additionalProperties: false,
+  properties: {
+    pairKey: { type: 'string' },
+    assetA: { type: 'string' },
+    assetB: { type: 'string' },
+    priceChangePct: { type: ['number', 'null'] },
+    startPrice: { type: ['number', 'string', 'null'] },
+    endPrice: { type: ['number', 'string', 'null'] },
+    currentVolume: { type: ['number', 'string'] },
+    previousVolume: { type: ['number', 'string'] },
+    volumeChangePct: { type: ['number', 'null'] },
+    hasPreviousVolume: { type: 'boolean' },
+    venues: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    isSingleVenue: { type: 'boolean' },
+    sampleCount: { type: 'integer' },
+    lastUpdated: { type: ['string', 'null'] },
+  },
+} as const
+
+export const moversResponseSchema = {
+  type: 'object',
+  required: ['network', 'window', 'startTime', 'endTime', 'gainers', 'losers', 'volumeMovers'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    window: { type: 'string', enum: ['1h', '24h', '7d'] },
+    startTime: { type: 'string' },
+    endTime: { type: 'string' },
+    gainers: { type: 'array', items: moverItemSchema },
+    losers: { type: 'array', items: moverItemSchema },
+    volumeMovers: { type: 'array', items: moverItemSchema },
+  },
+} as const
+
 /**
  * Install response-shape validation on a Fastify instance.
  *
@@ -895,3 +1145,102 @@ export function installResponseValidation(app: FastifyInstance): void {
     }
   })
 }
+
+// ── Asset metadata (#301) ────────────────────────────────────────────────────
+//
+// Appended whole rather than merged into the schemas above. `assetIdSchema`
+// (the {code, issuer} pair the /snapshot sub-objects share) and
+// `assetMetadataSchema` were added at the same point in the file by different
+// branches, so a textual union interleaved their property lists and produced
+// duplicate keys — where the last one silently wins.
+/** Asset metadata object */
+export const assetMetadataSchema = {
+  type: 'object',
+  required: [
+    'code',
+    'issuer',
+    'name',
+    'homeDomain',
+    'domain',
+    'decimals',
+    'status',
+    'verified',
+    'checkedAt',
+    'dateChecked',
+  ],
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string' },
+    issuer: { type: ['string', 'null'] },
+    name: { type: ['string', 'null'] },
+    homeDomain: { type: ['string', 'null'] },
+    domain: { type: ['string', 'null'] },
+    decimals: { type: 'integer' },
+    displayDecimals: { type: ['integer', 'null'] },
+    status: { type: 'string', enum: ['verified', 'unverified'] },
+    verified: { type: 'boolean' },
+    checkedAt: { type: 'string' },
+    dateChecked: { type: 'string' },
+    contractId: { type: ['string', 'null'] },
+    tomlUrl: { type: ['string', 'null'] },
+    verification: {
+      type: 'object',
+      required: ['status', 'verified', 'checkedAt', 'tomlUrl'],
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['verified', 'unverified'] },
+        verified: { type: 'boolean' },
+        checkedAt: { type: 'string' },
+        tomlUrl: { type: ['string', 'null'] },
+      },
+    },
+    provenance: {
+      type: 'object',
+      required: ['source', 'checkedAt', 'tomlUrl', 'verified'],
+      additionalProperties: false,
+      properties: {
+        source: { type: 'string' },
+        checkedAt: { type: 'string' },
+        tomlUrl: { type: ['string', 'null'] },
+        verified: { type: 'boolean' },
+      },
+    },
+  },
+} as const
+
+/** GET /assets */
+export const assetsResponseSchema = {
+  type: 'object',
+  required: ['network', 'assets'],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    assets: {
+      type: 'array',
+      items: assetMetadataSchema,
+    },
+  },
+} as const
+
+/** GET /assets/:code */
+export const assetDetailResponseSchema = {
+  type: 'object',
+  required: [
+    'network',
+    'code',
+    'issuer',
+    'name',
+    'homeDomain',
+    'domain',
+    'decimals',
+    'status',
+    'verified',
+    'checkedAt',
+    'dateChecked',
+  ],
+  additionalProperties: false,
+  properties: {
+    network: { type: 'string', enum: ['testnet', 'mainnet'] },
+    ...assetMetadataSchema.properties,
+  },
+} as const

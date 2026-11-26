@@ -65,6 +65,69 @@ export const PAID_CALL_ARGUMENTS_SCHEMA = z
 export type PaidCallArguments = z.infer<typeof PAID_CALL_ARGUMENTS_SCHEMA>;
 
 /**
+ * #409 — the paging half of the Lens data tools. `limit` is deliberately not
+ * capped here: an over-large ask is clamped to the operator's
+ * `MCP_MAX_PAGE_LIMIT` the same way `bazaar_search` clamps it, so the agent gets
+ * a smaller page rather than a refusal it has to decode. `cursor` is the opaque
+ * `nextCursor` the previous page handed back — REST's screener pages by the same
+ * token, which is what keeps a tool page and an HTTP page identical.
+ */
+const networkArg = z
+  .enum(['testnet', 'mainnet'])
+  .optional()
+  .describe('Stellar network to read. Defaults to the network this server is configured for.');
+const limitArg = z
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .describe('Maximum number of items to return in this page (clamped to the server page ceiling)');
+const cursorArg = z
+  .string()
+  .min(1)
+  .optional()
+  .describe('Opaque cursor from a previous page. Pass back the "nextCursor" the last result gave you; it is not a number an agent should construct.');
+
+export const LENS_LIST_PAIRS_ARGUMENTS_SCHEMA = z
+  .object({ network: networkArg, limit: limitArg, cursor: cursorArg })
+  .strict();
+
+export type LensListPairsArguments = z.infer<typeof LENS_LIST_PAIRS_ARGUMENTS_SCHEMA>;
+
+export const LENS_GET_POOLS_ARGUMENTS_SCHEMA = z
+  .object({ network: networkArg, limit: limitArg, cursor: cursorArg })
+  .strict();
+
+export type LensGetPoolsArguments = z.infer<typeof LENS_GET_POOLS_ARGUMENTS_SCHEMA>;
+
+/**
+ * Screener filters, one per REST query parameter. Coerced so an agent that
+ * sends `"1000"` instead of `1000` is understood rather than refused, which is
+ * also how the REST route reads them.
+ */
+const screenerNum = (name: string) =>
+  z.coerce.number({ error: `${name} must be a valid number` }).optional();
+
+export const LENS_SCREEN_PAIRS_ARGUMENTS_SCHEMA = z
+  .object({
+    network: networkArg,
+    limit: limitArg,
+    cursor: cursorArg,
+    volume: screenerNum('volume'),
+    change_24h_min: screenerNum('change_24h_min'),
+    change_24h_max: screenerNum('change_24h_max'),
+    price_min: screenerNum('price_min'),
+    price_max: screenerNum('price_max'),
+    liquidity: screenerNum('liquidity'),
+    sortBy: z.enum(['volume', 'change_24h', 'price', 'liquidity']).optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    market_cap: z.string().optional(),
+  })
+  .strict();
+
+export type LensScreenPairsArguments = z.infer<typeof LENS_SCREEN_PAIRS_ARGUMENTS_SCHEMA>;
+
+/**
  * Converts a Zod object schema into an MCP-compliant JSON schema dictionary.
  * Strips the top-level `$schema` field so it plugs directly into MCP tool `inputSchema`.
  */

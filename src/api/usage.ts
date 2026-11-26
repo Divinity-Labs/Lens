@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import fp from 'fastify-plugin'
 import { getUsageSummary, getAllUsageSummaries } from '../x402/metering'
 import { admin_auth_failures_total, api_key_auth_failures_total } from '../metrics'
 import { checkAdminAuth } from './auth'

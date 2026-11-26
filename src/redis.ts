@@ -86,3 +86,32 @@ export async function setCachedSnapshot(network: NetworkName, data: object, ttlS
     // Redis cache miss is non-fatal
   }
 }
+
+/**
+ * Asset metadata cache (#301). Keyed by network and asset so a testnet issuer
+ * is never served for a mainnet lookup, and held far longer than the price
+ * caches above — an issuer's home domain and toml do not move minute to minute.
+ *
+ * Both sides swallow their errors: an unreachable Redis means a slower lookup,
+ * never a failed one.
+ */
+export async function getCachedAsset(network: string, assetKey: string): Promise<string | null> {
+  try {
+    return await redis.get(`lens:${network}:asset:${assetKey}`)
+  } catch {
+    return null
+  }
+}
+
+export async function setCachedAsset(
+  network: string,
+  assetKey: string,
+  data: object,
+  ttlSeconds: number
+): Promise<void> {
+  try {
+    await redis.set(`lens:${network}:asset:${assetKey}`, JSON.stringify(data), 'EX', ttlSeconds)
+  } catch {
+    // Redis cache miss is non-fatal
+  }
+}

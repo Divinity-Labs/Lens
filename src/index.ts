@@ -15,10 +15,11 @@ import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
 import { fanOutManager } from './ws/fanout'
 
-import { venueAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
-import { startSnapshotIngester } from './ingesters/snapshot'
+import { venueAdapters, getEnabledAdapters, startVenueAdapter, startBlendIngester } from './ingest/venues'
+import { startSnapshotIngester } from './ingest/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
+import { createVenueReconciliationQueue, startVenueReconciliationWorker, scheduleVenueReconciliation, startInProcessVenueReconciliation } from './jobs/venueReconciliation'
 import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
 import {
   createPricePointsPartitionQueue,
@@ -31,6 +32,7 @@ import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
 import { markHealthy, recordCrash } from './ingester/restart'
 import { markBootComplete } from './health'
 import { startSep40Publisher } from './publish/publisher'
+import { setRetentionPath } from './jobs/retentionStatus'
 
 const log = createLogger('startup')
 
@@ -39,6 +41,7 @@ const log = createLogger('startup')
 // prints an unredacted error is the one place that matters most — a crash log
 // is exactly where a connection string or an API key tends to surface.
 installProcessErrorHandlers(log)
+
 
 async function main() {
   // ── Ensure DB schema is up-to-date ────────────────────────────────────────
@@ -138,6 +141,11 @@ async function main() {
   // schedule. If Redis is away, fall back to a plain timer that does the same
   // work in-process.
   const safePrune = async () => {
+    // This fallback run is metered the same way as the queue worker:
+    // pruneAllNetworks() records each network's run through runJob()
+    // (src/jobs/jobMetrics.ts), so no second wrapper here — it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const counts = await pruneAllNetworks()
       for (const [network, pruned] of Object.entries(counts)) {
@@ -153,23 +161,73 @@ async function main() {
   await safePrune()
 
   {
-    let retentionQueue: ReturnType<typeof createSnapshotRetentionQueue> | undefined
-    let retentionWorker: ReturnType<typeof startSnapshotRetentionWorker> | undefined
+    let fallbackTimer: NodeJS.Timeout | undefined
+    let recoveryTimer: NodeJS.Timeout | undefined
+
+    const startQueueRetention = async () => {
+      await redis.ping()
+      const queue = createSnapshotRetentionQueue()
+      const worker = startSnapshotRetentionWorker()
+      try {
+        await scheduleSnapshotRetention(queue)
+        if (fallbackTimer) clearInterval(fallbackTimer)
+        fallbackTimer = undefined
+        if (recoveryTimer) clearInterval(recoveryTimer)
+        recoveryTimer = undefined
+        setRetentionPath('redis_queue')
+        // Logged here rather than at the call site so it covers both the boot
+        // attempt and a later recovery: a service that quietly climbed back
+        // onto the queue after an outage is otherwise only visible in a metric.
+        log.info('snapshot retention worker started')
+        return true
+      } catch (err) {
+        await Promise.allSettled([queue.close(), worker.close()])
+        throw err
+      }
+    }
+
     try {
-      retentionQueue = createSnapshotRetentionQueue()
-      retentionWorker = startSnapshotRetentionWorker()
-      await scheduleSnapshotRetention(retentionQueue)
-      log.info('snapshot retention worker started')
+      await startQueueRetention()
     } catch (err) {
-      log.warn({ err }, 'snapshot retention worker skipped (redis unavailable)')
-      log.warn('falling back to an in-process hourly prune')
-      await Promise.allSettled([retentionQueue?.close(), retentionWorker?.close()])
-      setInterval(() => { void safePrune() }, 60 * 60 * 1000).unref()
+      log.warn({ err }, 'snapshot retention worker unavailable; using hourly in-process prune')
+      setRetentionPath('in_process')
+      // The SQL prune uses FOR UPDATE SKIP LOCKED, so multiple instances can
+      // safely prune disjoint batches if they briefly overlap.
+      fallbackTimer = setInterval(() => { void safePrune() }, 60 * 60 * 1000)
+      fallbackTimer.unref()
+      recoveryTimer = setInterval(() => {
+        void startQueueRetention().catch(() => { /* remain on the visible fallback path */ })
+      }, 30 * 1000)
+      recoveryTimer.unref()
+    }
+  }
+
+  // ── Venue dispersion reconciliation ───────────────────────────────────────
+  // Periodically computes per-pair cross-venue dispersion, stores reconciliation
+  // history, and alerts if dispersion exceeds threshold.
+  {
+    for (const network of getEnabledNetworks()) {
+      let reconQueue: ReturnType<typeof createVenueReconciliationQueue> | undefined
+      let reconWorker: ReturnType<typeof startVenueReconciliationWorker> | undefined
+      try {
+        reconQueue = createVenueReconciliationQueue(network)
+        reconWorker = startVenueReconciliationWorker(network)
+        await scheduleVenueReconciliation(reconQueue, network)
+        log.info({ network }, 'venue reconciliation worker started')
+      } catch (err) {
+        log.warn({ err, network }, 'venue reconciliation worker unavailable; falling back to in-process timer')
+        await Promise.allSettled([reconQueue?.close(), reconWorker?.close()])
+        startInProcessVenueReconciliation(network)
+      }
     }
   }
 
   // ── Lending rate retention ────────────────────────────────────────────────
   const safeRatePrune = async () => {
+    // Metered per network inside pruneAllRateNetworks() (src/jobs/jobMetrics.ts),
+    // exactly as for the queue worker — no second wrapper here, it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const counts = await pruneAllRateNetworks()
       for (const [network, pruned] of Object.entries(counts)) {
@@ -205,6 +263,10 @@ async function main() {
   // expired partitions is opt-in via PRICE_POINTS_DROP_EXPIRED=true (default: off)
   // to safeguard raw historical records until rollups are complete (#231).
   const safeMaintainPartitions = async () => {
+    // Metered inside runPricePointsMaintenance() (src/jobs/jobMetrics.ts),
+    // exactly as for the queue worker — no second wrapper here, it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const result = await runPricePointsMaintenance()
       if (result.created.length > 0) {
@@ -239,6 +301,7 @@ async function main() {
   }
 
   // ── Ingesters (run in background — infinite loops) ────────────────────────
+
   // Each ingester is independently fault-isolated via restartIngester, keyed by
   // the (venue, network) pair: a crash in, say, the Soroswap ingester on
   // mainnet only restarts that one instance and cannot affect SDEX/AMM or the
@@ -288,7 +351,7 @@ async function main() {
   const enabledNetworks = getEnabledNetworks()
   log.info({ networks: enabledNetworks }, 'starting ingesters')
   for (const network of enabledNetworks) {
-    for (const adapter of venueAdapters) {
+    for (const adapter of getEnabledAdapters()) {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))

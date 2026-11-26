@@ -5,10 +5,11 @@ import compress from '@fastify/compress'
 import { sendInternalError } from './errors'
 import rateLimit from '@fastify/rate-limit'
 import { registerRESTRoutes } from './api/rest'
-import { registerGraphQL } from './api/graphql'
+import { registerGraphQL, type GraphQLUiOptions } from './api/graphql'
 import { registerWebhookRoutes } from './routes/webhooks'
 import { registerCandleRoutes } from './routes/candles'
 import { registerPairsRoutes } from './routes/pairs'
+import { registerPoolsRoutes } from './routes/pools'
 import { registerScreenerRoutes } from './routes/screener'
 import { registerMoversRoutes } from './routes/movers'
 import { registerHistoryRoutes } from './api/history'
@@ -22,18 +23,24 @@ import { registerAdminRoutes } from './api/admin'
 import { registerUsageRoutes } from './api/usage'
 import { registerFacilitatorRoutes } from './api/facilitator'
 import { registerPriceRoutes } from './routes/price'
+import { registerPremiumRoutes } from './routes/premium'
 import { registerVolumeRoutes } from './routes/volumes'
+import { registerCoverageRoutes } from './routes/coverage'
 import { registerBookRoutes } from './routes/book'
 import { registerSpreadsRoutes } from './routes/spreads'
 import { registerRateRoutes } from './routes/rates'
 import { registerBenchmarkRoutes } from './routes/benchmark'
+import { registerPegsRoutes } from './routes/pegs'
 import { registerOracleRoutes } from './routes/oracle'
 import { registerBasketRoutes } from './routes/basket'
 import { registerCorrelationRoutes } from './routes/correlation'
 import { registerDiscoveryRoutes } from './routes/discovery'
 import { registerSnapshotRoutes } from './routes/snapshot'
 import { registerVenueRoutes } from './routes/venues'
+import { registerAssetRoutes } from './routes/assets'
 import { registerSettleRoute } from './routes/facilitator'
+import { registerApiVersioning, rewriteVersionedApiUrl } from './api/versioning'
+import { registerDispersionRoutes } from './routes/dispersion'
 import { registerHealthRoutes } from './routes/health'
 import { registerTvlRoutes } from './routes/tvl'
 import { registerCachePolicy } from './middleware/cachePolicy'
@@ -54,6 +61,7 @@ import { createCorsDelegator, type CorsConfig } from './cors'
  */
 const PROBE_PATHS = new Set(['/status', '/live', '/ready'])
 
+
 export interface BuildAppOptions {
   /**
    * Invoked for every route Fastify registers, before the app is ready.
@@ -67,6 +75,7 @@ export interface BuildAppOptions {
    * Optional CORS configuration override (useful in testing).
    */
   corsConfig?: CorsConfig
+  graphqlUi?: GraphQLUiOptions
 }
 
 /**
@@ -93,6 +102,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const app = Fastify({
     logger: { ...loggerOptions(), stream: createDestination() },
     genReqId: () => randomUUID(),
+    // Resolves `/v1/<path>` onto the single bare route that is registered, so
+    // every route answers at both `/v1/...` and its unversioned alias without
+    // being mounted twice. See src/api/versioning.ts.
+    rewriteUrl: rewriteVersionedApiUrl,
   })
 
   app.setErrorHandler((error: any, req, reply) => {
@@ -114,6 +127,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, { delegator: createCorsDelegator(options.corsConfig) })
   await app.register(registerETag)
   await app.register(compress)
+
+  // Warn callers who use the deprecated unversioned aliases (Deprecation /
+  // Link headers). Registered before the routes so the hook is in place, and
+  // it only reads what rewriteUrl recorded — it never blocks a request.
+  registerApiVersioning(app)
 
   // HTTP request/latency metrics. Registered FIRST, ahead of the network
   // selector, API-key auth, the rate limiter and x402, so that requests those
@@ -225,15 +243,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerWebhookRoutes(app)
   await registerCandleRoutes(app)
   await registerPairsRoutes(app)
+  await registerPoolsRoutes(app)
   await registerScreenerRoutes(app)
   await registerMoversRoutes(app)
   await registerHistoryRoutes(app)
   await registerPriceRoutes(app)
+  await registerPremiumRoutes(app)
   await registerVolumeRoutes(app)
+  await registerCoverageRoutes(app)
   await registerBookRoutes(app)
   await registerSpreadsRoutes(app)
   await registerRateRoutes(app)
   await registerBenchmarkRoutes(app)
+  await registerPegsRoutes(app)
   await registerOracleRoutes(app)
   await registerBasketRoutes(app)
   await registerCorrelationRoutes(app)
@@ -241,10 +263,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSnapshotRoutes(app)
   await registerVenueRoutes(app)
   await registerFiatRoutes(app)
+  await registerAssetRoutes(app)
   await registerSettleRoute(app)
+  await registerDispersionRoutes(app)
   await registerHealthRoutes(app)
   await registerTvlRoutes(app)
-  await registerGraphQL(app)
+  await registerGraphQL(app, options.graphqlUi)
   await registerWebSocket(app)
 
   // Global error handler: catches unhandled errors, ensuring database pool exhaustion

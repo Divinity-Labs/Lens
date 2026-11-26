@@ -49,14 +49,14 @@ export async function appendSnapshots(
        SELECT DISTINCT ON (pair_key) pair_key, price::numeric AS price
        FROM price_points
        WHERE pair_key = ANY($1) AND network = $3
-       ORDER BY pair_key, timestamp DESC
+       ORDER BY pair_key, COALESCE(observed_at, timestamp) DESC
      ),
      vol AS (
        SELECT pair_key, SUM(base_volume::numeric) AS volume
        FROM price_points
        WHERE pair_key = ANY($1) AND network = $3
-         AND timestamp >= $2
-         AND timestamp < $2 + INTERVAL '1 minute'
+         AND COALESCE(observed_at, timestamp) >= $2
+         AND COALESCE(observed_at, timestamp) < $2 + INTERVAL '1 minute'
        GROUP BY pair_key
      )
      INSERT INTO price_snapshots (network, pair, ts, price, volume)
