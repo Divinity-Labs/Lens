@@ -48,6 +48,18 @@ redis.on('error', (err) => {
   suppressedRedisErrors = 0
 })
 
+/**
+ * Close the Redis connection. Called by the graceful shutdown path after the
+ * HTTP listener and ingesters have stopped, so no in-flight command is cut off.
+ */
+export async function closeRedis(): Promise<void> {
+  try {
+    await redis.quit()
+  } catch {
+    redis.disconnect()
+  }
+}
+
 export async function getCachedPrice(pairKey: string): Promise<string | null> {
   try {
     return await redis.get(`lens:${activeNetwork}:price:${pairKey}`)

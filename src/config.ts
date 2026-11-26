@@ -704,6 +704,10 @@ const globalConfig = {
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
   },
+  shutdown: {
+    // Bounded grace period for in-flight work after SIGTERM/SIGINT. Exceeding it is logged loudly and the process exits anyway.
+    graceMs: positiveNumber(process.env.SHUTDOWN_GRACE_MS, 25_000),
+  },
   reconciliation: {
     intervalMs: parseInt(process.env.RECONCILIATION_INTERVAL_MS ?? '60000', 10),
     freshnessWindowSeconds: parseInt(process.env.RECONCILIATION_FRESHNESS_SECONDS ?? '300', 10),
@@ -829,6 +833,7 @@ export const config = {
   http:    globalConfig.http,
   reconciliation: globalConfig.reconciliation,
   ws:      globalConfig.ws,
+  shutdown: globalConfig.shutdown,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,
 }
@@ -837,4 +842,3 @@ export function getPairReconciliationThreshold(pairKey: string): number {
   const norm = pairKey.toUpperCase()
   return config.reconciliation.pairThresholds[norm] ?? config.reconciliation.thresholdPct
 }
-
