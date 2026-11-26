@@ -2324,24 +2324,43 @@ paths:
   /v1/correlation:
     get:
       x-question: "Do these assets move together, or are they genuinely diversified?"
-      x-example: "GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet"
+      x-example: "GET /correlation?assets=XLM,EURC&quote=USDC&window=30d&network=testnet"
       x-order: 26
       x-category: "Comparative Analytics & Market Quality"
       operationId: getCorrelation
       summary: Compute price correlation matrix across a basket of assets over a window
+      description: |
+        Every requested asset is priced in one quote asset, using only stored
+        pairs between that asset and the quote (the stored direction is
+        honoured; no cross rates are derived). Prices are bucketed in the
+        database, one close per asset per bucket, and the Pearson coefficient
+        is computed on bucket-to-bucket simple returns over intervals both
+        assets share. An asset with no pair against the quote gets
+        `coefficient: null`, `status: insufficient`, `reason: no_quote_pair`.
+        A series whose returns never change gets `coefficient: null`,
+        `status: zero_variance`.
       security: []
       parameters:
         - name: assets
           in: query
           required: true
-          description: Comma-separated or repeated asset codes (at least two)
+          description: Comma-separated or repeated asset codes, at least two and at most ten. Must not include the quote asset.
           schema:
             oneOf:
               - type: string
               - type: array
                 items:
                   type: string
-          example: XLM,USDC
+          example: XLM,EURC
+        - name: quote
+          in: query
+          required: false
+          description: Asset code every requested asset is priced in. Defaults to USDC. Must not be one of the requested assets.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9]{1,12}$'
+            default: USDC
+          example: USDC
         - name: window
           in: query
           required: false
@@ -2359,7 +2378,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/CorrelationResponse'
         '400':
-          description: Missing or invalid parameters
+          description: Missing or invalid parameters, more than ten assets, or the quote asset listed in assets (invalid_parameter)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
@@ -4953,7 +4976,7 @@ components:
 
     CorrelationResponse:
       type: object
-      required: [network, window, startTime, endTime, assets, matrix, sampleCounts, pairs]
+      required: [network, window, quote, method, bucketSeconds, startTime, endTime, assets, unquotedAssets, matrix, sampleCounts, pairs]
       additionalProperties: false
       properties:
         network:
@@ -4962,6 +4985,16 @@ components:
         window:
           type: string
           enum: [5m, 15m, 1h, 24h, 7d, 30d]
+        quote:
+          type: string
+          description: Asset code every series is priced in
+        method:
+          type: string
+          enum: [pearson_simple_returns]
+          description: Pearson coefficient on bucket-to-bucket simple returns of the bucket close
+        bucketSeconds:
+          type: integer
+          description: Bucket width used for the series (60 up to 1h, 300 up to 24h, 3600 up to 7d, 14400 beyond)
         startTime:
           type: string
           format: date-time
@@ -4970,6 +5003,11 @@ components:
           format: date-time
         assets:
           type: array
+          items:
+            type: string
+        unquotedAssets:
+          type: array
+          description: Requested assets with no pair against the quote in the window
           items:
             type: string
         matrix:
@@ -4982,7 +5020,7 @@ components:
               nullable: true
         sampleCounts:
           type: object
-          description: Overlapping sample count per pair
+          description: Number of returns over shared intervals per pair
           additionalProperties:
             type: object
             additionalProperties:
@@ -4994,7 +5032,7 @@ components:
 
     CorrelationCell:
       type: object
-      required: [assetA, assetB, coefficient, status, sampleCount, provenance]
+      required: [assetA, assetB, coefficient, status, reason, sampleCount, provenance]
       additionalProperties: false
       properties:
         assetA:
@@ -5004,10 +5042,15 @@ components:
         coefficient:
           type: number
           nullable: true
-          description: Pearson correlation coefficient between -1 and 1, or null if insufficient
+          description: Pearson correlation coefficient of returns between -1 and 1, or null when it cannot be computed
         status:
           type: string
-          enum: [computed, insufficient]
+          enum: [computed, insufficient, zero_variance]
+        reason:
+          type: string
+          nullable: true
+          enum: [no_quote_pair, insufficient_overlap, zero_variance, null]
+          description: Why the coefficient is null; null when computed
         sampleCount:
           type: integer
         provenance:

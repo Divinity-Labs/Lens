@@ -703,7 +703,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Compute price correlation matrix across a basket of assets over a window */
+        /**
+         * Compute price correlation matrix across a basket of assets over a window
+         * @description Every requested asset is priced in one quote asset, using only stored
+         *     pairs between that asset and the quote (the stored direction is
+         *     honoured; no cross rates are derived). Prices are bucketed in the
+         *     database, one close per asset per bucket, and the Pearson coefficient
+         *     is computed on bucket-to-bucket simple returns over intervals both
+         *     assets share. An asset with no pair against the quote gets
+         *     `coefficient: null`, `status: insufficient`, `reason: no_quote_pair`.
+         *     A series whose returns never change gets `coefficient: null`,
+         *     `status: zero_variance`.
+         */
         get: operations["getCorrelation"];
         put?: never;
         post?: never;
@@ -1843,18 +1854,29 @@ export interface components {
             network: "testnet" | "mainnet";
             /** @enum {string} */
             window: "5m" | "15m" | "1h" | "24h" | "7d" | "30d";
+            /** @description Asset code every series is priced in */
+            quote: string;
+            /**
+             * @description Pearson coefficient on bucket-to-bucket simple returns of the bucket close
+             * @enum {string}
+             */
+            method: "pearson_simple_returns";
+            /** @description Bucket width used for the series (60 up to 1h, 300 up to 24h, 3600 up to 7d, 14400 beyond) */
+            bucketSeconds: number;
             /** Format: date-time */
             startTime: string;
             /** Format: date-time */
             endTime: string;
             assets: string[];
+            /** @description Requested assets with no pair against the quote in the window */
+            unquotedAssets: string[];
             /** @description Symmetric correlation matrix keyed by asset pair */
             matrix: {
                 [key: string]: {
                     [key: string]: number | null;
                 };
             };
-            /** @description Overlapping sample count per pair */
+            /** @description Number of returns over shared intervals per pair */
             sampleCounts: {
                 [key: string]: {
                     [key: string]: number;
@@ -1865,10 +1887,15 @@ export interface components {
         CorrelationCell: {
             assetA: string;
             assetB: string;
-            /** @description Pearson correlation coefficient between -1 and 1, or null if insufficient */
+            /** @description Pearson correlation coefficient of returns between -1 and 1, or null when it cannot be computed */
             coefficient: number | null;
             /** @enum {string} */
-            status: "computed" | "insufficient";
+            status: "computed" | "insufficient" | "zero_variance";
+            /**
+             * @description Why the coefficient is null; null when computed
+             * @enum {string|null}
+             */
+            reason: "no_quote_pair" | "insufficient_overlap" | "zero_variance" | null;
             sampleCount: number;
             provenance: {
                 sampleCount: number;
@@ -3905,10 +3932,15 @@ export interface operations {
         parameters: {
             query: {
                 /**
-                 * @description Comma-separated or repeated asset codes (at least two)
-                 * @example XLM,USDC
+                 * @description Comma-separated or repeated asset codes, at least two and at most ten. Must not include the quote asset.
+                 * @example XLM,EURC
                  */
                 assets: string | string[];
+                /**
+                 * @description Asset code every requested asset is priced in. Defaults to USDC. Must not be one of the requested assets.
+                 * @example USDC
+                 */
+                quote?: string;
                 /** @description Lookback window (5m, 15m, 1h, 24h, 7d, 30d). Defaults to 24h. */
                 window?: "5m" | "15m" | "1h" | "24h" | "7d" | "30d";
                 /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
@@ -3929,12 +3961,14 @@ export interface operations {
                     "application/json": components["schemas"]["CorrelationResponse"];
                 };
             };
-            /** @description Missing or invalid parameters */
+            /** @description Missing or invalid parameters, more than ten assets, or the quote asset listed in assets (invalid_parameter) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
             429: components["responses"]["TooManyRequests"];
             /** @description Correlation computation failed */

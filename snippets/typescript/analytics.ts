@@ -164,7 +164,7 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
 // getCorrelation: GET /v1/correlation
 {
   const url = new URL("/v1/correlation", BASE_URL)
-  url.search = new URLSearchParams([["assets","XLM,USDC"],["network","testnet"]]).toString()
+  url.search = new URLSearchParams([["assets","XLM,EURC"],["network","testnet"]]).toString()
   const headers: Record<string, string> = {}
   const res = await fetch(url, { headers })
   console.log("getCorrelation", res.status, await res.json())

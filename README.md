@@ -177,7 +177,7 @@ the committed table differs from a fresh generation.
 | Over the past week, which oracle tracked the market most closely? | `GET /v1/compare/:asset/summary` | `GET /compare/XLM/summary?window=7d&network=testnet` |
 | How has the gap between an oracle and the market moved over time? | `GET /v1/compare/:asset/history` | `GET /compare/XLM/history?window=7d&network=testnet` |
 | What is the weighted price of a custom portfolio basket of assets? | `GET /v1/basket` | `GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet` |
-| Do these assets move together, or are they genuinely diversified? | `GET /v1/correlation` | `GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet` |
+| Do these assets move together, or are they genuinely diversified? | `GET /v1/correlation` | `GET /correlation?assets=XLM,EURC&quote=USDC&window=30d&network=testnet` |
 | Which pairs disagree most across venues right now? | `GET /v1/dispersion` | `GET /dispersion?network=testnet` |
 | The venues disagree on this pair — which one is the outlier? | `GET /v1/dispersion/:assetA/:assetB` | `GET /dispersion/XLM/USDC?network=testnet` |
 | Is this pair trading above or below the centralised exchanges? | `GET /v1/premium/:assetA/:assetB` | `GET /premium/XLM/USDC?network=testnet` |
