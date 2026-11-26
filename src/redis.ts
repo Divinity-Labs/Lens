@@ -1,5 +1,6 @@
 import Redis from 'ioredis'
 import { config, activeNetwork, type NetworkName } from './config'
+import { cacheHit, cacheMiss, cacheError } from './metrics'
 import { createLogger } from './logger'
 
 const log = createLogger('redis')
@@ -50,8 +51,12 @@ redis.on('error', (err) => {
 
 export async function getCachedPrice(pairKey: string): Promise<string | null> {
   try {
-    return await redis.get(`lens:${activeNetwork}:price:${pairKey}`)
+    const val = await redis.get(`lens:${activeNetwork}:price:${pairKey}`)
+    if (val !== null) cacheHit('price')
+    else cacheMiss('price')
+    return val
   } catch {
+    cacheError('price')
     return null
   }
 }
@@ -73,8 +78,12 @@ export async function setCachedPrice(pairKey: string, data: object, ttlSeconds: 
  */
 export async function getCachedSnapshot(network: NetworkName): Promise<string | null> {
   try {
-    return await redis.get(`lens:snapshot:${network}`)
+    const val = await redis.get(`lens:snapshot:${network}`)
+    if (val !== null) cacheHit('snapshot')
+    else cacheMiss('snapshot')
+    return val
   } catch {
+    cacheError('snapshot')
     return null
   }
 }
