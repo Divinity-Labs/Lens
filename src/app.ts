@@ -44,6 +44,7 @@ import { registerDispersionRoutes } from './routes/dispersion'
 import { registerHealthRoutes } from './routes/health'
 import { registerTvlRoutes } from './routes/tvl'
 import { registerCachePolicy } from './middleware/cachePolicy'
+import { registerRequestId } from './middleware/requestId'
 import { registerFiatRoutes } from './routes/fiat'
 import { registerGlobalRateLimit, parseGlobalRateLimit } from './middleware/globalRateLimit'
 import { getMetrics, rate_limit_rejections_total } from './metrics'
@@ -128,6 +129,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(registerETag)
   await app.register(compress)
 
+  // Request id (issue #265). Registered FIRST so every request — including
+  // ones rejected by the network selector, API-key auth, the rate limiter or
+  // x402 below — gets an id, has it bound to the logger, and returns it as a
+  // response header. An inbound x-request-id is honoured rather than replaced.
+  await app.register(registerRequestId)
+
   // Warn callers who use the deprecated unversioned aliases (Deprecation /
   // Link headers). Registered before the routes so the hook is in place, and
   // it only reads what rewriteUrl recorded — it never blocks a request.
@@ -182,6 +189,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         code: 'rate_limited',
         message: `Rate limit exceeded, retry in ${seconds} seconds`,
         retryAfter: seconds,
+        requestId: req.id,
       }
     },
   })
@@ -273,6 +281,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // Global error handler: catches unhandled errors, ensuring database pool exhaustion
   // is diagnosed with distinct logging and metric incrementation rather than a generic 500.
+  // Every error body also carries the request id (issue #265) so a user reporting a
+  // problem can quote one short string.
   app.setErrorHandler((error, req, reply) => {
     if (isPoolExhaustionError(error)) {
       recordPoolExhaustion(error, `http:${req.method}:${req.url}`)
@@ -280,10 +290,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         error: 'Service Unavailable',
         message: 'Database connection pool exhausted. Please retry shortly.',
         code: 'DB_POOL_EXHAUSTED',
+        requestId: req.id,
       })
     }
-    req.log.error(error)
-    return reply.send(error)
+
+    const statusCode =
+      typeof error.statusCode === 'number' && error.statusCode >= 400
+        ? error.statusCode
+        : 500
+
+    if (statusCode >= 500) {
+      req.log.error({ err: error }, 'request failed')
+    } else {
+      req.log.warn({ err: error }, 'request rejected')
+    }
+
+    return reply.status(statusCode).send({
+      statusCode,
+      error: error.name || 'Error',
+      message: statusCode >= 500 ? 'Internal Server Error' : error.message,
+      requestId: req.id,
+    })
   })
 
   // Prometheus metrics endpoint (un-gated, public — no API key required)
