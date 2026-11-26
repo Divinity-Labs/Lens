@@ -12,12 +12,16 @@ const SPEC_PATH = join(ROOT, 'openapi.yaml')
 const GROUPS: { name: string; prefixes: string[] }[] = [
   // /impact sits with price: it answers what a trade of a given size costs,
   // which is the same question /book and the depth routes answer.
-  { name: 'price', prefixes: ['/price/', '/candles', '/book', '/prices/', '/pools', '/pairs', '/impact'] },
+  //
+  // /assets sits beside /pairs for the same reason: both answer "what does Lens
+  // track", one by instrument and one by market, and a caller reaching for one
+  // usually wants the other in the same breath.
+  { name: 'price', prefixes: ['/price/', '/candles', '/book', '/prices/', '/pools', '/pairs', '/impact', '/assets'] },
   {
     name: 'analytics',
     prefixes: [
-      '/volumes', '/spreads', '/compare', '/screener', '/benchmark', '/basket',
-      '/tvl', '/rates', '/dispersion', '/movers', '/correlation',
+      '/volumes', '/spreads', '/compare', '/screener', '/benchmark', '/pegs', '/basket',
+      '/tvl', '/rates', '/dispersion', '/movers', '/correlation', '/coverage', '/premium',
     ],
   },
   { name: 'service', prefixes: ['/status', '/supported', '/discovery', '/usage', '/venues', '/snapshot'] },

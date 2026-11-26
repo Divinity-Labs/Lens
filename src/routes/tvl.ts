@@ -3,6 +3,7 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 export interface ValuationPriceSource {
   price: number
   source: string
@@ -419,7 +420,7 @@ export async function registerTvlRoutes(app: FastifyInstance): Promise<void> {
   }>('/tvl', { config: { public: true } }, async (req, reply) => {
     const requested = req.query.network
     if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
     const network: NetworkName = (requested as NetworkName) ?? req.network ?? activeNetwork
 

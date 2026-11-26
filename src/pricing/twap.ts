@@ -1,5 +1,5 @@
 import { pgPool } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, config, type NetworkName } from '../config'
 import type { DecimalFormat } from '../utils/decimals'
 
 // ─── TWAP — Time-Weighted Average Price ───────────────────────────────────────
@@ -15,6 +15,10 @@ export interface TWAPResult {
   outlierRejected: number
   filterMethod: string
   network: NetworkName
+  newestInputObservedAt: string | null
+  inputCount: number
+  stalenessThresholdSeconds: number
+  stale: boolean
 }
 
 export interface VWAPResult {
@@ -26,9 +30,13 @@ export interface VWAPResult {
   outlierRejected: number
   filterMethod: string
   network: NetworkName
+  newestInputObservedAt: string | null
+  inputCount: number
+  stalenessThresholdSeconds: number
+  stale: boolean
 }
 
-function median(arr: number[]): number {
+export function median(arr: number[]): number {
   const sorted = [...arr].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
@@ -54,12 +62,16 @@ export async function computeTWAP(
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
     decimalFormat?: DecimalFormat
+    staleThresholdSeconds?: number
   }
 ): Promise<TWAPResult> {
   const sampleIntervalSeconds = options?.sampleIntervalSeconds ?? 60
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
   const isString = options?.decimalFormat === 'string'
+  const staleThreshold = options?.staleThresholdSeconds
+    ?? (config as any).pricing?.staleThresholdSeconds
+    ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
   // Fetch price points within the window for the specific network, ordered by observed_at
   const result = await pgPool.query(
@@ -82,8 +94,19 @@ export async function computeTWAP(
       outlierRejected: 0,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt: null,
+      inputCount: 0,
+      stalenessThresholdSeconds: staleThreshold,
+      stale: false,
     }
   }
+
+  const newestRow = rows[rows.length - 1]
+  const newestTimestamp = new Date(newestRow.observed_at ?? newestRow.timestamp)
+  const newestInputObservedAt = newestTimestamp.toISOString()
+  const inputCount = rows.length
+  const lastTradeAgeSeconds = Math.floor((Date.now() - newestTimestamp.getTime()) / 1000)
+  const stale = lastTradeAgeSeconds >= staleThreshold
 
   // Extract raw prices for outlier rejection
   const rawPrices = rows.map((r: any) => parseFloat(r.price))
@@ -120,6 +143,10 @@ export async function computeTWAP(
       outlierRejected: rejected,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt,
+      inputCount,
+      stalenessThresholdSeconds: staleThreshold,
+      stale,
     }
   }
 
@@ -138,6 +165,10 @@ export async function computeTWAP(
       outlierRejected: rejected,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt,
+      inputCount,
+      stalenessThresholdSeconds: staleThreshold,
+      stale,
     }
   }
 
@@ -176,6 +207,10 @@ export async function computeTWAP(
     outlierRejected: rejected,
     filterMethod: outlierMethod,
     network,
+    newestInputObservedAt,
+    inputCount,
+    stalenessThresholdSeconds: staleThreshold,
+    stale,
   }
 }
 
@@ -198,11 +233,15 @@ export async function computeVWAP(
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
     decimalFormat?: DecimalFormat
+    staleThresholdSeconds?: number
   }
 ): Promise<VWAPResult> {
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
   const isString = options?.decimalFormat === 'string'
+  const staleThreshold = options?.staleThresholdSeconds
+    ?? (config as any).pricing?.staleThresholdSeconds
+    ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
   let query: string
   let params: any[]
@@ -239,8 +278,19 @@ export async function computeVWAP(
       outlierRejected: 0,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt: null,
+      inputCount: 0,
+      stalenessThresholdSeconds: staleThreshold,
+      stale: false,
     }
   }
+
+  const newestRow = rows[rows.length - 1]
+  const newestTimestamp = new Date(newestRow.observed_at ?? newestRow.timestamp)
+  const newestInputObservedAt = newestTimestamp.toISOString()
+  const inputCount = rows.length
+  const lastTradeAgeSeconds = Math.floor((Date.now() - newestTimestamp.getTime()) / 1000)
+  const stale = lastTradeAgeSeconds >= staleThreshold
 
   // For VWAP, outlier rejection considers the price dimension only
   // (volume dimension is not subject to manipulation in the same way)
@@ -267,6 +317,10 @@ export async function computeVWAP(
       outlierRejected: rejectedIndices.size,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt,
+      inputCount,
+      stalenessThresholdSeconds: staleThreshold,
+      stale,
     }
   }
 
@@ -281,6 +335,10 @@ export async function computeVWAP(
       outlierRejected: rejectedIndices.size,
       filterMethod: outlierMethod,
       network,
+      newestInputObservedAt,
+      inputCount,
+      stalenessThresholdSeconds: staleThreshold,
+      stale,
     }
   }
 
@@ -305,6 +363,10 @@ export async function computeVWAP(
     outlierRejected: rejectedIndices.size,
     filterMethod: outlierMethod,
     network,
+    newestInputObservedAt,
+    inputCount,
+    stalenessThresholdSeconds: staleThreshold,
+    stale,
   }
 }
 

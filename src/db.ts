@@ -8,9 +8,12 @@ import {
   db_pool_connections_waiting,
   db_pool_exhaustion_errors_total,
   setPoolMetricsUpdater,
+  price_points_accepted_total,
+  price_points_quarantined_total,
 } from './metrics'
 import { config, type NetworkName } from './config'
 import { createLogger } from './logger'
+import { partitionPricePointsByPlausibility } from './ingest/plausibility'
 
 const log = createLogger('db')
 
@@ -69,6 +72,7 @@ export const prisma = globalForPrisma.prisma ?? new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 })
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+;(globalThis as any).__lens_prisma = prisma
 
 // Raw pg pool for time-series queries (VWAP, aggregates)
 // ssl: true with rejectUnauthorized: false is required for Supabase pgbouncer
@@ -79,6 +83,7 @@ export const pgPool = new Pool({
   connectionTimeoutMillis: config.db.poolTimeoutMs,
   ssl: config.db.url.includes('supabase.com') ? { rejectUnauthorized: false } : undefined,
 })
+;(globalThis as any).__lens_pgPool = pgPool
 
 // Instrument raw pg queries
 const originalQuery = pgPool.query.bind(pgPool)
@@ -204,34 +209,77 @@ export async function upsertPricePoints(points: {
   assetA: string; assetB: string; pairKey: string; source: string
   poolId?: string; price: number; baseVolume: number; counterVolume: number
   ledger: number; observedAt?: Date; sourceTime?: Date | null; timestamp?: Date; eventId?: string
-}[], network: NetworkName): Promise<number> {
-  if (points.length === 0) return 0
-  const result = await prisma.pricePoint.createMany({
-    data: points.map(p => {
-      const observedAt = p.observedAt ?? p.timestamp ?? new Date()
-      const sourceTime = p.sourceTime !== undefined ? p.sourceTime : null
-      const timestamp = p.timestamp ?? observedAt
-      return {
-        id: p.id,
-        network,
-        assetA: p.assetA,
-        assetB: p.assetB,
-        pairKey: p.pairKey,
-        source: p.source,
-        poolId: p.poolId ?? null,
-        price: p.price,
-        baseVolume: p.baseVolume,
-        counterVolume: p.counterVolume,
-        ledger: p.ledger,
-        timestamp,
-        observedAt,
-        sourceTime,
-        eventId: p.eventId || synthesizeEventId(network, { ...p, timestamp }),
-      }
-    }),
-    skipDuplicates: true,
+}[], network: NetworkName): Promise<any> {
+  if (points.length === 0) return Object.assign(Object(0), { count: 0, acceptedPoints: [], quarantinedPoints: [] })
+
+  const { accepted, quarantined } = await partitionPricePointsByPlausibility(points as any, network)
+
+  let acceptedCount = 0
+  if (accepted.length > 0) {
+    const result = await prisma.pricePoint.createMany({
+      data: accepted.map((p: any) => {
+        const observedAt = p.observedAt ?? p.timestamp ?? new Date()
+        const sourceTime = p.sourceTime !== undefined ? p.sourceTime : null
+        const timestamp = p.timestamp ?? observedAt
+        return {
+          id: p.id ?? (p.eventId ? `${network}:${p.source}:${p.eventId}` : undefined),
+          network,
+          assetA: p.assetA,
+          assetB: p.assetB,
+          pairKey: p.pairKey,
+          source: p.source,
+          poolId: p.poolId ?? null,
+          price: p.price,
+          baseVolume: p.baseVolume,
+          counterVolume: p.counterVolume,
+          ledger: p.ledger,
+          timestamp,
+          observedAt,
+          sourceTime,
+          eventId: p.eventId || synthesizeEventId(network, { ...p, timestamp: p.timestamp }),
+        }
+      }),
+      skipDuplicates: true,
+    })
+    acceptedCount = result.count
+    for (const p of accepted) {
+      price_points_accepted_total.inc({ source: p.source, network })
+    }
+  }
+
+  if (quarantined.length > 0) {
+    if ((prisma as any).quarantinedPricePoint?.createMany) {
+      await (prisma as any).quarantinedPricePoint.createMany({
+        data: quarantined.map(q => ({
+          network,
+          assetA: q.assetA,
+          assetB: q.assetB,
+          pairKey: q.pairKey,
+          source: q.source,
+          poolId: q.poolId ?? null,
+          price: q.price,
+          baseVolume: q.baseVolume,
+          counterVolume: q.counterVolume,
+          ledger: q.ledger,
+          timestamp: q.timestamp,
+          eventId: q.eventId ?? null,
+          referenceMedian: q.referenceMedian,
+          rejectionReason: q.rejectionReason,
+          rejectionBound: q.rejectionBound,
+          quarantinedAt: q.quarantinedAt,
+        })),
+      })
+    }
+    for (const q of quarantined) {
+      price_points_quarantined_total.inc({ source: q.source, network })
+    }
+  }
+
+  return Object.assign(Object(acceptedCount), {
+    count: acceptedCount,
+    acceptedPoints: accepted,
+    quarantinedPoints: quarantined,
   })
-  return result.count
 }
 
 /**
@@ -240,6 +288,12 @@ export async function upsertPricePoints(points: {
  * pool, ledger, observation timestamp and amounts — never a clock read or a
  * random value. Re-submitting the same batch re-derives the same key, so the
  * unique index absorbs it.
+ *
+ * If a row carries no natural eventId and no timestamp (#620), the key is
+ * synthesized strictly from the remaining content fields (network, source,
+ * pairKey, poolId, ledger, price, baseVolume, counterVolume) with an empty
+ * timestamp slot, NEVER from a wall-clock fallback. This ensures replays of
+ * rows without temporal anchors remain deterministic and deduplicate correctly.
  *
  * The timestamp used is the one the venue attached to the observation (a
  * trade's ledger close time, a snapshot's poll time), which is part of the
@@ -257,7 +311,7 @@ export function synthesizeEventId(
   p: {
     source: string; pairKey: string; poolId?: string
     price: number; baseVolume: number; counterVolume: number
-    ledger: number; timestamp: Date
+    ledger: number; timestamp?: Date
   },
 ): string {
   const content = [
@@ -266,7 +320,7 @@ export function synthesizeEventId(
     p.pairKey,
     p.poolId ?? '',
     String(p.ledger),
-    p.timestamp.toISOString(),
+    p.timestamp ? p.timestamp.toISOString() : '',
     String(p.price),
     String(p.baseVolume),
     String(p.counterVolume),

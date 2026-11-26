@@ -81,6 +81,9 @@ function validAggregate() {
     sources: 2,
     confidence: 'high' as const,
     lastTradeAgeSeconds: 10,
+    newestInputObservedAt: '2026-10-19T08:00:00.000Z',
+    inputCount: 2,
+    stalenessThresholdSeconds: 300,
     stale: false,
     bestRoute: 'SDEX' as const,
   }
