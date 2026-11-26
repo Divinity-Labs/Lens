@@ -3,7 +3,7 @@ import { readFileSync as readFileRaw } from 'node:fs'
 
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
-import { registeredVenues } from '../src/ingest/venues'
+import { registeredVenues, venueAdapters } from '../src/ingest/venues'
 import {
   extractSection,
   renderVenuesTable,
@@ -38,14 +38,34 @@ const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
 const openApiPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
 
 describe('README venue list and endpoint table generators', () => {
-  it('extracts and asserts that the README venues section matches the venue registry', () => {
+  it('extracts and asserts that the README venues section matches the venueAdapters registry', () => {
     const readmeContent = readFileSync(readmePath, 'utf8')
     const venuesSection = extractSection(readmeContent, VENUES_START_TAG, VENUES_END_TAG)
 
     expect(venuesSection, 'README must contain <!-- VENUES:START --> ... <!-- VENUES:END --> tags').toBeTruthy()
 
+    // Since #644 the table is rendered from the whole registry. venueAdapters
+    // is the on-chain part of it, so it must stay inside the registry.
+    for (const adapter of venueAdapters) expect(registryAdapters).toContain(adapter)
+
     const expectedVenues = renderVenuesTable(registryAdapters)
     expect(venuesSection?.trim()).toBe(expectedVenues.trim())
+  })
+
+  it('ensures every venue in venueAdapters is represented in the README', () => {
+    const readmeContent = readFileSync(readmePath, 'utf8')
+    const venuesSection = extractSection(readmeContent, VENUES_START_TAG, VENUES_END_TAG) ?? ''
+
+    for (const adapter of venueAdapters) {
+      expect(venuesSection).toContain(adapter.name)
+      expect(venuesSection).toContain(`\`${adapter.source}\``)
+    }
+
+    // Must include newly added venues that were previously missing: Soroswap and Aquarius
+    expect(venuesSection).toContain('Soroswap')
+    expect(venuesSection).toContain('`soroswap_amm`')
+    expect(venuesSection).toContain('Aquarius')
+    expect(venuesSection).toContain('`aquarius_amm`')
   })
 
   it('ensures every registered venue is represented in the README', () => {
@@ -57,11 +77,8 @@ describe('README venue list and endpoint table generators', () => {
       expect(venuesSection).toContain(`\`${adapter.source}\``)
     }
 
-    // Must include newly added venues that were previously missing: Soroswap and Aquarius
-    expect(venuesSection).toContain('Soroswap')
-    expect(venuesSection).toContain('`soroswap_amm`')
-    expect(venuesSection).toContain('Aquarius')
-    expect(venuesSection).toContain('`aquarius_amm`')
+    // The exchange venues that run only when configured are documented too.
+    expect(venuesSection).toContain('`coinbase_cex`')
   })
 
   it('fails when the README and venue registry diverge', () => {
