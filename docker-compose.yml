@@ -13,12 +13,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/status"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+    # No healthcheck here on purpose: the image's own HEALTHCHECK applies
+    # (Node one-liner against /live, see Dockerfile). A compose healthcheck
+    # would override it — the old curl one did, and curl isn't in the image.
 
   postgres:
     image: postgres:15-alpine
