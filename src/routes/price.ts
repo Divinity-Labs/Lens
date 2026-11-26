@@ -4,8 +4,10 @@ import { z } from 'zod'
 import { formatValidationError } from '../validation'
 import '../middleware/network'
 import { activeNetwork, type NetworkName } from '../config'
+import { findOverlappingGaps } from '../backfill/gaps'
 import { resolveDecimalFormat } from '../utils/decimals'
 
+import { apiError } from '../errors'
 export const TWAP_WINDOW_MIN_MINUTES = 1
 export const TWAP_WINDOW_MAX_MINUTES = 1440
 export const TWAP_WINDOW_DEFAULT_MINUTES = 60
@@ -24,6 +26,7 @@ const TwapQuerySchema = z.object({
   network: z.enum(['testnet', 'mainnet']).optional(),
   decimals: z.string().optional(),
   decimalFormat: z.string().optional(),
+  staleThreshold: z.coerce.number().int().positive().optional(),
 })
 
 const VwapQuerySchema = z.object({
@@ -33,6 +36,7 @@ const VwapQuerySchema = z.object({
   decimals: z.string().optional(),
   decimalFormat: z.string().optional(),
   network: z.enum(['testnet', 'mainnet']).optional(),
+  staleThreshold: z.coerce.number().int().positive().optional(),
 })
 
 /**
@@ -52,6 +56,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       network?: string
       decimals?: string
       decimalFormat?: string
+      staleThreshold?: string
     }
   }>(
     '/price/twap/:assetA/:assetB',
@@ -63,7 +68,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.status(400).send(formatValidationError(parsed.error))
       }
-      const { window: windowMinutes, sampleInterval, method } = parsed.data
+      const { window: windowMinutes, sampleInterval, method, staleThreshold } = parsed.data
       const network: NetworkName = req.network ?? parsed.data.network ?? activeNetwork
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
@@ -78,7 +83,17 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           outlierMethod: method,
           network,
           decimalFormat,
+          staleThresholdSeconds: staleThreshold,
         })
+
+        const overlappingGaps = await findOverlappingGaps({
+          network,
+          pair: pairKey,
+          start: result.startTime,
+          end: result.endTime,
+        })
+
+        const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
 
         return {
           assetA,
@@ -93,12 +108,17 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           sampleCount: result.sampleCount,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          newestInputObservedAt: result.newestInputObservedAt,
+          inputCount: result.inputCount,
+          stalenessThresholdSeconds: result.stalenessThresholdSeconds,
+          stale: result.stale,
+          ...gapDeclaration,
         }
       } catch (err) {
         // A driver error message can carry the connection string, and so the
         // Postgres credentials. Log it; never put it in the response body.
         log.error({ err }, 'TWAP computation failed')
-        return reply.status(500).send({ error: 'TWAP computation failed' })
+        return reply.status(500).send(apiError('internal_error', 'TWAP computation failed'))
       }
     }
   )
@@ -113,6 +133,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       decimals?: string
       decimalFormat?: string
       network?: string
+      staleThreshold?: string
     }
   }>(
     '/price/vwap/:assetA/:assetB',
@@ -124,7 +145,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
       if (!parsed.success) {
         return reply.status(400).send(formatValidationError(parsed.error))
       }
-      const { window: windowMinutes, source, method } = parsed.data
+      const { window: windowMinutes, source, method, staleThreshold } = parsed.data
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
@@ -139,7 +160,18 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           outlierMethod: method,
           decimalFormat,
           network,
+          staleThresholdSeconds: staleThreshold,
         })
+
+        const overlappingGaps = await findOverlappingGaps({
+          network,
+          pair: pairKey,
+          start: result.startTime,
+          end: result.endTime,
+          source,
+        })
+
+        const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
 
         return {
           assetA,
@@ -155,11 +187,16 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           volumeTotal: result.volumeTotal,
           outlierRejected: result.outlierRejected,
           filterMethod: result.filterMethod,
+          newestInputObservedAt: result.newestInputObservedAt,
+          inputCount: result.inputCount,
+          stalenessThresholdSeconds: result.stalenessThresholdSeconds,
+          stale: result.stale,
+          ...gapDeclaration,
         }
       } catch (err) {
         // Same as TWAP above: the driver message can contain credentials.
         log.error({ err }, 'VWAP computation failed')
-        return reply.status(500).send({ error: 'VWAP computation failed' })
+        return reply.status(500).send(apiError('internal_error', 'VWAP computation failed'))
       }
     }
   )

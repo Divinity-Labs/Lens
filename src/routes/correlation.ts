@@ -4,6 +4,7 @@ import { pgPool } from '../db'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 const log = createLogger('correlation')
 
 /**
@@ -113,22 +114,22 @@ export async function registerCorrelationRoutes(app: FastifyInstance) {
     assetList = Array.from(new Set(assetList.filter(Boolean).map(a => a.toUpperCase())))
 
     if (assetList.length === 0) {
-      return reply.status(400).send({ error: 'assets parameter is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'assets parameter is required'))
     }
     if (assetList.length < 2) {
-      return reply.status(400).send({ error: 'At least 2 assets are required to compute correlation' })
+      return reply.status(400).send(apiError('invalid_parameter', 'At least 2 assets are required to compute correlation'))
     }
 
     const rawWindow = req.query.window ?? '24h'
     if (!(rawWindow in CORRELATION_WINDOWS)) {
       return reply.status(400).send({
-        error: `window must be one of: ${SUPPORTED_WINDOWS.join(', ')}`,
+        ...apiError('bad_window', `window must be one of: ${SUPPORTED_WINDOWS.join(', ')}`),
       })
     }
 
     const requestedNetwork = req.query.network
     if (requestedNetwork !== undefined && requestedNetwork !== 'testnet' && requestedNetwork !== 'mainnet') {
-      return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+      return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
     }
 
     const network: NetworkName = req.network ?? (requestedNetwork as NetworkName) ?? activeNetwork
@@ -391,7 +392,7 @@ export async function registerCorrelationRoutes(app: FastifyInstance) {
       }
     } catch (err) {
       log.error({ err }, 'correlation computation failed')
-      return reply.status(500).send({ error: 'Correlation computation failed' })
+      return reply.status(500).send(apiError('internal_error', 'Correlation computation failed'))
     }
   })
 }

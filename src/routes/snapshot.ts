@@ -1,10 +1,17 @@
 import type { FastifyInstance } from 'fastify'
 import { pgPool } from '../db'
 import { getCachedSnapshot, setCachedSnapshot } from '../redis'
-import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
+import { config, getNetworkConfig, activeNetwork, DEFAULT_PEG_TOLERANCE_BPS, type NetworkName } from '../config'
 import { snapshotResponseSchema } from '../api/schemas'
-import { sendInternalError } from '../errors'
+import { sendInternalError, apiError } from '../errors'
 import type { AssetId, WatchedPair } from '../types'
+import {
+  PEGGED_ASSETS,
+  matchConfiguredPeg,
+  isQuoteReference,
+  getNoReferenceReason,
+  computePegStatus,
+} from '../pricing/pegRules'
 
 /**
  * Register the whole-network snapshot endpoint.
@@ -51,27 +58,6 @@ const TOP_PAIRS_LIMIT = 10
 // between polls, or a venue that simply trades rarely, is not flagged.
 const STALE_AFTER_SECONDS = 300
 
-// A pair of assets whose value is meant to hold at 1:1 against a fiat target.
-// Several issuers exist per code on Stellar; the *code* is what a peg is
-// defined against, so the check is keyed on the code and the full asset id is
-// still reported back for the entry. Anything not listed here gets
-// `no_reference` — the snapshot never guesses that an asset is a stablecoin.
-const PEGGED_ASSETS: Readonly<Record<string, string>> = {
-  USDC: 'USD',
-  USDT: 'USD',
-  DAI: 'USD',
-  USDP: 'USD',
-  PYUSD: 'USD',
-  TUSD: 'USD',
-  USDY: 'USD',
-  EURC: 'EUR',
-  EURT: 'EUR',
-  EUROC: 'EUR',
-}
-
-// A peg that is off by more than this many basis points is reported as
-// off_peg. Published in the response so a caller can reinterpret it.
-const PEG_TOLERANCE_BPS = 100
 
 interface VenueDescriptor {
   name: string
@@ -232,7 +218,7 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const requested = req.query.network
       if (requested !== undefined && requested !== 'testnet' && requested !== 'mainnet') {
-        return reply.status(400).send({ error: 'network must be one of: testnet, mainnet' })
+        return reply.status(400).send(apiError('bad_network', 'network must be one of: testnet, mainnet'))
       }
       const network: NetworkName = (requested as NetworkName) ?? activeNetwork
       const ttl = config.cache.snapshotTtl
@@ -579,11 +565,16 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
         samples24h: number
         lastUpdated: string | null
       }[] = []
-      for (const pair of getNetworkConfig(network).pairs) {
+      const netConfig = getNetworkConfig(network)
+      const configuredPegs = netConfig.pegged ?? []
+
+      for (const pair of netConfig.pairs) {
         for (const side of ['assetA', 'assetB'] as const) {
           const pegged = pair[side]
           const quote = side === 'assetA' ? pair.assetB : pair.assetA
-          const target = PEGGED_ASSETS[pegged.code]
+          const configuredPeg = matchConfiguredPeg(pegged, configuredPegs)
+          const target = configuredPeg?.target ?? PEGGED_ASSETS[pegged.code.toUpperCase()]
+          const targetPrice = configuredPeg?.targetPrice ?? 1
           if (!target) continue
 
           const agg = pairs.get(pair.pairKey)
@@ -604,31 +595,29 @@ export async function registerSnapshotRoutes(app: FastifyInstance) {
           }
 
           // Stored price is assetB-per-assetA. Read as quote-per-pegged so a
-          // pair quoted directly in its fiat target sits near 1.0: the pegged
-          // asset is asset A → price is already quote-per-pegged; the pegged
-          // asset is asset B → invert it.
+          // pair quoted directly in its fiat target sits near targetPrice: the
+          // pegged asset is asset A → price is already quote-per-pegged; the
+          // pegged asset is asset B → invert it.
           const reading = side === 'assetA' ? agg.price : 1 / agg.price
-          const quoteIsReference =
-            quote.code === target || PEGGED_ASSETS[quote.code] === target
 
-          if (!quoteIsReference) {
+          if (!isQuoteReference(quote, target, configuredPegs)) {
             pegs.push({
               ...base,
               price: reading,
               deviationBp: null,
               status: 'no_reference',
-              reason: `quoted in ${quote.code}, which is not ${target} or a ${target} stablecoin; deviation from ${target} is not measurable here`,
+              reason: getNoReferenceReason(quote.code, target),
             })
             continue
           }
 
-          const deviationBp = (reading - 1) * 10_000
+          const evaluation = computePegStatus(reading, targetPrice, DEFAULT_PEG_TOLERANCE_BPS)
           pegs.push({
             ...base,
             price: reading,
-            deviationBp,
-            status: Math.abs(deviationBp) <= PEG_TOLERANCE_BPS ? 'on_peg' : 'off_peg',
-            reason: null,
+            deviationBp: evaluation.deviationBp,
+            status: evaluation.status,
+            reason: evaluation.reason,
           })
         }
       }

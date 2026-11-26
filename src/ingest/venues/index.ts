@@ -4,10 +4,13 @@ import { soroswapAdapter } from './soroswap'
 import { aquariusAdapter } from './aquarius'
 import { defindexAdapter } from './defindex'
 import { phoenixAdapter } from './phoenix'
+import { kucoinAdapter, startKuCoinIngester } from './kucoin'
+import { gateioAdapter, startGateioIngester } from './gateio'
 import type { VenueAdapter } from './types'
 
 export * from './types'
 export * from './runner'
+export * from './registry'
 export { sdexAdapter, startSDEXIngester } from './sdex'
 export { ammAdapter, startAMMIngester } from './amm'
 export { soroswapAdapter, startSoroswapIngester } from './soroswap'
@@ -15,11 +18,12 @@ export { aquariusAdapter, startAquariusIngester } from './aquarius'
 export { blendAdapter, startBlendIngester } from './blend'
 export { defindexAdapter, startDeFindexIngester } from './defindex'
 export { phoenixAdapter, startPhoenixIngester } from './phoenix'
+export { kucoinAdapter, startKuCoinIngester } from './kucoin'
+export { gateioAdapter, startGateioIngester } from './gateio'
 
 /**
- * Registry of all available venue adapters.
- * Adding a venue to this list enables it across the venue runner automatically
- * without requiring runner code modifications.
+ * Registry of default baseline venue adapters.
+ * Retained for backward compatibility with existing tests and route queries.
  */
 export const venueAdapters: VenueAdapter[] = [
   sdexAdapter,
@@ -131,6 +135,20 @@ export const VENUE_CLASSIFICATIONS: Record<string, VenueClassificationInfo> = {
     classification: 'aggregator',
     reasoning:
       'Yield vaults on Soroban that hold no market of their own: deposits are allocated to underlying strategies (e.g. lending pools) and the vault is priced per share. Any activity it reports is activity of the venues underneath, so it is never counted toward net volume.',
+  },
+  KuCoin: {
+    name: 'KuCoin',
+    source: 'KuCoin',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book. Independent order matching establishing external market reference prices.',
+  },
+  'Gate.io': {
+    name: 'Gate.io',
+    source: 'Gate.io',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book. Independent order matching establishing external market reference prices.',
   },
 }
 

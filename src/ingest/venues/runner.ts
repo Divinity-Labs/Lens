@@ -61,16 +61,21 @@ export async function writeVenuePricePoints(
   // them, and the events below fire only for points that actually landed.
   if (signal?.aborted) return
 
-  await upsertPricePoints(points as any, network)
+  const res = await upsertPricePoints(points as any, network)
   markIngestSuccess(venue, network)
+  const acceptedPoints: VenuePricePoint[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+    ? (res as any).acceptedPoints
+    : points
 
-  const latest = points[points.length - 1]
+  if (acceptedPoints.length === 0) return
+
+  const latest = acceptedPoints[acceptedPoints.length - 1]
   const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
 
   publishPriceUpdate({
     pair: pair.pairKey,
     price: currentPrice,
-    ts: latest.timestamp ? latest.timestamp.toISOString() : new Date().toISOString(),
+    ts: latest.observedAt ? latest.observedAt.toISOString() : (latest.timestamp ? latest.timestamp.toISOString() : new Date().toISOString()),
     network,
   })
 
@@ -121,6 +126,10 @@ export async function startVenueAdapter(
   network: NetworkName = activeNetwork,
   options: VenueAdapterLoopOptions = {}
 ): Promise<void> {
+  if (!adapter.sourceTimeCapability || !adapter.sourceTimeCapability.status) {
+    throw new Error(`Venue adapter "${adapter.name}" must declare sourceTimeCapability`)
+  }
+
   if (!adapter.isEnabled(network)) {
     log.info({ venue: adapter.name, network }, 'venue adapter is disabled — ingester not started')
     return
@@ -128,9 +137,12 @@ export async function startVenueAdapter(
 
   log.info({ venue: adapter.name, network }, 'starting venue adapter')
 
+  const ingestLog = createLogger(`ingester:${adapter.name.toLowerCase()}`)
   let consecutiveErrors = 0
   while (!options.stopSignal?.aborted) {
     const cycleStartedAt = Date.now()
+    // Pair the cycle is working on, so a failure can say which pair it died on.
+    let currentPair: string | undefined
     try {
       // One cycle = one round over every active pair, bounded by the venue's
       // per-cycle deadline (#351). See src/ingest/cycleDeadline.ts: on
@@ -148,6 +160,7 @@ export async function startVenueAdapter(
             // checkpoints inside the adapter (one write unit each), so the
             // cycle stops at a unit boundary and no write is left half-done.
             if (signal.aborted) break
+            currentPair = pair.pairKey
             await adapter.ingestPair(pair, network, signal)
           }
         },
@@ -171,9 +184,17 @@ export async function startVenueAdapter(
       )
       consecutiveErrors++
       const backoffMs = Math.min(10_000 * Math.pow(2, consecutiveErrors - 1), 60_000)
-      log.error(
-        { venue: adapter.name, network, attempt: consecutiveErrors, backoffMs, err },
-        'venue adapter cycle failed; retrying'
+      ingestLog.error(
+        {
+          venue: adapter.name,
+          network,
+          pair: currentPair,
+          attempt: consecutiveErrors,
+          retryMs: backoffMs,
+          durationMs: Date.now() - cycleStartedAt,
+          err,
+        },
+        'venue ingestion cycle failed'
       )
       await sleep(backoffMs)
       continue

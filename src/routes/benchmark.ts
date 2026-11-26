@@ -4,7 +4,7 @@ import { getActivePairs } from '../pairsRegistry'
 import { activeNetwork, type NetworkName } from '../config'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 import { benchmarkResponseSchema } from '../api/schemas'
-import { sendInternalError } from '../errors'
+import { sendInternalError, apiError } from '../errors'
 
 function findPair(assetCode: string, targetCode: string) {
   const normalize = (c: string) => c.toLowerCase() === 'native' ? 'XLM' : c.split(':')[0].toUpperCase()
@@ -34,7 +34,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
 
       const pair = findPair(asset, target)
       if (!pair) {
-        return reply.status(404).send({ error: `Pair ${asset}/${target} not watched` })
+        return reply.status(404).send(apiError('unwatched_pair', `Pair ${asset}/${target} not watched`))
       }
 
       const isAssetA = pair.assetA.code.toUpperCase() === normAsset
@@ -49,7 +49,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
       const network: NetworkName = req.network ?? activeNetwork
       const query = `
         SELECT
-          (SELECT ${priceExpr} FROM price_points WHERE pair_key = $1 AND network = $2 ORDER BY timestamp DESC LIMIT 1) AS latest_price,
+          (SELECT ${priceExpr} FROM price_points WHERE pair_key = $1 AND network = $2 ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS latest_price,
           MAX(${priceExpr}) AS max_price,
           MIN(${priceExpr}) AS min_price,
           AVG(${priceExpr}) AS avg_price,
@@ -60,7 +60,7 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
         FROM price_points
         WHERE pair_key = $1
           AND network = $2
-          AND timestamp > NOW() - INTERVAL '24 hours'
+          AND COALESCE(observed_at, timestamp) > NOW() - INTERVAL '24 hours'
       `
 
       try {

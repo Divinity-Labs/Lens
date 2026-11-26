@@ -564,6 +564,7 @@ export const blendAdapter: VenueAdapter<BlendPoolData[], BlendReserveEntry[]> = 
   type: 'Lending Pool',
   description: 'Blend lending pools on Soroban, supply and borrow rates',
   source: 'blend',
+  sourceTimeCapability: { status: 'unavailable' },
   // Informational here rather than load-bearing: `derive` returns no price
   // points, so Blend contributes nothing to `/volumes` and never reaches the
   // net/gross split (#244). It is 'primary' because it holds its own reserves —
@@ -572,7 +573,7 @@ export const blendAdapter: VenueAdapter<BlendPoolData[], BlendReserveEntry[]> = 
   classification: 'primary',
 
   isEnabled(network: NetworkName): boolean {
-    return getNetworkConfig(network).blend.enabled
+    return getNetworkConfig(network).blend?.enabled ?? false
   },
 
   getPollIntervalMs(network: NetworkName): number {
