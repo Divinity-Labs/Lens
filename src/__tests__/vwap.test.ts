@@ -146,7 +146,9 @@ describe('aggregator/vwap.ts', () => {
   })
 
   describe('getPriceChange24h', () => {
-    it('computes 24h percentage change using reference before 24h and short endpoint VWAP', async () => {
+    it('computes 24h percentage change when price_24h_ago > 0', async () => {
+      // price_24h_ago is the reference in force before now - 24h, and both ends are a
+      // short endpoint VWAP (#647).
       mockQuery.mockResolvedValueOnce({
         rows: [{ price_24h_ago: '100', price_now: '125' }],
       })
@@ -179,7 +181,10 @@ describe('aggregator/vwap.ts', () => {
       expect(change).toBe(-25)
     })
 
-    it('returns null (unknown) when price_24h_ago or price_now is 0 or missing (#647)', async () => {
+    it('returns 0 when price_24h_ago is 0 or missing (prevent division by zero)', async () => {
+      // #647 changes the result of this case: a zero or missing reference (or a missing
+      // current price) is reported as unknown (null) instead of a flat 0, which read as
+      // "no change". The division by zero is still avoided.
       mockQuery.mockResolvedValueOnce({
         rows: [{ price_24h_ago: '0', price_now: '100' }],
       })
