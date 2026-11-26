@@ -18,6 +18,15 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
   console.log("getTvl", res.status, await res.json())
 }
 
+// getPremium: GET /v1/premium/XLM/USDC
+{
+  const url = new URL("/v1/premium/XLM/USDC", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getPremium", res.status, await res.json())
+}
+
 // getVolumes: GET /v1/volumes/XLM
 {
   const url = new URL("/v1/volumes/XLM", BASE_URL)
@@ -25,6 +34,24 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
   const headers: Record<string, string> = {}
   const res = await fetch(url, { headers })
   console.log("getVolumes", res.status, await res.json())
+}
+
+// getOverallCoverage: GET /v1/coverage
+{
+  const url = new URL("/v1/coverage", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getOverallCoverage", res.status, await res.json())
+}
+
+// getAssetCoverage: GET /v1/coverage/USDC
+{
+  const url = new URL("/v1/coverage/USDC", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getAssetCoverage", res.status, await res.json())
 }
 
 // getSpreads: GET /v1/spreads/XLM
@@ -72,6 +99,24 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
   console.log("compareAsset", res.status, await res.json())
 }
 
+// compareAssetHistory: GET /v1/compare/XLM/history
+{
+  const url = new URL("/v1/compare/XLM/history", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("compareAssetHistory", res.status, await res.json())
+}
+
+// compareAssetSummary: GET /v1/compare/XLM/summary
+{
+  const url = new URL("/v1/compare/XLM/summary", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("compareAssetSummary", res.status, await res.json())
+}
+
 // screenPairs: GET /v1/screener
 {
   const url = new URL("/v1/screener", BASE_URL)
@@ -96,6 +141,15 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
   const headers: Record<string, string> = {}
   const res = await fetch(url, { headers })
   console.log("getBenchmark", res.status, await res.json())
+}
+
+// getPegs: GET /v1/pegs
+{
+  const url = new URL("/v1/pegs", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getPegs", res.status, await res.json())
 }
 
 // getBasket: GET /v1/basket

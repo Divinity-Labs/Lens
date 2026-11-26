@@ -7,6 +7,7 @@ import { formatValidationError } from '../validation'
 import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
 import { copyUsageHistory } from '../x402/metering'
 
+import { apiError } from '../errors'
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
   return `lens_${randomBytes(24).toString('hex')}`
@@ -136,7 +137,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       }
       const requestedLimit = Number(req.query.limit ?? 25)
       if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
-        return reply.status(400).send({ error: 'limit must be a positive integer' })
+        return reply.status(400).send(apiError('invalid_parameter', 'limit must be a positive integer'))
       }
       const failures = await prisma.webhookDeliveryFailure.findMany({
         orderBy: { createdAt: 'desc' },
@@ -224,7 +225,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const revoked = req.query.revoked ?? 'false'
       if (limit === null || limit < 1 || offset === null || !['true', 'false'].includes(revoked)) {
         return reply.status(400).send({
-          error: 'Invalid pagination or revoked filter. Use limit (1-100), offset (0 or greater), and revoked=true|false.',
+          ...apiError('invalid_parameter', 'Invalid pagination or revoked filter. Use limit (1-100), offset (0 or greater), and revoked=true|false.'),
         })
       }
 
@@ -299,7 +300,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })
       if (!existing) {
-        return reply.status(404).send({ error: 'API key not found' })
+        return reply.status(404).send(apiError('not_found', 'API key not found'))
       }
       if (existing.revokedAt) {
         return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
@@ -334,10 +335,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const { id } = req.params
       const oldKey = await prisma.apiKey.findUnique({ where: { id } })
       if (!oldKey) {
-        return reply.status(404).send({ error: 'API key not found' })
+        return reply.status(404).send(apiError('not_found', 'API key not found'))
       }
       if (oldKey.revokedAt) {
-        return reply.status(400).send({ error: 'Cannot rotate a revoked API key' })
+        return reply.status(400).send(apiError('invalid_parameter', 'Cannot rotate a revoked API key'))
       }
 
       const defaultOverlap = parseInt(process.env.KEY_ROTATION_OVERLAP_HOURS ?? '24', 10) || 24

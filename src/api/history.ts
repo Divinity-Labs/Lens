@@ -9,8 +9,10 @@ import {
   slicePage,
 } from '../pagination'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { findOverlappingGaps } from '../backfill/gaps'
 import { formatPrice, formatVolume } from '../pricing/precision'
 
+import { apiError } from '../errors'
 /** Supported aggregation intervals → bucket width in seconds. */
 export const HISTORY_INTERVAL_SECONDS: Record<string, number> = {
   '1m': 60,
@@ -157,26 +159,26 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
   }>('/prices/history', { config: { scope: 'read:history' } }, async (req, reply) => {
     const { pair } = req.query
     if (!pair) {
-      return reply.status(400).send({ error: 'pair query parameter is required' })
+      return reply.status(400).send(apiError('missing_parameter', 'pair query parameter is required'))
     }
 
     // Validated before the DB round-trip so an unknown format never queries.
     const format = req.query.format ?? 'json'
     if (format !== 'json' && format !== 'csv') {
-      return reply.status(400).send({ error: 'format must be one of: json, csv' })
+      return reply.status(400).send(apiError('invalid_parameter', 'format must be one of: json, csv'))
     }
 
     const interval = req.query.interval ?? '1m'
     const intervalSecs = HISTORY_INTERVAL_SECONDS[interval]
     if (!intervalSecs) {
       return reply.status(400).send({
-        error: `interval must be one of: ${Object.keys(HISTORY_INTERVAL_SECONDS).join(', ')}`,
+        ...apiError('bad_interval', `interval must be one of: ${Object.keys(HISTORY_INTERVAL_SECONDS).join(', ')}`),
       })
     }
 
     const parsedLimit = parseLimit(req.query.limit, HISTORY_DEFAULT_LIMIT, MAX_HISTORY_POINTS)
     if ('error' in parsedLimit) {
-      return reply.status(400).send({ error: parsedLimit.error })
+      return reply.status(400).send(apiError('invalid_parameter', parsedLimit.error))
     }
     const { limit } = parsedLimit
 
@@ -184,12 +186,12 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
     if (req.query.cursor) {
       const decoded = decodeCursor(req.query.cursor)
       if (decoded === null) {
-        return reply.status(400).send({ error: 'Invalid cursor format' })
+        return reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
       }
       if (decoded !== 'skip') {
         afterTs = new Date(String(decoded.value))
         if (isNaN(afterTs.getTime())) {
-          return reply.status(400).send({ error: 'Invalid cursor format' })
+          return reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
         }
       }
     }
@@ -198,20 +200,20 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
     const to = req.query.to ? new Date(req.query.to) : new Date()
 
     if (isNaN(from.getTime())) {
-      return reply.status(400).send({ error: 'from must be a valid ISO 8601 date' })
+      return reply.status(400).send(apiError('invalid_parameter', 'from must be a valid ISO 8601 date'))
     }
     if (isNaN(to.getTime())) {
-      return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
+      return reply.status(400).send(apiError('invalid_parameter', 'to must be a valid ISO 8601 date'))
     }
     if (from.getTime() > to.getTime()) {
-      return reply.status(400).send({ error: 'from must be before to' })
+      return reply.status(400).send(apiError('invalid_parameter', 'from must be before to'))
     }
 
     // Guard against unbounded scans: cap the number of buckets the window can produce.
     const spanSecs = (to.getTime() - from.getTime()) / 1000
     if (spanSecs / intervalSecs > MAX_HISTORY_POINTS) {
       return reply.status(400).send({
-        error: `requested window is too large for interval=${interval} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`,
+        ...apiError('invalid_parameter', `requested window is too large for interval=${interval} (max ${MAX_HISTORY_POINTS} points); narrow the range or use a coarser interval`),
       })
     }
 
@@ -223,6 +225,15 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
     const { data, hasMore } = slicePage(points, limit)
     const last = hasMore && data.length > 0 ? data[data.length - 1] : null
     const nextCursor = last ? encodeCursor(last.ts, pair) : null
+
+    const overlappingGaps = await findOverlappingGaps({
+      network,
+      pair,
+      start: from,
+      end: to,
+    })
+
+    const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
 
     if (format === 'csv') {
       // Deliberately no response schema here: Fastify's JSON serializer must
@@ -244,6 +255,7 @@ export async function registerHistoryRoutes(app: FastifyInstance) {
       points: data,
       nextCursor,
       hasMore,
+      ...gapDeclaration,
     }
   })
 }

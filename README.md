@@ -1,6 +1,6 @@
 # Lens — Unified Stellar Price API
 
-[![CI](https://github.com/Miracle656/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/Miracle656/Lens/actions/workflows/ci.yml)
+[![CI](https://github.com/Divinity-Labs/Lens/actions/workflows/ci.yml/badge.svg)](https://github.com/Divinity-Labs/Lens/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Stellar](https://img.shields.io/badge/Stellar-SDEX%20%2B%20AMM-black)](https://stellar.org)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -99,6 +99,7 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/v1/status` | Get API status and indexer state |
 | GET | `/v1/snapshot` | Whole-network snapshot (venues, TVL, 24h volume, top pairs, pegs, freshness) |
 | GET | `/v1/price/:assetA/:assetB` | Get aggregated price for a pair |
+| GET | `/v1/premium/:assetA/:assetB` | Get on-chain vs CEX price premium and spread |
 | GET | `/v1/price/:assetA/:assetB/route` | Get best swap route for a pair and amount |
 | GET | `/v1/price/:asset/fiat` | Convert asset price to fiat currency with NGN support (#290) |
 | GET | `/v1/price/:assetA/:assetB/history` | Get price history buckets |
@@ -113,14 +114,19 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/v1/price/twap/:assetA/:assetB` | Get a manipulation-resistant time-weighted average price |
 | GET | `/v1/price/vwap/:assetA/:assetB` | Get a volume-weighted average price |
 | GET | `/v1/volumes/:asset` | Get cross-venue traded volume for an asset |
+| GET | `/v1/coverage` | Get overall market coverage ratio and cross-venue activity |
+| GET | `/v1/coverage/:asset` | Get market coverage ratio and venue breakdown for a specific asset |
 | GET | `/v1/spreads/:asset` | Get the tightest per-venue bid/ask spread for an asset |
 | GET | `/v1/rates/:asset` | Get supply and borrow rates for an asset across lending venues |
 | GET | `/v1/dispersion/:assetA/:assetB` | Get venue price dispersion and outlier attribution for a pair |
 | GET | `/v1/dispersion` | List cross-venue dispersion across watched pairs |
 | GET | `/v1/compare/:asset` | Compare Lens prices with every configured external oracle |
+| GET | `/v1/compare/:asset/history` | Query historical oracle comparison series and window summary statistics |
+| GET | `/v1/compare/:asset/summary` | Summary statistics per oracle over a window (mean deviation, worst deviation, time outside band) |
 | GET | `/v1/screener` | Screen pairs by volume, change, liquidity and price |
 | GET | `/v1/movers` | Get biggest gainers, biggest losers, and volume movers |
 | GET | `/v1/benchmark/:asset` | Get peg-deviation statistics for an asset against a target |
+| GET | `/v1/pegs` | Get peg deviation and window statistics for all configured pegged assets |
 | GET | `/v1/basket` | Compute the weighted price of a basket of assets |
 | GET | `/v1/correlation` | Compute price correlation matrix across a basket of assets over a window |
 | GET | `/v1/discovery/resources` | Browse the x402 Bazaar catalog of discoverable resources |
@@ -135,12 +141,70 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/v1/graphql` | Execute a GraphQL query over HTTP GET |
 | POST | `/v1/graphql` | Execute a GraphQL query, mutation or subscription handshake |
 | GET | `/v1/rates` | Query latest lending and borrow rates across pools |
+| GET | `/v1/assets` | List tracked assets with metadata and verification status |
+| GET | `/v1/assets/:code` | Get metadata and verification status for a specific asset |
 <!-- ENDPOINTS:END -->
 
 The table above is generated from [`openapi.yaml`](openapi.yaml) by `npm run openapi:gen`;
 edit the spec rather than the table. CI runs `npm run readme:check` and fails when
 the committed table differs from a fresh generation.
 
+<!-- QUESTION_INDEX_START -->
+| Question | Route | Example |
+|---|---|---|
+| What is the current market price and 24-hour volume for an asset pair? | `GET /v1/price/:assetA/:assetB` | `GET /price/XLM/USDC?network=testnet` |
+| Where can I execute a swap for the best return at a given trade size? | `GET /v1/price/:assetA/:assetB/route` | `GET /price/XLM/USDC/route?amount=1000&network=testnet` |
+| What does the combined order book look like across SDEX and AMM liquidity pools? | `GET /v1/book/:assetA/:assetB` | `GET /book/XLM/USDC?depth=0.1&step=0.01&network=testnet` |
+| What is the simulated order-book depth and expected slippage for a trade size? | `GET /v1/price/:assetA/:assetB/depth` | `GET /price/XLM/USDC/depth?amount=1000&network=testnet` |
+| How does slippage grow as my trade size increases? | `GET /v1/impact/:assetA/:assetB` | `GET /impact/XLM/USDC?network=testnet` |
+| What is this asset worth in my local currency, such as naira? | `GET /v1/price/:asset/fiat` | `GET /price/XLM/fiat?currency=NGN&network=testnet` |
+| Which trading pairs are currently tracked by Lens on the active network? | `GET /v1/pairs` | `GET /pairs?network=testnet` |
+| How do I configure Lens to track a new trading pair? | `POST /v1/pairs` | `POST /pairs` |
+| Which AMM liquidity pools are being watched, and what are their reserves? | `GET /v1/pools` | `GET /pools?network=testnet` |
+| Which assets does Lens track, and which issuers are verified? | `GET /v1/assets` | `GET /assets?network=testnet` |
+| Who issues this asset, and can I trust that issuer? | `GET /v1/assets/:code` | `GET /assets/USDC?network=testnet` |
+| What is the total cross-venue trading volume for an asset over time? | `GET /v1/volumes/:asset` | `GET /volumes/XLM?window=24h&network=testnet` |
+| How much value is locked across Stellar DeFi, and in which venues? | `GET /v1/tvl` | `GET /tvl?network=testnet` |
+| Which venue is actually carrying the trading volume? | `GET /v1/venues` | `GET /venues?window=24h&network=testnet` |
+| Can I get the whole market in one request instead of ten? | `GET /v1/snapshot` | `GET /snapshot?network=testnet` |
+| What can I earn lending, and what does borrowing cost, across venues? | `GET /v1/rates` | `GET /rates?network=testnet` |
+| What are the supply and borrow rates for one asset on each lending venue? | `GET /v1/rates/:asset` | `GET /rates/USDC?network=testnet` |
+| Which venues offer the tightest bid/ask spread for an asset right now? | `GET /v1/spreads/:asset` | `GET /spreads/XLM?window=5m&network=testnet` |
+| Which pairs currently have the highest volume, price changes, or liquidity? | `GET /v1/screener` | `GET /screener?sortBy=volume&order=desc&limit=20&network=testnet` |
+| What moved most today, up, down, or by volume? | `GET /v1/movers` | `GET /movers?window=24h&limit=10&network=testnet` |
+| How closely is a pegged or wrapped asset tracking its peg target? | `GET /v1/benchmark/:asset` | `GET /benchmark/USDC?target=USD&network=testnet` |
+| How do Lens aggregated prices compare against external oracles? | `GET /v1/compare/:asset` | `GET /compare/XLM?network=testnet` |
+| Over the past week, which oracle tracked the market most closely? | `GET /v1/compare/:asset/summary` | `GET /compare/XLM/summary?window=7d&network=testnet` |
+| How has the gap between an oracle and the market moved over time? | `GET /v1/compare/:asset/history` | `GET /compare/XLM/history?window=7d&network=testnet` |
+| What is the weighted price of a custom portfolio basket of assets? | `GET /v1/basket` | `GET /basket?asset=XLM&asset=USDC&weight=0.6&weight=0.4&network=testnet` |
+| Do these assets move together, or are they genuinely diversified? | `GET /v1/correlation` | `GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet` |
+| Which pairs disagree most across venues right now? | `GET /v1/dispersion` | `GET /dispersion?network=testnet` |
+| The venues disagree on this pair — which one is the outlier? | `GET /v1/dispersion/:assetA/:assetB` | `GET /dispersion/XLM/USDC?network=testnet` |
+| Is this pair trading above or below the centralised exchanges? | `GET /v1/premium/:assetA/:assetB` | `GET /premium/XLM/USDC?network=testnet` |
+| Is this stablecoin still holding its peg? | `GET /v1/pegs` | `GET /pegs?network=testnet` |
+| How much of the market can Lens actually see? | `GET /v1/coverage` | `GET /coverage?network=testnet` |
+| For one asset, which venues is Lens watching and how much do they cover? | `GET /v1/coverage/:asset` | `GET /coverage/XLM?network=testnet` |
+| What are the historical OHLCV candlestick bars for a trading pair? | `GET /v1/candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` |
+| What were the historical price buckets for a pair over a recent window? | `GET /v1/price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` |
+| Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /v1/prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` |
+| What is the manipulation-resistant time-weighted average price (TWAP) for settlement? | `GET /v1/price/twap/:assetA/:assetB` | `GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet` |
+| What is the volume-weighted average price (VWAP) across venues for a pair? | `GET /v1/price/vwap/:assetA/:assetB` | `GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet` |
+| How do I query multiple prices, routes, and analytics in a single GET request? | `GET /v1/graphql` | `GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D` |
+| How do I execute complex GraphQL operations or initiate WebSocket subscriptions? | `POST /v1/graphql` | `POST /graphql` |
+| Is the Lens indexer healthy, up to date, and what is the latest processed ledger? | `GET /v1/status` | `GET /status?network=testnet` |
+| Which venue adapters (order books, AMMs, oracles) are registered and live? | `GET /v1/venues/registry` | `GET /venues/registry?network=testnet` |
+| Is the service process alive at all? | `GET /v1/live` | `GET /live` |
+| Is it safe to send traffic yet, or are dependencies still starting? | `GET /v1/ready` | `GET /ready` |
+| How many requests have I made and what is my remaining API key quota? | `GET /v1/usage/me` | `GET /usage/me` |
+| How much of my API quota have I used? | `GET /v1/usage` | `GET /usage` |
+| What payable endpoints and datasets are discoverable in the x402 Bazaar catalog? | `GET /v1/discovery/resources` | `GET /discovery/resources?network=testnet` |
+| Can I find the right endpoint by describing what I want in plain language? | `GET /v1/discovery/search` | `GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5` |
+| Which payment schemes and token mechanisms does this x402 facilitator support? | `GET /v1/supported` | `GET /supported` |
+| How do I verify a signed x402 payment payload before fulfilling a service? | `POST /v1/verify` | `POST /verify` |
+| How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` |
+| How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` |
+| How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` |
+<!-- QUESTION_INDEX_END -->
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
 missing from the spec. Operator-only and non-HTTP routes (`/admin/keys*`,
@@ -149,6 +213,30 @@ the commented allow-list in [`src/openapi/coverage.ts`](src/openapi/coverage.ts)
 In addition, live service responses are verified against their published schemas on a daily schedule (`05:00 UTC`) via `npm run spec:validate-live` — see [docs/live-spec-validation.md](docs/live-spec-validation.md).
 
 All routes are partitioned into three security and CORS tiers (`public`, `credentialed`, and `admin`) with a split CORS policy — see the [Route Classification & CORS Guide](docs/routes.md).
+
+## API-key authentication
+
+Client API keys must be sent as `Authorization: Bearer <key>`; `X-API-Key` is **not supported**. A key cannot be supplied as a query parameter. The admin credential is separate: set `ADMIN_TOKEN` on the server and send it in `X-Admin-Token` (or Bearer with the *admin* token) when creating or revoking keys. Admin routes bypass client-key auth but enforce their own admin authorization.
+
+To create a key and inspect its usage on a locally configured Lens server, run this example in a shell that has `ADMIN_TOKEN` set to the **same value used by the running server**. No real key is included here:
+
+```bash
+export LENS_URL="http://localhost:3002"
+test -n "$ADMIN_TOKEN" || { echo "Set ADMIN_TOKEN first" >&2; exit 1; }
+RESPONSE="$(curl --fail-with-body -sS -X POST "$LENS_URL/admin/keys" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"label":"example-client","ratePerMin":60,"ratePerDay":10000}')"
+API_KEY="$(printf '%s' "$RESPONSE" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')"
+curl --fail-with-body -sS "$LENS_URL/usage/me" -H "Authorization: Bearer $API_KEY"
+```
+
+The key is returned in plaintext **only in the creation response**. Lens stores its deterministic SHA-256 hash, not plaintext, so save the returned credential securely. The key can later be revoked through `DELETE /admin/keys/:id` using its returned `id` and the admin token. Revoked or expired keys no longer authenticate. Optional `scopes` and `expiresAt` restrict a key; see the admin API for rotation and key listing.
+
+`ratePerMin` (default **60**) and `ratePerDay` (default **10000**) are request-rate limits; a depleted request quota returns 429. Monetary metering uses `dailyQuotaCents` (default **500**) and `monthlyQuotaCents` (default **10000**) with `overagePolicy` (`block`, `charge_402`, or `allow_overage`). `GET /usage/me` shows the calling key's usage.
+
+**Authentication errors:** an absent `Authorization` header produces HTTP 401 with `code: "missing"` and a message naming that header; a malformed or non-Bearer value produces `code: "malformed"`. Unknown, revoked, and expired credentials return distinct 401 codes. The table below enumerates them. An `X-API-Key` header alone is handled as missing. Admin authorization failures use `code: "admin_unauthorized"`.
+
 
 The `?network=testnet\|mainnet` query param (or `x-network` header) selects the
 Stellar network. It is validated on every request — an unrecognised value gets a
@@ -405,8 +493,12 @@ When multiple venues quote the same pair, their prices naturally diverge due to 
 | `paid_call` | Fetches an x402-gated URL and handles the `402 → sign → retry` loop. | **Yes — it signs with a real Stellar key** |
 | `payment_budget` | Reports the configured limits and what is left of today's budget. | No |
 | `lens_get_price` | Reads Lens's own aggregated price for a watched pair. | No |
+| `lens_quote` | What one order of a size the caller names would cost: the best route, the order-book depth and the price-impact ladder, in one answer. | No |
+| `lens_list_pairs` | Lists the pairs watched on one network, one bounded page at a time, each with its latest price and the issuer of both assets in full. | No |
+| `lens_get_pools` | Lists AMM pools with their newest reserves, spot price and fee — how much liquidity stands behind a pair. | No |
+| `lens_screen_pairs` | Ranks watched pairs by volume, 24h change, price or liquidity, with the same filters as `GET /screener`. | No |
 
-`payment_budget` appears whenever a spend budget is configured, which the example always sets, and `lens_get_price` only where the server can reach Lens's own price data. Every one of them is served over **either** transport, and the tool list, schemas and error codes are identical whichever you pick. Which transport runs is selected by configuration; **stdio is the default**, so an existing setup needs no changes.
+`payment_budget` appears whenever a spend budget is configured, which the example always sets, and `lens_get_price` only where the server can reach Lens's own price data. The three data tools follow the same rule: they are advertised only where the host supplies Lens's data, and each one runs the very function its REST route runs, so a page over MCP is the same rows and cursor as a page over HTTP. `lens_quote` follows it on the pricing side: it is advertised only where the host can read Lens's markets, and its three legs are the very calls `GET /price/:assetA/:assetB/route`, `GET /price/:assetA/:assetB/depth` and `GET /impact/:assetA/:assetB` make, so one quote over MCP is the same route, depth and impact the three HTTP requests return — at the order size the caller names instead of a fixed 1000. A leg that cannot price the order arrives as a qualified part of the answer (`depth.status: "unavailable"` with its reason, or `impact: null`), never as a zero and never as a failed call; only a read that outright fails answers `ERR_SERVICE_UNREACHABLE`, which means retry. Every one of them is served over **either** transport, and the tool list, schemas and error codes are identical whichever you pick. Which transport runs is selected by configuration; **stdio is the default**, so an existing setup needs no changes.
 
 **⚠️ Warning:** the mainnet key signs with real XLM. Read the configuration,
 spending warning, and worked example before running.
@@ -755,17 +847,32 @@ npm run client:gen
 
 # Type-check the generated client
 npm run client:typecheck
+
+# Build the installable client package to clients/typescript/dist/
+npm run client:build
 ```
 
 CI runs `npm run client:gen` and fails if the committed client differs from the
-regenerated output, so the client can never drift from `openapi.yaml`.
+regenerated output, so the client can never drift from `openapi.yaml`. It also
+packs and installs the built package into a fresh project to verify the package
+exports.
+
+Pack and install `@divinity-labs/lens-client` from the repo (see
+[`clients/typescript/README.md`](clients/typescript/README.md)):
+
+```bash
+npm run client:build
+npm --prefix clients/typescript pack
+# In your application project:
+npm install /path/to/divinity-labs-lens-client-0.2.0.tgz
+```
 
 ```typescript
-import { createLensClient } from "./clients/typescript/src/index.js";
+import { createLensClient } from "@divinity-labs/lens-client";
 
 const client = createLensClient({ baseUrl: "http://localhost:3002" });
 
-const { data, error } = await client.GET("/price/{assetA}/{assetB}", {
+const { data, error } = await client.GET("/v1/price/{assetA}/{assetB}", {
   params: { path: { assetA: "XLM", assetB: "USDC" } },
 });
 if (error) throw new Error(`request failed: ${error}`);
@@ -806,14 +913,17 @@ docker compose ps
 ```
 The API will be available at `http://localhost:3002`. Database migrations run automatically on startup.
 
+`docker compose ps` shows each service's health. `lens` reports `healthy` only once `/ready` is green — the server has finished booting, migrations are applied, and Postgres and Redis are reachable. Until then it shows `starting` (or `unhealthy` if boot fails), even though the process is already listening: `/status` answers as soon as the server listens, so it cannot tell you the stack is ready. `postgres` and `redis` have their own health checks, and Lens waits for both before starting.
+
 ## Quick Start (Manual)
 
 ```bash
-# 1. Start PostgreSQL + Redis
-docker-compose up -d
+# 1. Start PostgreSQL + Redis only — the compose file also defines the
+#    Lens container, which would take port 3002 before step 6 starts it
+docker-compose up -d postgres redis
 
 # 2. Install dependencies
-npm install
+npm ci
 
 # 3. Copy env
 cp .env.example .env
@@ -945,6 +1055,75 @@ curl -s http://localhost:3002/price/XLM/USDC | jq '{price, ammPrice, lastUpdated
 
 *(Note: timestamp values above reflect the dynamic hourly anchor at seed execution time and request time).*
 
+## Load testing
+
+The price endpoints are load-tested with k6 (`.github/workflows/load.yml`,
+`tests/load/prices.k6.js`), on a schedule and on demand. The acceptance
+criterion is **price p95 < 80ms at 5k RPS**; twap/vwap get a looser
+p95 < 500ms because they compute over a 60-minute window. Thresholds are
+per endpoint, and the k6 summary is uploaded as a `k6-summary` artifact on
+every run, so a failing run still leaves its numbers behind.
+
+To try a small run locally against docker-compose (with k6 installed — see
+https://k6.io/docs/get-started/installation/). The database must be seeded
+first: an empty database has no price points for `/price` to serve.
+
+```bash
+docker compose up -d
+npm run seed -- --network testnet
+RATE=200 DURATION=20s k6 run tests/load/prices.k6.js
+```
+
+(The full 5k RPS run needs a machine with enough headroom to both serve and
+generate the load; a hosted CI runner is the reference environment for it.)
+
+## Backfill & Ingestion Gap Detection
+
+Lens provides persistent gap detection and an idempotent historical backfill CLI to recover missing trade history and declare incomplete time windows in API responses.
+
+### 1. Gap Detection & IngestionGap Model
+Gaps are tracked per `(network, source, pair)` in the `IngestionGap` table:
+- `status`: `'open'` (detected hole in history), `'filled'` (successfully backfilled), or `'permanent'` (data cannot be backfilled).
+- Gaps are detected when the elapsed time between consecutive price points exceeds the expected ingestion cadence (default 5 minutes).
+- **Idempotency & Merging:** Re-running gap detection never duplicates records; overlapping or adjacent intervals are merged automatically into single continuous ranges.
+
+### 2. Backfill CLI
+Run the backfill script for historical sources:
+
+```bash
+# Backfill SDEX trades for XLM/USDC
+npm run backfill -- --source SDEX --pair XLM/USDC --start 2026-10-15T00:00:00Z --end 2026-10-15T06:00:00Z --network testnet
+
+# Detect gaps and backfill them automatically
+npm run backfill -- --source SDEX --pair XLM/USDC --start 2026-10-15T00:00:00Z --end 2026-10-15T06:00:00Z --detect
+```
+
+- **History Support:**
+  - `SDEX` and `AMM`: Supported via Horizon historical trade paging. Refetched points are written through the same idempotent `upsertPricePoints` path as live ingestion. Gaps are marked `filled`.
+  - `soroswap_amm` and `aquarius_amm`: State-only venues that do not retain historical trade logs. Attempting to backfill them cleanly marks the gap as `permanent` and exits without error.
+- **Idempotent Re-runs:** Running the same backfill range a second time produces 0 duplicate records and leaves the gap marked `filled`.
+
+### 3. Incomplete Window Declarations in API Responses
+When querying time-window endpoints (such as `/prices/history`, `/candles/:assetA/:assetB`, `/price/:assetA/:assetB/history`, `/price/twap/*`, and `/price/vwap/*`):
+- If the requested window overlaps any `open` or `permanent` gaps for that pair and network, the response includes `incomplete: true` along with the list of overlapping `gaps`:
+  ```json
+  {
+    "pair": "XLM/USDC",
+    "interval": "1m",
+    "incomplete": true,
+    "gaps": [
+      {
+        "source": "SDEX",
+        "start": "2026-10-15T01:00:00.000Z",
+        "end": "2026-10-15T03:00:00.000Z",
+        "status": "open"
+      }
+    ],
+    "points": [...]
+  }
+  ```
+- Windows that are clean or cover only `filled` gaps omit the `incomplete` and `gaps` fields.
+
 ## Numeric Precision & Serialization
 
 Lens enforces strict arbitrary-precision numeric aggregation across SQL queries to eliminate floating-point representation artifacts and order-dependent rounding errors:
@@ -1009,7 +1188,7 @@ Callers should parse the `Retry-After` header or `retryAfter` field and apply ex
 *\*Required if enabling x402 payment gating.*
 
 ## Stack
-- **Runtime:** Node.js 20 + TypeScript
+- **Runtime:** Node.js 22 + TypeScript
 - **API:** Fastify + Mercurius (GraphQL)
 - **Database:** PostgreSQL + TimescaleDB
 - **Cache:** Redis

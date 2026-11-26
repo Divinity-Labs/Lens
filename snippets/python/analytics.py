@@ -17,9 +17,21 @@ BASE_URL = require_env("LENS_BASE_URL")
 res = requests.get(BASE_URL + "/v1/tvl", params=[["network","testnet"]], headers={}, timeout=30)
 print("getTvl", res.status_code, res.json())
 
+# getPremium: GET /v1/premium/XLM/USDC
+res = requests.get(BASE_URL + "/v1/premium/XLM/USDC", params=[["network","testnet"]], headers={}, timeout=30)
+print("getPremium", res.status_code, res.json())
+
 # getVolumes: GET /v1/volumes/XLM
 res = requests.get(BASE_URL + "/v1/volumes/XLM", params=[["network","testnet"]], headers={}, timeout=30)
 print("getVolumes", res.status_code, res.json())
+
+# getOverallCoverage: GET /v1/coverage
+res = requests.get(BASE_URL + "/v1/coverage", params=[["network","testnet"]], headers={}, timeout=30)
+print("getOverallCoverage", res.status_code, res.json())
+
+# getAssetCoverage: GET /v1/coverage/USDC
+res = requests.get(BASE_URL + "/v1/coverage/USDC", params=[["network","testnet"]], headers={}, timeout=30)
+print("getAssetCoverage", res.status_code, res.json())
 
 # getSpreads: GET /v1/spreads/XLM
 res = requests.get(BASE_URL + "/v1/spreads/XLM", params=[["network","testnet"]], headers={}, timeout=30)
@@ -41,6 +53,14 @@ print("listDispersion", res.status_code, res.json())
 res = requests.get(BASE_URL + "/v1/compare/XLM", params=[["network","testnet"]], headers={}, timeout=30)
 print("compareAsset", res.status_code, res.json())
 
+# compareAssetHistory: GET /v1/compare/XLM/history
+res = requests.get(BASE_URL + "/v1/compare/XLM/history", params=[["network","testnet"]], headers={}, timeout=30)
+print("compareAssetHistory", res.status_code, res.json())
+
+# compareAssetSummary: GET /v1/compare/XLM/summary
+res = requests.get(BASE_URL + "/v1/compare/XLM/summary", params=[["network","testnet"]], headers={}, timeout=30)
+print("compareAssetSummary", res.status_code, res.json())
+
 # screenPairs: GET /v1/screener
 res = requests.get(BASE_URL + "/v1/screener", params=[["network","testnet"]], headers={}, timeout=30)
 print("screenPairs", res.status_code, res.json())
@@ -52,6 +72,10 @@ print("getMovers", res.status_code, res.json())
 # getBenchmark: GET /v1/benchmark/USDC
 res = requests.get(BASE_URL + "/v1/benchmark/USDC", params=[], headers={}, timeout=30)
 print("getBenchmark", res.status_code, res.json())
+
+# getPegs: GET /v1/pegs
+res = requests.get(BASE_URL + "/v1/pegs", params=[["network","testnet"]], headers={}, timeout=30)
+print("getPegs", res.status_code, res.json())
 
 # getBasket: GET /v1/basket
 res = requests.get(BASE_URL + "/v1/basket", params=[["asset","XLM"],["asset","USDC"],["weight","0.6"],["weight","0.4"]], headers={}, timeout=30)

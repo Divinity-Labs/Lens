@@ -144,35 +144,42 @@ export async function writeSdexPricePoints(
 
   const stateId = `sdex:${network}:${pair.pairKey}`
   const trackerKey = pair.pairKey
-  const { previousPrice, currentPrice } = setLastPrice('SDEX', network, trackerKey, points[points.length - 1].price)
 
-  await upsertPricePoints(points, network)
+  const res = await upsertPricePoints(points, network)
   markIngestSuccess('SDEX', network)
+  const acceptedPoints: VenuePricePoint[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+    ? (res as any).acceptedPoints
+    : points
 
-  trades_ingested_total.inc({ pair: pair.pairKey, network }, points.length)
-  const tradeTime = points[points.length - 1].sourceTime ?? points[points.length - 1].observedAt
-  last_trade_timestamp.set(
-    { pair: pair.pairKey, network },
-    Math.floor(tradeTime.getTime() / 1000)
-  )
+  if (acceptedPoints.length > 0) {
+    const latest = acceptedPoints[acceptedPoints.length - 1]
+    const { previousPrice, currentPrice } = setLastPrice('SDEX', network, trackerKey, latest.price)
+
+    trades_ingested_total.inc({ pair: pair.pairKey, network }, acceptedPoints.length)
+    const tradeTime = latest.sourceTime ?? latest.observedAt ?? latest.timestamp
+    last_trade_timestamp.set(
+      { pair: pair.pairKey, network },
+      Math.floor(tradeTime.getTime() / 1000)
+    )
+
+    publishPriceUpdate({
+      pair: pair.pairKey,
+      price: currentPrice,
+      ts: (latest.observedAt ?? latest.timestamp).toISOString(),
+      network,
+    })
+
+    dispatchPriceUpdate({
+      assetA: pair.assetA.code,
+      assetB: pair.assetB.code,
+      previousPrice,
+      currentPrice,
+      network,
+    }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
+  }
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
-  log.info({ pair: pair.pairKey, trades: points.length }, 'ingested trades')
-
-  publishPriceUpdate({
-    pair: pair.pairKey,
-    price: currentPrice,
-    ts: points[points.length - 1].observedAt.toISOString(),
-    network,
-  })
-
-  dispatchPriceUpdate({
-    assetA: pair.assetA.code,
-    assetB: pair.assetB.code,
-    previousPrice,
-    currentPrice,
-    network,
-  }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
+  log.info({ pair: pair.pairKey, trades: points.length, accepted: acceptedPoints.length }, 'ingested trades')
 }
 
 export async function ingestPair(pair: WatchedPair, network: NetworkName = activeNetwork, signal?: AbortSignal): Promise<void> {

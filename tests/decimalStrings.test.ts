@@ -49,11 +49,15 @@ vi.mock('../src/config', () => ({
 
 import { registerRESTRoutes } from '../src/api/rest'
 import { registerPriceRoutes } from '../src/routes/price'
+import { registerPoolsRoutes } from '../src/routes/pools'
 
 async function buildApp() {
   const app = Fastify({ logger: false })
   await registerRESTRoutes(app)
   await registerPriceRoutes(app)
+  // /pools lives in routes/pools.ts, which app.ts registers alongside the rest
+  // aggregate — a harness that wants it has to mount it too.
+  await registerPoolsRoutes(app)
   await app.ready()
   return app
 }

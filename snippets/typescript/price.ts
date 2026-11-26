@@ -133,3 +133,21 @@ const payFetch = wrapFetchWithPaymentFromConfig(fetch, {
   const res = await payFetch(url, { headers })
   console.log("getVwap", res.status, await res.json())
 }
+
+// listAssets: GET /v1/assets
+{
+  const url = new URL("/v1/assets", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("listAssets", res.status, await res.json())
+}
+
+// getAsset: GET /v1/assets/USDC
+{
+  const url = new URL("/v1/assets/USDC", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getAsset", res.status, await res.json())
+}

@@ -9,6 +9,25 @@ const log = createLogger('config')
 
 export type NetworkName = 'testnet' | 'mainnet'
 
+/**
+ * Default peg deviation tolerance in basis points (100 bps = 1.0%).
+ * Shared across GET /snapshot (PEG_TOLERANCE_BPS = 100) and the peg-deviation
+ * alerting state machine (#322, default band = 0.01 = 100 bps) so query routes
+ * and alerts agree on what counts as within-band versus depegged.
+ */
+export const DEFAULT_PEG_TOLERANCE_BPS = 100
+
+export interface PeggedAssetConfig {
+  /** The pegged asset (e.g. USDC, EURC, etc.) */
+  asset: AssetId
+  /** The target code or asset it is pegged to (e.g. "USD", "EUR") */
+  target: string
+  /** The explicit numeric target price against target (e.g. 1.0) */
+  targetPrice: number
+  /** Lookback window in hours for rolling worst deviation (default: 24) */
+  windowHours?: number
+}
+
 /** Per-network configuration block. */
 export interface NetworkConfig {
   horizon: {
@@ -96,6 +115,8 @@ export interface NetworkConfig {
   }
   /** Watched asset pairs for this network. */
   pairs: WatchedPair[]
+  /** Configured pegged assets for this network. */
+  pegged: PeggedAssetConfig[]
   routing: {
     /** Maximum hop depth for multi-hop routing (default: 3) */
     maxHops: number
@@ -177,6 +198,12 @@ const TESTNET_DEFAULT_INTERMEDIATES =
 const MAINNET_DEFAULT_INTERMEDIATES =
   'XLM:native,USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
 
+export const TESTNET_DEFAULT_PEGGED =
+  'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5=USD:1.0'
+
+export const MAINNET_DEFAULT_PEGGED =
+  'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN=USD:1.0'
+
 function parseIntermediateAssets(raw: string): AssetId[] {
   if (!raw.trim()) return []
   return raw.split(',').map(a => parseAsset(a.trim()))
@@ -194,6 +221,42 @@ function parseWatchedPairs(raw: string): WatchedPair[] {
     const assetA = parseAsset(a)
     const assetB = parseAsset(b)
     return { assetA, assetB, pairKey: makePairKey(assetA, assetB) }
+  })
+}
+
+// ── Pegged assets parsing ───────────────────────────────────────────────────
+
+export function parsePeggedAssets(raw: string): PeggedAssetConfig[] {
+  if (!raw.trim()) return []
+  return raw.split(',').map(entry => {
+    // format: ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]
+    // e.g. "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN=USD:1.0"
+    const [assetStr, targetDef] = entry.trim().split('=')
+    if (!assetStr || !targetDef) {
+      throw new Error(
+        `Invalid pegged asset format: "${entry}". Expected "ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]"`
+      )
+    }
+    const asset = parseAsset(assetStr)
+    const targetParts = targetDef.split(':')
+    const target = targetParts[0]?.trim().toUpperCase()
+    const rawTargetPrice = targetParts[1]?.trim()
+    if (!target || !rawTargetPrice) {
+      throw new Error(
+        `Invalid pegged asset format: "${entry}". Expected "ASSET[:ISSUER]=TARGET:TARGET_PRICE[:WINDOW_HOURS]"`
+      )
+    }
+    const targetPrice = Number(rawTargetPrice)
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      throw new Error(`Invalid target price in pegged asset: "${entry}"`)
+    }
+    const windowHours = targetParts[2] ? parseInt(targetParts[2], 10) : undefined
+    return {
+      asset,
+      target,
+      targetPrice,
+      windowHours: windowHours && !isNaN(windowHours) && windowHours > 0 ? windowHours : 24,
+    }
   })
 }
 
@@ -444,6 +507,19 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (network === 'testnet' ? process.env.WATCHED_PAIRS : undefined) ||
     (network === 'mainnet' ? MAINNET_DEFAULT_PAIRS : '')
 
+  // ── Pegged assets ─────────────────────────────────────────────────────────
+  // Defaults to Circle USDC pegged to USD at 1.0 on each network (matching
+  // MAINNET_DEFAULT_PAIRS and TESTNET_DEFAULT_INTERMEDIATES) so an instance
+  // that leaves PEGGED_ASSETS_* unset still reports the canonical USD
+  // stablecoin peg out of the box rather than returning []. Setting
+  // PEGGED_ASSETS_<NETWORK>="" explicitly still yields [].
+  const defaultPegged =
+    network === 'mainnet' ? MAINNET_DEFAULT_PEGGED : TESTNET_DEFAULT_PEGGED
+  const rawPegged =
+    process.env[`PEGGED_ASSETS_${suffix}`] ??
+    process.env.PEGGED_ASSETS ??
+    defaultPegged
+
   // ── Multi-hop Routing ───────────────────────────────────────────────────
   const maxHopsRaw =
     process.env[`ROUTING_MAX_HOPS_${suffix}`] ||
@@ -509,6 +585,7 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
       secretKey: sep40SecretKey,
     },
     pairs: parseWatchedPairs(rawPairs),
+    pegged: parsePeggedAssets(rawPegged),
     routing: { maxHops, intermediates },
     facilitator: { secretKey: facilitatorSecretKey, feeStroops: facilitatorFeeStroops },
   }
@@ -550,6 +627,15 @@ const globalConfig = {
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '5000', 10),
     sdexPageSize: parseInt(process.env.SDEX_PAGE_SIZE ?? '200', 10),
     ammPageSize: parseInt(process.env.AMM_PAGE_SIZE ?? '200', 10),
+    get plausibilityThreshold(): number {
+      return parseFloat(process.env.INGEST_PLAUSIBILITY_THRESHOLD ?? '0.20')
+    },
+    get plausibilityWindowMinutes(): number {
+      return parseInt(process.env.INGEST_PLAUSIBILITY_WINDOW_MINUTES ?? '60', 10)
+    },
+    get plausibilityMinSamples(): number {
+      return parseInt(process.env.INGEST_PLAUSIBILITY_MIN_SAMPLES ?? '1', 10)
+    },
   },
   /**
    * When the publisher writes to the SEP-40 feed.
@@ -594,10 +680,26 @@ const globalConfig = {
     // invalidation is immediate. Expiry is re-checked on every cache hit, so
     // this TTL never extends a key past its own `expiresAt`. Keep it short.
     apiKeyTtl: parseInt(process.env.API_KEY_CACHE_TTL ?? '30', 10),
+    // How long asset metadata and its verification status are cached. Far
+    // longer than the price TTLs above on purpose: an issuer's home domain and
+    // toml do not move minute to minute, and re-fetching them per request would
+    // put a network round trip in front of every asset lookup.
+    assetTtl: parseInt(process.env.ASSET_CACHE_TTL ?? '3600', 10),
   },
   plausibility: {
     minPrice: parseFloat(process.env.PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
     maxPrice: parseFloat(process.env.PRICE_MAX_PLAUSIBLE ?? '10000000000'),
+  },
+  pricing: {
+    staleThresholdSeconds: parseInt(
+      process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300',
+      10
+    ),
+  },
+  premium: {
+    get stalenessSeconds() {
+      return parseInt(process.env.PREMIUM_STALENESS_SECONDS ?? '60', 10)
+    },
   },
   http: {
     timeoutMs: parseInt(process.env.HTTP_TIMEOUT_MS ?? '10000', 10),
@@ -707,6 +809,7 @@ export const config = {
   get oracle()   { return resolveNetwork(activeNetwork).oracle },
   get blend()    { return resolveNetwork(activeNetwork).blend },
   get pairs()    { return resolveNetwork(activeNetwork).pairs },
+  get pegged()   { return resolveNetwork(activeNetwork).pegged },
   get routing()  { return resolveNetwork(activeNetwork).routing },
   get facilitator() { return resolveNetwork(activeNetwork).facilitator },
 
@@ -722,6 +825,7 @@ export const config = {
   publisher: globalConfig.publisher,
   cache:   globalConfig.cache,
   plausibility: globalConfig.plausibility,
+  premium: globalConfig.premium,
   http:    globalConfig.http,
   reconciliation: globalConfig.reconciliation,
   ws:      globalConfig.ws,

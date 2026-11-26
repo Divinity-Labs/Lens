@@ -10,6 +10,7 @@ import {
   ScreenerCursorError,
   SCREENER_DEFAULT_LIMIT,
 } from '../services/screener'
+import { apiError } from '../errors'
 import '../middleware/network' // declares req.network on the FastifyRequest type
 
 // The query execution (filters, sorting, cursor pagination, the liquidity
@@ -130,7 +131,7 @@ export async function registerScreenerRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: error.message, code: error.code })
       }
       log.error({ err: error }, 'screener query failed')
-      return reply.status(500).send({ error: 'Internal server error' })
+      return reply.status(500).send(apiError('internal_error', 'Internal server error'))
     }
   })
 }
