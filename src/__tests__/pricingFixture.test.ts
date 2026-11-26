@@ -74,10 +74,12 @@ describe('documented deterministic pricing fixture', () => {
     })
   })
 
-  it('weights each price over [00:00, 00:10) by how long it stayed in force', async () => {
+  it('carries the last price across the two-minute gap for TWAP', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(PRICING_START.getTime() + 10 * 60_000))
     const result = await computeTWAP(PRICING_PAIR, 10, { outlierMethod: 'iqr' })
+    // Each price is weighted over [00:00, 00:10) by how long it stayed in force (#650).
+    // 12 is carried across the two-minute gap to the next row at 00:03.
     // [00:00, 00:01) = 10 (1m), [00:01, 00:03) = 12 (2m), [00:03, 00:10) = 8 (7m).
     // (10*1 + 12*2 + 8*7) / 10 = 90/10 = 9.
     expect(result.twap).toBeCloseTo(9, 12)
