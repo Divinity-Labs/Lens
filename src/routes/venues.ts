@@ -5,6 +5,7 @@ import { venueAdapters } from '../ingest/venues'
 import { calculateVenueVolumeShare } from '../services/venueVolume'
 import '../middleware/network'
 
+import { apiError } from '../errors'
 export const LIVE_WINDOW_MS = 5 * 60 * 1000
 
 export interface RegisteredVenue {
@@ -66,7 +67,7 @@ export async function registerVenueRoutes(app: FastifyInstance) {
     const network = (req.network ?? activeNetwork) as NetworkName
     const window = (req.query.window ?? '24h') as string
     if (!['24h', '7d', '30d'].includes(window)) {
-      return reply.status(400).send({ error: 'window must be one of: 24h, 7d, 30d' })
+      return reply.status(400).send(apiError('bad_window', 'window must be one of: 24h, 7d, 30d'))
     }
     const response = await calculateVenueVolumeShare(network, window as '24h' | '7d' | '30d')
     return response

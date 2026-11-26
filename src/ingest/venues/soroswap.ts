@@ -368,7 +368,7 @@ export async function ingestPool(
     if (signal?.aborted) return
 
     const now = new Date()
-    await upsertPricePoints(
+    const res = await upsertPricePoints(
       [
         {
           assetA: pair.assetA.code,
@@ -395,24 +395,29 @@ export async function ingestPool(
       network
     )
     markIngestSuccess('Soroswap', network)
+    const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
+      ? (res as any).acceptedPoints
+      : [spotPrice]
 
-    const trackerKey = pair.pairKey
-    const { previousPrice } = setLastPrice('Soroswap', network, trackerKey, spotPrice)
+    if (acceptedPoints.length > 0) {
+      const trackerKey = pair.pairKey
+      const { previousPrice } = setLastPrice('Soroswap', network, trackerKey, spotPrice)
 
-    publishPriceUpdate({
-      pair: pair.pairKey,
-      price: spotPrice,
-      ts: new Date().toISOString(),
-      network,
-    })
+      publishPriceUpdate({
+        pair: pair.pairKey,
+        price: spotPrice,
+        ts: new Date().toISOString(),
+        network,
+      })
 
-    dispatchPriceUpdate({
-      assetA: pair.assetA.code,
-      assetB: pair.assetB.code,
-      previousPrice,
-      currentPrice: spotPrice,
-      network,
-    }).catch((err) => log.error({ pool: poolEntry.poolAddress, err }, 'webhook dispatch error'))
+      dispatchPriceUpdate({
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        previousPrice,
+        currentPrice: spotPrice,
+        network,
+      }).catch((err) => log.error({ pool: poolEntry.poolAddress, err }, 'webhook dispatch error'))
+    }
 
     log.info(
       { pair: pair.pairKey, pool: poolEntry.poolAddress, price: spotPrice },

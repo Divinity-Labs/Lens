@@ -1,8 +1,17 @@
 import type { FastifyInstance } from 'fastify'
 import { ErrorWithProps } from 'mercurius'
-import { price_requests_total, active_subscriptions } from '../metrics'
+import { price_requests_total, active_subscriptions, api_key_auth_failures_total } from '../metrics'
 import mercurius, { withFilter, defaultErrorFormatter, type MercuriusContext } from 'mercurius'
-import { GraphQLError, type ExecutionResult } from 'graphql'
+import {
+  GraphQLError,
+  type ExecutionResult,
+  type DocumentNode,
+  type OperationDefinitionNode,
+  type FragmentDefinitionNode,
+  type FieldNode,
+  type ValidationContext,
+} from 'graphql'
+import { hasScope, extractBearer, lookupApiKey } from './auth'
 import { randomUUID } from 'node:crypto'
 import { getCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
@@ -29,6 +38,7 @@ import { computeSpreads, SpreadsInputError } from '../routes/spreads'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
 import { HISTORY_INTERVAL_SECONDS, MAX_HISTORY_POINTS } from './history'
 import { getMaxGraphQLQueryDepth, queryDepthValidationRules } from './queryDepth'
+import { formatPrice, formatVolume } from '../pricing/precision'
 
 const WINDOW_SECONDS: Record<string, number> = {
   ...HISTORY_INTERVAL_SECONDS,
@@ -63,6 +73,7 @@ const USER_FACING_CODES = new Set([
   'PAIR_NOT_FOUND',
   'UNAUTHORIZED',
   'UNSUPPORTED_PARAMETER',
+  'insufficient_scope',
 ])
 const INTERNAL_ERROR_MESSAGE = 'Internal server error'
 
@@ -94,7 +105,15 @@ export function formatGraphQLErrors(execution: ExecutionResult, ctx: MercuriusCo
     })
   })
 
-  return defaultErrorFormatter({ ...execution, errors }, ctx)
+  const hasInsufficientScope = errors.some(
+    e => ((e.originalError as any)?.extensions?.code ?? e.extensions?.code) === 'insufficient_scope'
+  )
+  if (hasInsufficientScope && ctx?.reply) {
+    ctx.reply.status(403)
+  }
+  const statusCode = hasInsufficientScope ? 403 : (execution as any).statusCode
+
+  return defaultErrorFormatter({ ...execution, errors, statusCode } as any, ctx)
 }
 
 export const schema = `
@@ -441,6 +460,41 @@ function priceTopic(pair: string, network: string): string {
   return `${PRICE_TOPIC}/${pair}/${network}`
 }
 
+export interface GraphQLUiOptions {
+  environment?: string
+  graphiqlEnabled?: boolean
+  introspectionEnabled?: boolean
+}
+
+const NoIntrospectionFieldsRule = (context: ValidationContext) => ({
+  Field(node: FieldNode) {
+    if (node.name.value === '__schema' || node.name.value === '__type') {
+      context.reportError(new GraphQLError('GraphQL introspection is disabled', { nodes: node }))
+    }
+  },
+})
+
+/**
+ * GraphiQL is an interactive console, so production defaults it off. Schema
+ * introspection is controlled independently: it remains on by default because
+ * this is a public read API and clients need schema discovery, but operators
+ * can disable it for production deployments that require a private schema.
+ */
+export function resolveGraphQLUiOptions(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: GraphQLUiOptions = {},
+): Required<GraphQLUiOptions> {
+  const isProduction = (overrides.environment ?? env.NODE_ENV) === 'production'
+  const parseBoolean = (value: string | undefined, fallback: boolean) =>
+    value === undefined || value.trim() === '' ? fallback : value.toLowerCase() === 'true'
+
+  return {
+    environment: overrides.environment ?? env.NODE_ENV ?? 'development',
+    graphiqlEnabled: overrides.graphiqlEnabled ?? parseBoolean(env.GRAPHIQL_ENABLED, !isProduction),
+    introspectionEnabled: overrides.introspectionEnabled ?? parseBoolean(env.GRAPHQL_INTROSPECTION_ENABLED, true),
+  }
+}
+
 function makePairKey(a: string, b: string): string {
   return [a, b].sort().join('/')
 }
@@ -466,9 +520,93 @@ function asInvalidInput(err: unknown): never {
   throw err
 }
 
-const resolvers = {
+/**
+ * Required scope for each GraphQL operation field, matching its REST equivalent route (#618).
+ * Every query, mutation and subscription field declares the scope it needs.
+ */
+export const FIELD_SCOPES: Record<string, string> = {
+  getPrice: 'read:prices',
+  getBestRoute: 'read:prices',
+  getPriceHistory: 'read:history',
+  listPairs: 'read:prices',
+  pairs: 'read:prices',
+  oracle: 'read:prices',
+  screener: 'read:prices',
+  volumes: 'read:prices',
+  spreads: 'read:prices',
+  priceUpdated: 'subscribe',
+}
+
+/**
+ * Wraps a resolver function to attach its required scope and enforce it if invoked directly.
+ */
+export function withScope<T extends Function>(scope: string, fn: T): T & { _scope: string } {
+  const wrapped = async function (this: any, ...args: any[]) {
+    const ctx = args[2] as MercuriusContext | undefined
+    const apiKey = (ctx as any)?.apiKey ?? (ctx?.reply?.request as any)?.apiKey ?? (ctx as any)?.request?.apiKey
+    if (apiKey && !hasScope(apiKey, scope)) {
+      api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+      throw new ErrorWithProps(`Missing required scope: ${scope}`, {
+        code: 'insufficient_scope',
+        requiredScope: scope,
+        scope,
+        statusCode: 403,
+      })
+    }
+    return fn.apply(this, args)
+  }
+  ;(wrapped as any)._scope = scope
+  return wrapped as unknown as T & { _scope: string }
+}
+
+/**
+ * Extracts root operation field names from a parsed GraphQL document.
+ * Handles operation selection, fragment spreads, and inline fragments.
+ * Introspection fields (__schema, __type, etc.) are excluded.
+ */
+export function getRootFieldNames(document: DocumentNode, operationName?: string): string[] {
+  const operations = document.definitions.filter(
+    (d): d is OperationDefinitionNode => d.kind === 'OperationDefinition'
+  )
+  const fragments = new Map<string, FragmentDefinitionNode>(
+    document.definitions
+      .filter((d): d is FragmentDefinitionNode => d.kind === 'FragmentDefinition')
+      .map(f => [f.name.value, f])
+  )
+
+  let op = operations[0]
+  if (operationName) {
+    op = operations.find(o => o.name?.value === operationName) ?? op
+  }
+  if (!op || !op.selectionSet) return []
+
+  const fieldNames = new Set<string>()
+
+  function collect(selectionSet: { selections: readonly any[] }) {
+    for (const sel of selectionSet.selections) {
+      if (sel.kind === 'Field') {
+        const name = sel.name.value
+        if (!name.startsWith('__')) {
+          fieldNames.add(name)
+        }
+      } else if (sel.kind === 'InlineFragment' && sel.selectionSet) {
+        collect(sel.selectionSet)
+      } else if (sel.kind === 'FragmentSpread') {
+        const frag = fragments.get(sel.name.value)
+        if (frag?.selectionSet) {
+          collect(frag.selectionSet)
+        }
+      }
+    }
+  }
+
+  collect(op.selectionSet)
+  return Array.from(fieldNames)
+}
+
+export const resolvers = {
   Query: {
-    async getPrice(_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
+    getPrice: withScope('read:prices', async function (_: unknown, { assetA, assetB }: { assetA: string; assetB: string }) {
       price_requests_total.inc()
       for (const [field, value] of [['assetA', assetA], ['assetB', assetB]] as const) {
         if (!parseAssetStr(value)) {
@@ -507,18 +645,18 @@ const resolvers = {
         bestRoute: route.route,
         lastUpdated: new Date().toISOString(),
       }
-    },
+    }),
 
-    async getBestRoute(
+    getBestRoute: withScope('read:prices', async function (
       _: unknown,
       { assetA, assetB, amount }: { assetA: string; assetB: string; amount: number }
     ) {
       const pair = findPair(assetA, assetB)
       if (!pair) return null
       return getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount)
-    },
+    }),
 
-    async getPriceHistory(
+    getPriceHistory: withScope('read:history', async function (
       _: unknown,
       {
         assetA,
@@ -589,9 +727,9 @@ const resolvers = {
       const limitParam = `$${params.length}`
 
       const result = await pgPool.query(
-        `SELECT bucket, window, vwap::float, sdex_vwap::float, amm_vwap::float,
-                volume::float, trade_count, open_price::float, close_price::float,
-                high_price::float, low_price::float
+        `SELECT bucket, window, vwap, sdex_vwap, amm_vwap,
+                volume, trade_count, open_price, close_price,
+                high_price, low_price
          FROM price_aggregates
          WHERE ${conditions.join(' AND ')}
          ORDER BY bucket DESC
@@ -601,23 +739,23 @@ const resolvers = {
       return result.rows.map(r => ({
         bucket: (r.bucket instanceof Date ? r.bucket : new Date(r.bucket)).toISOString(),
         window: r.window,
-        vwap: r.vwap,
-        sdexVwap: r.sdex_vwap,
-        ammVwap: r.amm_vwap,
-        volume: r.volume,
-        tradeCount: r.trade_count,
-        open: r.open_price,
-        close: r.close_price,
-        high: r.high_price,
-        low: r.low_price,
+        vwap: formatPrice(r.vwap),
+        sdexVwap: formatPrice(r.sdex_vwap),
+        ammVwap: formatPrice(r.amm_vwap),
+        volume: r.volume !== null && r.volume !== undefined ? formatVolume(r.volume) : null,
+        tradeCount: r.trade_count !== null && r.trade_count !== undefined ? Number(r.trade_count) : null,
+        open: formatPrice(r.open_price),
+        close: formatPrice(r.close_price),
+        high: formatPrice(r.high_price),
+        low: formatPrice(r.low_price),
       }))
-    },
+    }),
 
-    listPairs() {
+    listPairs: withScope('read:prices', function () {
       return getActivePairs().map(p => p.pairKey)
-    },
+    }),
 
-    async pairs() {
+    pairs: withScope('read:prices', async function () {
       const activePairs = getActivePairs()
       if (activePairs.length === 0) {
         return []
@@ -656,9 +794,9 @@ const resolvers = {
           lastUpdated: latest?.timestamp ? (latest.timestamp instanceof Date ? latest.timestamp.toISOString() : new Date(latest.timestamp).toISOString()) : null,
         }
       })
-    },
+    }),
 
-    async oracle(_: unknown, { asset, network }: { asset: string; network?: string | null }) {
+    oracle: withScope('read:prices', async function (_: unknown, { asset, network }: { asset: string; network?: string | null }) {
       if (network != null && network !== 'testnet' && network !== 'mainnet') {
         throw new ErrorWithProps('network must be one of: testnet, mainnet', {
           code: 'INVALID_INPUT',
@@ -675,9 +813,9 @@ const resolvers = {
         ...comparison,
         oracles: comparison.oracles.map(o => ({ ...o, status: o.status.toUpperCase() })),
       }
-    },
+    }),
 
-    async screener(
+    screener: withScope('read:prices', async function (
       _: unknown,
       {
         filters,
@@ -768,9 +906,9 @@ const resolvers = {
         }
         throw error
       }
-    },
+    }),
 
-    async volumes(
+    volumes: withScope('read:prices', async function (
       _: unknown,
       { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
     ) {
@@ -788,9 +926,9 @@ const resolvers = {
           aggregator: isAggregatorVenue(venue),
         })),
       }
-    },
+    }),
 
-    async spreads(
+    spreads: withScope('read:prices', async function (
       _: unknown,
       { asset, window, network }: { asset: string; window?: string | null; network?: string | null }
     ) {
@@ -801,7 +939,7 @@ const resolvers = {
       // The REST route's own computation (src/routes/spreads.ts), returned as is.
       return computeSpreads(asset, window ?? undefined, network ?? undefined)
         .catch(asInvalidInput)
-    },
+    }),
   },
 
   Subscription: {
@@ -812,7 +950,7 @@ const resolvers = {
       // addresses one topic per known network for the pair, and because the
       // message carries its own `network` field the subscriber can still tell
       // them apart.
-      subscribe: (
+      subscribe: withScope('subscribe', (
         _root: unknown,
         { pair, network }: { pair: string; network?: string | null },
         { pubsub }: MercuriusContext,
@@ -853,25 +991,29 @@ const resolvers = {
             release()
             throw err
           })
-      },
+      }),
     },
   },
 }
 
-export async function registerGraphQL(app: FastifyInstance) {
+export async function registerGraphQL(app: FastifyInstance, uiOptions: GraphQLUiOptions = {}) {
   const maxQueryDepth = getMaxGraphQLQueryDepth()
+  const { graphiqlEnabled, introspectionEnabled } = resolveGraphQLUiOptions(process.env, uiOptions)
 
   await app.register(mercurius, {
     schema,
     resolvers,
-    graphiql: true,
+    graphiql: graphiqlEnabled,
     // Mercurius 16.9.0 supplies the selected operation name to this callback.
     // Its built-in queryDepth option neither expands fragments nor distinguishes
     // an unselected operation in a multi-operation document. A callback cannot
     // be used with Mercurius's document cache, so disable that cache rather
     // than weakening the operation-aware validation policy.
     cache: false,
-    validationRules: ({ operationName }) => queryDepthValidationRules(maxQueryDepth, operationName),
+    validationRules: ({ operationName }) => [
+      ...(introspectionEnabled ? [] : [NoIntrospectionFieldsRule]),
+      ...queryDepthValidationRules(maxQueryDepth, operationName),
+    ],
     errorFormatter: formatGraphQLErrors,
     path: '/graphql',
     subscription: {
@@ -879,7 +1021,64 @@ export async function registerGraphQL(app: FastifyInstance) {
       // library) rather than the legacy `subscriptions-transport-ws`.
       fullWsTransport: true,
       wsDefaultSubprotocol: 'graphql-transport-ws',
+      context: async (_socket, req) => {
+        return {
+          apiKey: (req as any)?.apiKey,
+        }
+      },
+      onConnect: async (data: any) => {
+        if (!data?.payload) return {}
+        const auth = data.payload.authorization ?? data.payload.Authorization ?? data.payload.apiKey
+        if (typeof auth === 'string') {
+          const token = extractBearer(auth) ?? auth
+          const keyCtx = await lookupApiKey(token)
+          if (keyCtx) {
+            return { apiKey: keyCtx }
+          }
+        }
+        return data.payload
+      },
     },
+  })
+
+  // Enforce per-route scopes for GraphQL queries (#618)
+  app.graphql.addHook('preExecution', async (_schema, document, context, variables) => {
+    const apiKey = (context as any)?.apiKey ?? (context?.reply?.request as any)?.apiKey ?? (context as any)?.request?.apiKey
+    if (!apiKey) return
+
+    const fieldNames = getRootFieldNames(document, (variables as any)?.operationName)
+    for (const fieldName of fieldNames) {
+      const requiredScope = FIELD_SCOPES[fieldName]
+      if (requiredScope && !hasScope(apiKey, requiredScope)) {
+        api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+        throw new ErrorWithProps(`Missing required scope: ${requiredScope}`, {
+          code: 'insufficient_scope',
+          requiredScope,
+          scope: requiredScope,
+          statusCode: 403,
+        })
+      }
+    }
+  })
+
+  // Enforce per-route scopes for GraphQL subscriptions (#618)
+  app.graphql.addHook('preSubscriptionExecution', async (_schema, document, context) => {
+    const apiKey = (context as any)?.apiKey ?? (context?.reply?.request as any)?.apiKey ?? (context as any)?.request?.apiKey
+    if (!apiKey) return
+
+    const fieldNames = getRootFieldNames(document)
+    for (const fieldName of fieldNames) {
+      const requiredScope = FIELD_SCOPES[fieldName]
+      if (requiredScope && !hasScope(apiKey, requiredScope)) {
+        api_key_auth_failures_total.inc({ reason: 'insufficient_scope' })
+        throw new ErrorWithProps(`Missing required scope: ${requiredScope}`, {
+          code: 'insufficient_scope',
+          requiredScope,
+          scope: requiredScope,
+          statusCode: 403,
+        })
+      }
+    }
   })
 
   // Bridge: forward every price the ingesters emit onto the GraphQL pubsub

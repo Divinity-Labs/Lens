@@ -9,9 +9,12 @@ import {
   slicePage,
 } from '../pagination'
 import { activeNetwork, type NetworkName } from '../config'
+import { findOverlappingGaps } from '../backfill/gaps'
 import '../middleware/network' // declares req.network on the FastifyRequest type
+import { formatPrice, formatVolume } from '../pricing/precision'
 
 
+import { apiError } from '../errors'
 const INTERVAL_SECONDS: Record<string, number> = {
   '1m': 60,
   '5m': 300,
@@ -50,13 +53,13 @@ export async function registerCandleRoutes(app: FastifyInstance) {
 
     if (!intervalSecs) {
       return reply.status(400).send({
-        error: `interval must be one of: ${Object.keys(INTERVAL_SECONDS).join(', ')}`,
+        ...apiError('bad_interval', `interval must be one of: ${Object.keys(INTERVAL_SECONDS).join(', ')}`),
       })
     }
 
     const parsedLimit = parseLimit(req.query.limit, CANDLES_DEFAULT_LIMIT, CANDLES_MAX_LIMIT)
     if ('error' in parsedLimit) {
-      return reply.status(400).send({ error: parsedLimit.error })
+      return reply.status(400).send(apiError('invalid_parameter', parsedLimit.error))
     }
     const { limit } = parsedLimit
 
@@ -74,10 +77,10 @@ export async function registerCandleRoutes(app: FastifyInstance) {
     const to = toRaw ? new Date(toRaw) : new Date()
 
     if (isNaN(from.getTime())) {
-      return reply.status(400).send({ error: 'from must be a valid ISO 8601 date' })
+      return reply.status(400).send(apiError('invalid_parameter', 'from must be a valid ISO 8601 date'))
     }
     if (isNaN(to.getTime())) {
-      return reply.status(400).send({ error: 'to must be a valid ISO 8601 date' })
+      return reply.status(400).send(apiError('invalid_parameter', 'to must be a valid ISO 8601 date'))
     }
 
     // $5 is the network predicate in the WHERE clause below. It has to be
@@ -88,7 +91,7 @@ export async function registerCandleRoutes(app: FastifyInstance) {
     if (req.query.cursor) {
       const decoded = decodeCursor(req.query.cursor)
       if (decoded === null) {
-        return reply.status(400).send({ error: 'Invalid cursor format' })
+        return reply.status(400).send(apiError('invalid_parameter', 'Invalid cursor format'))
       }
       if (decoded !== 'skip') {
         params.push(Number(decoded.value))
@@ -100,11 +103,11 @@ export async function registerCandleRoutes(app: FastifyInstance) {
     const result = await pgPool.query(
       `SELECT
          to_timestamp(floor(EXTRACT(EPOCH FROM observed_at) / $1) * $1) AS time,
-         (array_agg(price::float ORDER BY observed_at ASC))[1]  AS open,
-         MAX(price::float)                                      AS high,
-         MIN(price::float)                                      AS low,
-         (array_agg(price::float ORDER BY observed_at DESC))[1] AS close,
-         SUM(base_volume::float)                               AS volume
+         (array_agg(price ORDER BY observed_at ASC, id ASC))[1]  AS open,
+         MAX(price)                                              AS high,
+         MIN(price)                                              AS low,
+         (array_agg(price ORDER BY observed_at DESC, id DESC))[1] AS close,
+         SUM(base_volume)                                        AS volume
        FROM price_points
        WHERE pair_key = $2
          AND network = $5
@@ -116,6 +119,14 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       params
     )
 
+    const overlappingGaps = await findOverlappingGaps({
+      network,
+      pair: pairKey,
+      start: from,
+      end: to,
+    })
+
+    const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
     const { data, hasMore } = slicePage(result.rows, limit)
     const last = hasMore && data.length > 0 ? data[data.length - 1] : null
     const nextCursor = last
@@ -130,12 +141,13 @@ export async function registerCandleRoutes(app: FastifyInstance) {
       to: to.toISOString(),
       candles: data.map(r => ({
         time: r.time,
-        open: Number(r.open),
-        high: Number(r.high),
-        low: Number(r.low),
-        close: Number(r.close),
-        volume: Number(r.volume),
+        open: formatPrice(r.open),
+        high: formatPrice(r.high),
+        low: formatPrice(r.low),
+        close: formatPrice(r.close),
+        volume: formatVolume(r.volume),
       })),
+      ...gapDeclaration,
       nextCursor,
       hasMore,
     }

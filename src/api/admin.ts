@@ -7,6 +7,7 @@ import { formatValidationError } from '../validation'
 import { hashApiKey, isAdminAuthorized, checkAdminAuth, invalidateApiKey } from './auth'
 import { copyUsageHistory } from '../x402/metering'
 
+import { apiError } from '../errors'
 /** Generates a new opaque API key with a recognizable `lens_` prefix. */
 export function generateApiKey(): string {
   return `lens_${randomBytes(24).toString('hex')}`
@@ -101,6 +102,21 @@ const CreateKeySchema = z
     }
   })
 
+interface ListKeysQuery {
+  limit?: string
+  offset?: string
+  revoked?: string
+}
+
+const MAX_KEY_PAGE_SIZE = 100
+
+function parsePageValue(value: string | undefined, fallback: number, maximum: number): number | null {
+  if (value === undefined) return fallback
+  if (!/^(0|[1-9]\d*)$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed <= maximum ? parsed : null
+}
+
 /**
  * Registers admin-only endpoints for minting, listing, and revoking API keys.
  *
@@ -121,7 +137,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       }
       const requestedLimit = Number(req.query.limit ?? 25)
       if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
-        return reply.status(400).send({ error: 'limit must be a positive integer' })
+        return reply.status(400).send(apiError('invalid_parameter', 'limit must be a positive integer'))
       }
       const failures = await prisma.webhookDeliveryFailure.findMany({
         orderBy: { createdAt: 'desc' },
@@ -191,10 +207,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     },
   )
 
-  app.get(
+  app.get<{ Querystring: ListKeysQuery }>(
     '/admin/keys',
     { config: { admin: true, auth: 'admin' } },
-    async (req: FastifyRequest, reply: FastifyReply) => {
+    async (req: FastifyRequest<{ Querystring: ListKeysQuery }>, reply: FastifyReply) => {
       if (!isAdminAuthorized(req)) {
         admin_auth_failures_total.inc()
         return reply.status(401).send({
@@ -204,27 +220,59 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })
       }
 
-      const keys = await prisma.apiKey.findMany({
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          label: true,
-          scopes: true,
-          ratePerMin: true,
-          ratePerDay: true,
-          revokedAt: true,
-          expiresAt: true,
-          createdAt: true,
-          // #500: null means "never authenticated since this column existed",
-          // which is what makes an abandoned key visible to an operator.
-          lastUsedAt: true,
-          monthlyQuotaCents: true,
-          dailyQuotaCents: true,
-          overagePolicy: true,
-        },
-      })
+      const limit = parsePageValue(req.query.limit, 50, MAX_KEY_PAGE_SIZE)
+      const offset = parsePageValue(req.query.offset, 0, Number.MAX_SAFE_INTEGER)
+      const revoked = req.query.revoked ?? 'false'
+      if (limit === null || limit < 1 || offset === null || !['true', 'false'].includes(revoked)) {
+        return reply.status(400).send({
+          ...apiError('invalid_parameter', 'Invalid pagination or revoked filter. Use limit (1-100), offset (0 or greater), and revoked=true|false.'),
+        })
+      }
 
-      return reply.status(200).send({ keys })
+      const where = revoked === 'true' ? { revokedAt: { not: null } } : { revokedAt: null }
+      const [keys, total] = await Promise.all([
+        prisma.apiKey.findMany({
+          where,
+          skip: offset,
+          take: limit,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            label: true,
+            scopes: true,
+            ratePerMin: true,
+            ratePerDay: true,
+            revokedAt: true,
+            expiresAt: true,
+            createdAt: true,
+            // #500: null means "never authenticated since this column existed",
+            // which is what makes an abandoned key visible to an operator.
+            lastUsedAt: true,
+            monthlyQuotaCents: true,
+            dailyQuotaCents: true,
+            overagePolicy: true,
+          },
+        }),
+        prisma.apiKey.count({ where }),
+      ])
+
+      return reply.status(200).send({
+        keys: keys.map(record => ({
+          id: record.id,
+          label: record.label,
+          scopes: record.scopes,
+          ratePerMin: record.ratePerMin,
+          ratePerDay: record.ratePerDay,
+          revokedAt: record.revokedAt,
+          expiresAt: record.expiresAt,
+          createdAt: record.createdAt,
+          lastUsedAt: record.lastUsedAt,
+          monthlyQuotaCents: record.monthlyQuotaCents,
+          dailyQuotaCents: record.dailyQuotaCents,
+          overagePolicy: record.overagePolicy,
+        })),
+        pagination: { limit, offset, total },
+      })
     },
   )
 
@@ -252,7 +300,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const { id } = req.params
       const existing = await prisma.apiKey.findUnique({ where: { id } })
       if (!existing) {
-        return reply.status(404).send({ error: 'API key not found' })
+        return reply.status(404).send(apiError('not_found', 'API key not found'))
       }
       if (existing.revokedAt) {
         return reply.status(200).send({ id, revoked: true, alreadyRevoked: true })
@@ -287,10 +335,10 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       const { id } = req.params
       const oldKey = await prisma.apiKey.findUnique({ where: { id } })
       if (!oldKey) {
-        return reply.status(404).send({ error: 'API key not found' })
+        return reply.status(404).send(apiError('not_found', 'API key not found'))
       }
       if (oldKey.revokedAt) {
-        return reply.status(400).send({ error: 'Cannot rotate a revoked API key' })
+        return reply.status(400).send(apiError('invalid_parameter', 'Cannot rotate a revoked API key'))
       }
 
       const defaultOverlap = parseInt(process.env.KEY_ROTATION_OVERLAP_HOURS ?? '24', 10) || 24

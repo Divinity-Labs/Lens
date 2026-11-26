@@ -36,6 +36,22 @@ export const trades_ingested_total = new Counter({
   registers: [register]
 })
 
+export const price_points_accepted_total = new Counter({
+  name: 'price_points_accepted_total',
+  help: 'Total number of price points accepted by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_quarantined_total = new Counter({
+  name: 'price_points_quarantined_total',
+  help: 'Total number of price points quarantined by ingest plausibility checks',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+export const price_points_rejected_total = price_points_quarantined_total
+
 export const amm_snapshots_total = new Counter({
   name: 'amm_snapshots_total',
   help: 'Total number of AMM pool snapshots captured',
@@ -218,6 +234,60 @@ export const ingest_errors_total = new Counter({
 export function markIngestSuccess(venue: string, network: string): void {
   ingest_last_success_timestamp.set({ venue, network }, Math.floor(Date.now() / 1000))
 }
+
+export const snapshot_retention_path = new Gauge({
+  name: 'snapshot_retention_path',
+  help: 'Active snapshot retention scheduler (one-hot path labels)',
+  labelNames: ['path'],
+  registers: [register],
+})
+
+// Background job metrics (#696). Every worker in src/jobs/ records its runs
+// through runJob() in src/jobs/jobMetrics.ts, for the queue path and for the
+// in-process fallback timers in src/index.ts alike, so a failed run is
+// visible instead of looking like a success.
+//
+// Labels are `job` and `network` only — the same bounded-label rule as the
+// ingest metrics above. `job` is one of the seven queue names in src/jobs/
+// (see JobName in src/jobs/jobMetrics.ts); `network` is testnet|mainnet.
+// Do NOT add `pair` or a pool id here: the aggregate-refresh worker runs
+// once per watched pair, and a pair label would mint a series per pair per
+// network for a question ("is the job failing?") that does not need it.
+export const job_runs_total = new Counter({
+  name: 'job_runs_total',
+  help: 'Background job runs by outcome (success or failure), by job and network',
+  labelNames: ['job', 'network', 'outcome'],
+  registers: [register],
+})
+
+export const job_duration_seconds = new Histogram({
+  name: 'job_duration_seconds',
+  help: 'Duration of a background job run in seconds, by job and network',
+  labelNames: ['job', 'network'],
+  // Jobs run from sub-second (partition pre-creation) to minutes (a large
+  // retention prune), so these buckets are wider at the top than the ingest
+  // cycle buckets; anything slower lands in +Inf and shows up as a
+  // saturated p99.
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
+  registers: [register],
+})
+
+export const job_last_success_timestamp = new Gauge({
+  name: 'job_last_success_timestamp',
+  help: 'Unix timestamp of the last successful background job run, by job and network',
+  labelNames: ['job', 'network'],
+  registers: [register],
+})
+
+// Rows deleted by the retention jobs, by job and network. The pre-existing
+// price_points_pruned_total stays as-is for the price-points retention job;
+// this counter is the uniform one, so one query covers every retention job.
+export const job_rows_deleted_total = new Counter({
+  name: 'job_rows_deleted_total',
+  help: 'Rows deleted by a background retention job, by job and network',
+  labelNames: ['job', 'network'],
+  registers: [register],
+})
 
 export const http_requests_total = new Counter({
   name: 'http_requests_total',
