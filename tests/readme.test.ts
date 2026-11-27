@@ -3,7 +3,7 @@ import { readFileSync as readFileRaw } from 'node:fs'
 
 import { fileURLToPath } from 'node:url'
 import YAML from 'js-yaml'
-import { venueAdapters } from '../src/ingest/venues'
+import { registeredVenues, venueAdapters } from '../src/ingest/venues'
 import {
   extractSection,
   renderVenuesTable,
@@ -30,6 +30,10 @@ function readFileSync(path: string, encoding: 'utf8'): string {
   return readFileRaw(path, encoding).replace(/\r\n/g, String.fromCharCode(10))
 }
 
+// The README venue table is generated from the whole registry, exchange venues
+// included (#644), not only the on-chain baseline in `venueAdapters`.
+const registryAdapters = registeredVenues.map((reg) => reg.adapter)
+
 const readmePath = fileURLToPath(new URL('../README.md', import.meta.url))
 const openApiPath = fileURLToPath(new URL('../openapi.yaml', import.meta.url))
 
@@ -40,7 +44,11 @@ describe('README venue list and endpoint table generators', () => {
 
     expect(venuesSection, 'README must contain <!-- VENUES:START --> ... <!-- VENUES:END --> tags').toBeTruthy()
 
-    const expectedVenues = renderVenuesTable(venueAdapters)
+    // Since #644 the table is rendered from the whole registry. venueAdapters
+    // is the on-chain part of it, so it must stay inside the registry.
+    for (const adapter of venueAdapters) expect(registryAdapters).toContain(adapter)
+
+    const expectedVenues = renderVenuesTable(registryAdapters)
     expect(venuesSection?.trim()).toBe(expectedVenues.trim())
   })
 
@@ -60,9 +68,22 @@ describe('README venue list and endpoint table generators', () => {
     expect(venuesSection).toContain('`aquarius_amm`')
   })
 
+  it('ensures every registered venue is represented in the README', () => {
+    const readmeContent = readFileSync(readmePath, 'utf8')
+    const venuesSection = extractSection(readmeContent, VENUES_START_TAG, VENUES_END_TAG) ?? ''
+
+    for (const adapter of registryAdapters) {
+      expect(venuesSection).toContain(adapter.name)
+      expect(venuesSection).toContain(`\`${adapter.source}\``)
+    }
+
+    // The exchange venues that run only when configured are documented too.
+    expect(venuesSection).toContain('`coinbase_cex`')
+  })
+
   it('fails when the README and venue registry diverge', () => {
     const fakeAdapters = [
-      ...venueAdapters,
+      ...registryAdapters,
       {
         name: 'NewDex',
         source: 'new_dex',

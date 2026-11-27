@@ -86,6 +86,14 @@ export interface NetworkConfig {
     /** Reflector oracle contract ID for this network. */
     reflectorContractId: string
   }
+  coinbase: {
+    /**
+     * Whether the Coinbase Exchange venue is polled and written on this
+     * network (#644). Off unless COINBASE_ENABLED_<NETWORK> is "true", so a
+     * deployment that never asked for an exchange feed does not start one.
+     */
+    enabled: boolean
+  }
   blend: {
     /** Whether Blend lending rate ingestion is enabled on this network. */
     enabled: boolean
@@ -420,6 +428,13 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (process.env[`REFLECTOR_ENABLED_${suffix}`] ?? 'true').toLowerCase() !== 'false' &&
     isUsableContractId(reflectorContractId, `REFLECTOR_CONTRACT_ID_${suffix}`)
 
+  // ── Coinbase Exchange (CEX reference price) ───────────────────────────────
+  // Opt-in per network and off by default: turning it on starts polling an
+  // outside exchange, which an existing deployment never asked for. Only an
+  // explicit "true" enables it, so an empty value or a typo leaves it off.
+  const coinbaseEnabled =
+    (process.env[`COINBASE_ENABLED_${suffix}`] ?? '').trim().toLowerCase() === 'true'
+
   // ── Blend lending protocol ────────────────────────────────────────────────
   const MAINNET_BLEND_POOLS = [
     'CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD', // Fixed Pool v2
@@ -573,6 +588,7 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
       poolCacheTtlMs: phoenixPoolCacheTtlMs,
     },
     oracle: { enabled: oracleEnabled, reflectorContractId },
+    coinbase: { enabled: coinbaseEnabled },
     blend: {
       enabled: blendEnabled,
       pools: parsedBlendPools,

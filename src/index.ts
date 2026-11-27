@@ -356,7 +356,7 @@ async function main() {
   const enabledNetworks = getEnabledNetworks()
   log.info({ networks: enabledNetworks }, 'starting ingesters')
   for (const network of enabledNetworks) {
-    for (const adapter of getEnabledAdapters()) {
+    for (const adapter of getEnabledAdapters(network)) {
       restartIngester(adapter.name, network, () => startVenueAdapter(adapter, network))
     }
     restartIngester('Snapshot', network, () => startSnapshotIngester(network))

@@ -7,6 +7,7 @@ import { phoenixAdapter } from './phoenix'
 import { blendAdapter } from './blend'
 import { kucoinAdapter, startKuCoinIngester } from './kucoin'
 import { gateioAdapter, startGateioIngester } from './gateio'
+import { coinbaseAdapter } from './coinbase'
 import type { VenueAdapter } from './types'
 
 export * from './types'
@@ -22,6 +23,7 @@ export { defindexAdapter, startDeFindexIngester } from './defindex'
 export { phoenixAdapter, startPhoenixIngester } from './phoenix'
 export { kucoinAdapter, startKuCoinIngester } from './kucoin'
 export { gateioAdapter, startGateioIngester } from './gateio'
+export { coinbaseAdapter, startCoinbaseIngester } from './coinbase'
 
 /**
  * All known venue adapters across on-chain protocols and centralized exchanges.
@@ -36,6 +38,7 @@ export const allVenueAdapters: VenueAdapter[] = [
   phoenixAdapter,
   kucoinAdapter,
   gateioAdapter,
+  coinbaseAdapter,
 ]
 
 /**
@@ -166,6 +169,20 @@ export const VENUE_CLASSIFICATIONS: Record<string, VenueClassificationInfo> = {
     classification: 'primary',
     reasoning:
       'Centralized spot exchange order book. Independent order matching establishing external market reference prices.',
+  },
+  coinbase_cex: {
+    name: 'Coinbase',
+    source: 'coinbase_cex',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book (Coinbase Exchange). Independent order matching establishing external market reference prices. Rows are ticker quotes written with zero volume, so it adds nothing to volume totals either way.',
+  },
+  Coinbase: {
+    name: 'Coinbase',
+    source: 'coinbase_cex',
+    classification: 'primary',
+    reasoning:
+      'Centralized spot exchange order book (Coinbase Exchange). Independent order matching establishing external market reference prices. Rows are ticker quotes written with zero volume, so it adds nothing to volume totals either way.',
   },
 }
 
