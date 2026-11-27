@@ -52,17 +52,18 @@ High confidence requires price observations from at least [`2`](../src/aggregato
 
 ### Statistical Outlier Rejection Thresholds
 TWAP and VWAP computations apply statistical filtering to reject manipulation spikes:
-- **Minimum Sample Count**: Outlier filtering requires at least [`4`](../src/pricing/twap.ts#L288) sample points.
-- **Interquartile Range (IQR)**: Rejects samples beyond Q1 - [`1.5`](../src/pricing/twap.ts#L289) * IQR or Q3 + [`1.5`](../src/pricing/twap.ts#L289) * IQR.
-- **Modified Z-Score**: Rejects samples with absolute score exceeding [`3.5`](../src/pricing/twap.ts#L290), using a consistency factor of [`0.6745`](../src/pricing/twap.ts#L291).
-- **Enforcing Code**: [`src/pricing/twap.ts`](../src/pricing/twap.ts#L288)
-- **Violation Behavior**: If fewer than [`4`](../src/pricing/twap.ts#L288) samples exist, filtering is bypassed (`outlierRejected` is zero). If [`0`](../src/pricing/twap.ts#L78) samples exist in the window, endpoints return zero TWAP and sample count.
+- **Minimum Sample Count**: Outlier filtering requires at least [`4`](../src/pricing/twap.ts#L375) sample points.
+- **Interquartile Range (IQR)**: Rejects samples below Q1 - `margin` or above Q3 + `margin`, where `margin` is the larger of [`1.5`](../src/pricing/twap.ts#L376) × IQR and [`0.05`](../src/pricing/twap.ts#L378) × |median| (`IQR_MIN_BAND_RATIO`).
+- **Zero-IQR Rule**: When three quarters or more of the samples share one price, Q1 equals Q3 and the IQR is zero, so a pure IQR fence would collapse onto that price and reject every other sample. The minimum band keeps the fence at least [`5%`](../src/pricing/twap.ts#L378) of the median wide on each side instead: small real moves are kept, a value far from the median (for example ten times it) is still rejected, and a series of identical prices rejects nothing.
+- **Modified Z-Score**: Rejects samples with absolute score exceeding [`3.5`](../src/pricing/twap.ts#L379), using a consistency factor of [`0.6745`](../src/pricing/twap.ts#L380).
+- **Enforcing Code**: [`src/pricing/twap.ts`](../src/pricing/twap.ts#L375)
+- **Violation Behavior**: If fewer than [`4`](../src/pricing/twap.ts#L375) samples exist, filtering is bypassed (`outlierRejected` is zero). If [`0`](../src/pricing/twap.ts#L78) samples exist in the window, endpoints return zero TWAP and sample count.
 
 ### Request Window & Parameter Bounds
 - **TWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L8) to [`1440`](../src/routes/price.ts#L9) minutes (default [`60`](../src/routes/price.ts#L10) minutes). Sample intervals range from [`1`](../src/routes/price.ts#L11) to [`3600`](../src/routes/price.ts#L12) seconds (default [`60`](../src/routes/price.ts#L13) seconds).
 - **VWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L15) to [`1440`](../src/routes/price.ts#L16) minutes (default [`60`](../src/routes/price.ts#L17) minutes).
 - **Price History Limits**: Bucket count is capped at [`1000`](../src/api/rest.ts#L25) buckets (default [`100`](../src/api/rest.ts#L24) buckets).
-- **Screener Pair Limits**: Pair count defaults to [`20`](../src/routes/screener.ts#L22) and is clamped between [`1`](../src/routes/screener.ts#L33) and [`100`](../src/routes/screener.ts#L23).
+- **Screener Pair Limits**: Pair count defaults to [`20`](../src/services/screener.ts#L16) and is clamped between [`1`](../src/services/screener.ts#L109) and [`100`](../src/services/screener.ts#L17).
 - **Spread Observations**: Venues must quote at least [`2`](../src/routes/spreads.ts#L20) observations in the window to report a spread.
 - **Violation Behavior**: Inputs outside allowed ranges trigger HTTP [`400`](../src/routes/price.ts#L55) Bad Request with validation details.
 
@@ -129,10 +130,11 @@ When a data quality guarantee is breached, Lens behaves deterministically:
 | `snapshot_retention_days` | [`30`](../src/jobs/snapshotRetention.ts#L12) | days | [`src/jobs/snapshotRetention.ts:12`](../src/jobs/snapshotRetention.ts#L12) | Retention window for historical pool snapshots |
 | `snapshot_retention_batch_size` | [`1000`](../src/jobs/snapshotRetention.ts#L14) | rows | [`src/jobs/snapshotRetention.ts:14`](../src/jobs/snapshotRetention.ts#L14) | Row limit for batch snapshot pruning statements |
 | `price_points_retention_days` | [`30`](../src/partitioning/pricePoints.ts#L5) | days | [`src/partitioning/pricePoints.ts:5`](../src/partitioning/pricePoints.ts#L5) | Retention window before daily partition drops |
-| `min_outlier_samples` | [`4`](../src/pricing/twap.ts#L288) | samples | [`src/pricing/twap.ts:288`](../src/pricing/twap.ts#L288) | Minimum samples required for statistical outlier rejection |
-| `iqr_multiplier` | [`1.5`](../src/pricing/twap.ts#L289) | factor | [`src/pricing/twap.ts:289`](../src/pricing/twap.ts#L289) | Interquartile range multiplier for outlier fence |
-| `modified_z_score_threshold` | [`3.5`](../src/pricing/twap.ts#L290) | factor | [`src/pricing/twap.ts:290`](../src/pricing/twap.ts#L290) | Modified Z-Score deviation threshold |
-| `modified_z_score_factor` | [`0.6745`](../src/pricing/twap.ts#L291) | factor | [`src/pricing/twap.ts:291`](../src/pricing/twap.ts#L291) | Consistency adjustment factor for MAD normal distribution |
+| `min_outlier_samples` | [`4`](../src/pricing/twap.ts#L375) | samples | [`src/pricing/twap.ts:375`](../src/pricing/twap.ts#L375) | Minimum samples required for statistical outlier rejection |
+| `iqr_multiplier` | [`1.5`](../src/pricing/twap.ts#L376) | factor | [`src/pricing/twap.ts:376`](../src/pricing/twap.ts#L376) | Interquartile range multiplier for outlier fence |
+| `iqr_min_band_ratio` | [`0.05`](../src/pricing/twap.ts#L378) | fraction of median | [`src/pricing/twap.ts:378`](../src/pricing/twap.ts#L378) | Minimum half-width of the IQR fence, so a zero IQR does not reject every differing price |
+| `modified_z_score_threshold` | [`3.5`](../src/pricing/twap.ts#L379) | factor | [`src/pricing/twap.ts:379`](../src/pricing/twap.ts#L379) | Modified Z-Score deviation threshold |
+| `modified_z_score_factor` | [`0.6745`](../src/pricing/twap.ts#L380) | factor | [`src/pricing/twap.ts:380`](../src/pricing/twap.ts#L380) | Consistency adjustment factor for MAD normal distribution |
 | `twap_window_min` | [`1`](../src/routes/price.ts#L8) | minutes | [`src/routes/price.ts:8`](../src/routes/price.ts#L8) | Minimum allowed TWAP calculation window |
 | `twap_window_max` | [`1440`](../src/routes/price.ts#L9) | minutes | [`src/routes/price.ts:9`](../src/routes/price.ts#L9) | Maximum allowed TWAP calculation window (24h) |
 | `twap_window_default` | [`60`](../src/routes/price.ts#L10) | minutes | [`src/routes/price.ts:10`](../src/routes/price.ts#L10) | Default TWAP window |
@@ -144,10 +146,10 @@ When a data quality guarantee is breached, Lens behaves deterministically:
 | `vwap_window_default` | [`60`](../src/routes/price.ts#L17) | minutes | [`src/routes/price.ts:17`](../src/routes/price.ts#L17) | Default VWAP window |
 | `history_default_limit` | [`100`](../src/api/rest.ts#L24) | buckets | [`src/api/rest.ts:24`](../src/api/rest.ts#L24) | Default bucket limit for historical aggregates |
 | `history_max_limit` | [`1000`](../src/api/rest.ts#L25) | buckets | [`src/api/rest.ts:25`](../src/api/rest.ts#L25) | Upper ceiling for historical aggregates |
-| `screener_default_limit` | [`20`](../src/routes/screener.ts#L22) | pairs | [`src/routes/screener.ts:22`](../src/routes/screener.ts#L22) | Default limit of pairs returned by screener |
-| `screener_max_limit` | [`100`](../src/routes/screener.ts#L23) | pairs | [`src/routes/screener.ts:23`](../src/routes/screener.ts#L23) | Maximum clamped limit of pairs returned by screener |
+| `screener_default_limit` | [`20`](../src/services/screener.ts#L16) | pairs | [`src/services/screener.ts:16`](../src/services/screener.ts#L16) | Default limit of pairs returned by screener |
+| `screener_max_limit` | [`100`](../src/services/screener.ts#L17) | pairs | [`src/services/screener.ts:17`](../src/services/screener.ts#L17) | Maximum clamped limit of pairs returned by screener |
 | `spread_min_observations` | [`2`](../src/routes/spreads.ts#L20) | observations | [`src/routes/spreads.ts:20`](../src/routes/spreads.ts#L20) | Minimum observations required before a venue spread is reported |
-| `registered_venues_count` | [`4`](../src/ingest/venues/index.ts#L19) | adapters | [`src/ingest/venues/index.ts:19`](../src/ingest/venues/index.ts#L19) | Total number of registered venue adapters |
+| `registered_venues_count` | [`6`](../src/ingest/venues/index.ts#L23) | adapters | [`src/ingest/venues/index.ts:23`](../src/ingest/venues/index.ts#L23) | Total number of registered venue adapters |
 | `database_price_precision` | [`36`](../prisma/schema.prisma#L20) | digits | [`prisma/schema.prisma:20`](../prisma/schema.prisma#L20) | Total numeric precision in PostgreSQL decimal columns |
 | `database_price_scale` | [`18`](../prisma/schema.prisma#L20) | decimals | [`prisma/schema.prisma:20`](../prisma/schema.prisma#L20) | Decimal places stored for pricing in PostgreSQL |
 | `stellar_native_scale` | [`7`](../prisma/schema.prisma#L21) | decimals | [`prisma/schema.prisma:21`](../prisma/schema.prisma#L21) | Native Stellar stroop scale (one stroop equals ten to the negative seven XLM) |

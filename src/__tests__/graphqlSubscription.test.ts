@@ -10,9 +10,14 @@ vi.mock('../redis', () => ({ getCachedPrice: vi.fn() }))
 vi.mock('../db', () => ({ pgPool: { query: vi.fn() } }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../aggregator/bestRoute', () => ({ getBestRoute: vi.fn() }))
-vi.mock('../config', () => ({ config: { pairs: [] } }))
+// The pairs registry seeds each network's list from getNetworkConfig (#646).
+vi.mock('../config', () => ({
+  config: { pairs: [] },
+  activeNetwork: 'testnet',
+  getNetworkConfig: () => ({ pairs: [] }),
+}))
 
-import { registerGraphQL } from '../api/graphql'
+import { registerGraphQL, resolveGraphQLUiOptions } from '../api/graphql'
 import { publishPriceUpdate, priceEmitter } from '../events'
 
 const SUBPROTOCOL = 'graphql-transport-ws'
@@ -71,6 +76,52 @@ const SUBSCRIBE = (pair: string, network?: string) => ({
   },
 })
 
+describe('GraphQL production UI configuration', () => {
+  it('disables GraphiQL by default in production while leaving POST /graphql available', async () => {
+    const options = resolveGraphQLUiOptions({ NODE_ENV: 'production' })
+    expect(options.graphiqlEnabled).toBe(false)
+    expect(options.introspectionEnabled).toBe(true)
+
+    const app = Fastify({ logger: false })
+    await registerGraphQL(app, { environment: 'production' })
+    await app.ready()
+    try {
+      expect((await app.inject({ method: 'GET', url: '/graphiql' })).statusCode).toBe(404)
+      const response = await app.inject({
+        method: 'POST',
+        url: '/graphql',
+        payload: { query: '{ listPairs }' },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ data: { listPairs: [] } })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('allows operators to configure the IDE and introspection independently', async () => {
+    expect(resolveGraphQLUiOptions({ NODE_ENV: 'production', GRAPHIQL_ENABLED: 'true' }))
+      .toMatchObject({ graphiqlEnabled: true, introspectionEnabled: true })
+    expect(resolveGraphQLUiOptions({ NODE_ENV: 'production', GRAPHQL_INTROSPECTION_ENABLED: 'false' }))
+      .toMatchObject({ graphiqlEnabled: false, introspectionEnabled: false })
+
+    const app = Fastify({ logger: false })
+    await registerGraphQL(app, { environment: 'production', introspectionEnabled: false })
+    await app.ready()
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/graphql',
+        payload: { query: '{ __schema { queryType { name } } }' },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(response.json().errors?.[0]?.message).toMatch(/introspection/i)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
 describe('GraphQL priceUpdated subscription', () => {
   let app: FastifyInstance
   let url: string
@@ -126,8 +177,8 @@ describe('GraphQL priceUpdated subscription', () => {
     // Since #117 every enabled network runs its own ingester loop and all of
     // them publish to this one emitter. Without the network filter a mainnet
     // print and a testnet print for XLM/USDC arrive on the same stream,
-    // indistinguishable — a chart that looks noisy rather than wrong, which is
-    // the harder kind of bug to notice.
+    // indistinguishable — a chart that looks noisy rather than wrong, which
+    // is the harder kind of bug to notice.
     const ws = await connect(url)
     ws.send(JSON.stringify(SUBSCRIBE('XLM/USDC', 'mainnet')))
     await new Promise(r => setTimeout(r, 100))

@@ -1,25 +1,28 @@
 # Lens GraphQL API Documentation
 
-Lens exposes a high-performance GraphQL API alongside its REST interface, powered by Fastify and [Mercurius](https://mercurius.dev). It aggregates real-time and historical pricing data from the Stellar Classic Decentralized Exchange (SDEX) order book and Automated Market Maker (AMM) liquidity pools.
+Lens exposes a high-performance GraphQL API alongside its REST interface, powered by Fastify and [mercurius](https://mercurius.dev). It aggregates real-time and historical pricing data from the Stellar Classic Decentralized Exchange (SDEE) order book and Automated Market Maker (AMM) liquidity pools.
 
 ---
 
 ## Table of Contents
 
 1. [Endpoints & Access](#endpoints--access)
-2. [Schema & Types](#schema--types)
-3. [Queries & Runnable Examples](#queries--runnable-examples)
+2. [Authentication & Scopes](#authentication--scopes)
+3. [Query depth limit](#query-depth-limit)
+4. [Schema & Types](#schema--types)
+5. [Queries & Runnable Examples](#queries--runnable-examples)
    - [`getPrice`](#1-getprice)
    - [`getBestRoute`](#2-getbestroute)
    - [`getPriceHistory`](#3-getpricehistory)
    - [`listPairs`](#4-listpairs)
-4. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
+   - [`screener`](#5-screener)
+   - [`volumes` and `spreads`](#6-volumes-and-spreads)
+6. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
-   - [Runnable Client Example (Raw WebSocket & Handshake)](#runnable-client-example-raw-websocket--handshake)
+   - [Runnable Client Example (Raw WebSocket & Handshake)](#runnable-client-example-raw-websocket---handshake)
    - [Runnable Client Example (`graphql-ws` Library)](#runnable-client-example-graphql-ws-library)
-5. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
-6. [Query depth limit](#query-depth-limit)
+7. [Capabilities & Gaps Against REST](#capabilities--gaps-against-rest)
 
 ---
 
@@ -32,7 +35,70 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
 | **GraphQL Subscription Endpoint** | WebSocket (`ws://` / `wss://`) | `ws://localhost:3002/graphql` | Real-time streaming price updates over WebSocket using `graphql-transport-ws`. |
 
 > [!IMPORTANT]
-> **WebSocket Subprotocol Requirement**: The subscription server requires the modern **`graphql-transport-ws`** subprotocol (the standard implemented by [`graphql-ws`](https://github.com/enisdenjo/graphql-ws)). Legacy Apollo `subscriptions-transport-ws` is **not** supported and will be rejected during connection initialization.
+> **WebSocket Subprotocol Requirement**: The subscription server requires the modern **@graphql-transport-ws** subprotocol (the standard implemented by [`graphql-ws`](https://github.com/enisdenjo/graphql-ws)). Legacy Apollo `subscriptions-transport-ws` is **not** supported and will be rejected during connection initialization.
+
+## Authentication & Scopes
+
+GraphQL operations on Lens enforce the same fine-grained per-route scopes required by their REST equivalents. If an authenticated API key lacks the required scope for any requested root field, the entire operation is rejected with **HTTP 403 Forbidden** before any resolver is executed.
+
+### Operation Field Scopes
+
+| Operation Field | Operation Type | Required Scope | REST Equivalent |
+|---|---|---|---|
+| `getPrice` | `Query` | `read:prices` | `GET /price/:assetA/:assetB` |
+| `getBestRoute` | `Query` | `read:prices` | `GET /route/:assetA/:assetB` |
+| `getPriceHistory` | `Query` | `read:history` | `GET /prices/history` |
+| `listPairs` | `Query` | `read:prices` | `GET /pairs` |
+| `pairs` | `Query` | `read:prices` | `GET /pairs` |
+| `oracle` | `Query` | `read:prices` | `GET /oracle` |
+| `screener` | `Query` | `read:prices` | `GET /screener` |
+| `volumes` | `Query` | `read:prices` | `GET /volumes/:asset` |
+| `spreads` | `Query` | `read:prices` | `GET /spreads/:asset` |
+| `priceUpdated` | `Subscription` | `subscribe` | WebSocket `/ws/prices` |
+
+### Multi-Field Queries & Scope Union
+
+A single GraphQL document querying multiple root fields (including fields selected via inline fragments, fragment spreads, or aliases) requires the **union** of all scopes needed by those fields.
+
+For example, a query requesting both `getPrice` and `getPriceHistory` requires an API key that possesses **both** `read:prices` and `read:history`. If the key only has `read:prices`, the request is refused with HTTP 403 and no resolver runs:
+
+```json
+{
+  "data": null,
+  "errors": [
+    {
+      "message": "Missing required scope: read:history",
+      "extensions": {
+        "code": "insufficient_scope",
+        "requiredScope": "read:history",
+        "scope": "read:history",
+        "statusCode": 403
+      }
+    }
+  ]
+}
+```
+
+### Passing Authentication
+
+- **HTTP Queries**: Pass the API key in the `Authorization` header:
+  ```http
+  Authorization: Bearer <api_key>
+  ```
+- **WebSocket Subscriptions**: Pass the API key in the `connection_init` payload during the protocol handshake:
+  ```json
+  {
+    "type": "connection_init",
+    "payload": {
+      "authorization": "Bearer <api_key>"
+    }
+  }
+  ```
+  Or as an `Authorization` header in the initial WebSocket upgrade request.
+
+Legacy unscoped API keys (`scopes: []`) and keys configured with wildcard access (`scopes: ['*']`) satisfy all operation scopes.
+
+---
 
 ## Query depth limit
 
@@ -67,14 +133,19 @@ It can be regenerated from code definitions using `npm run graphql:schema:gen`, 
 type Query {
   getPrice(assetA: String!, assetB: String!): AggregatedPrice
   getBestRoute(assetA: String!, assetB: String!, amount: Float!): RouteInfo
-  getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int): [PriceBucket]
+  getPriceHistory(assetA: String!, assetB: String!, window: String!, from: String, to: String, limit: Int): [PriceBucket]
   listPairs: [String]!
+  screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
+  volumes(asset: String!, window: String, network: String): VolumeReport!
+  spreads(asset: String!, window: String, network: String): SpreadReport!
 }
 
 type Subscription {
   priceUpdated(pair: String!, network: String): PriceUpdate!
 }
 ```
+
+> [`getPriceHistory`](#3-getpriceHistory) range semantics: `from` and `to` are ISO 8601 timestamps and are **exclusive at the upper (`to`) end** — a bucket is returned only if its start is `>= from` and `< to`. This differs from the REST `history` route, which is inclusive at both ends and therefore double-counts boundary buckets across adjacent windows.
 
 ### Object Types
 
@@ -85,7 +156,7 @@ Composite pricing metrics aggregated across SDEX and AMM venues.
 |---|---|---|
 | `assetA` | `String!` | First asset symbol or asset ID (`XLM` or `CODE:ISSUER`). |
 | `assetB` | `String!` | Second asset symbol or asset ID. |
-| `pairKey` | `String!` | Canonical alphabetically-sorted pair key (e.g. `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM`). |
+| `pairKey` | `String!` | Canonical alphabetically-sorted pair key (e.g. `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN/XLM`). |
 | `price` | `Float!` | Volume-weighted aggregated price across all active venues. |
 | `sdexPrice` | `Float!` | Mid-market price derived strictly from the SDEX order book. |
 | `ammPrice` | `Float!` | Spot price derived from AMM liquidity pool reserve ratios. |
@@ -108,7 +179,7 @@ Routing analysis determining optimal swap execution.
 
 | Field | Type | Description |
 |---|---|---|
-| `route` | `String!` | Execution venue recommendation: `"SDEX"`, `"AMM"`, or `"SPLIT"`. |
+| `route` | `String!` | Execution venue recommendation: `"SDEX"`, `"AMM"`, or `"SPLIT" `. |
 | `sdexPrice` | `Float!` | Spot price for the order on the SDEX order book. |
 | `ammPrice` | `Float!` | Spot price for the order on AMM liquidity pools. |
 | `estimatedOutput` | `Float!` | Projected output tokens received for the input amount. |
@@ -137,7 +208,7 @@ Payload delivered on every real-time subscription event.
 
 | Field | Type | Description |
 |---|---|---|
-| `pair` | `String!` | Canonical pair key (e.g. `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM` or `XLM/USDC`). |
+| `pair` | `String!` | Canonical pair key (e.g. `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN/XLM` or `XLM/USDC`). |
 | `price` | `Float!` | Latest recorded trade or reserve spot price. |
 | `ts` | `String!` | ISO-8601 timestamp of trade execution or ingestion. |
 | `network` | `String!` | Network of origin: `"testnet"` or `"mainnet"`. |
@@ -146,7 +217,7 @@ Payload delivered on every real-time subscription event.
 
 ## Queries & Runnable Examples
 
-All examples below can be executed directly against a running Lens instance. Canonical asset representations use standard Stellar format: native lumens as `XLM` or `native`, and issued assets as `CODE:ISSUER` (for example, Circle USDC on Stellar mainnet: `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`).
+All examples below can be executed directly against a running Lens instance. Canonical asset representations use standard Stellar format: native lumens as `XLM` or `native`, and issued assets as `CODE:ISSUER` (for example, Circle USDC on Stellar mainnet: `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRR34K4KZVN`)`.
 
 ### 1. `getPrice`
 
@@ -174,17 +245,17 @@ query GetAssetPrice($assetA: String!, $assetB: String!) {
 ```
 
 #### Runnable `curl` Command
-```bash
+[```bash
 curl -s -X POST http://localhost:3002/graphql \
   -H "Content-Type: application/json" \
   -d '{
     "query": "query GetAssetPrice($assetA: String!, $assetB: String!) { getPrice(assetA: $assetA, assetB: $assetB) { assetA assetB pairKey price sdexPrice ammPrice bestRoute volume24h vwap1h vwap24h priceChange24h lastUpdated confidence } }",
     "variables": {
       "assetA": "XLM",
-      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPPRE34K4KZVN"
     }
   }'
-```
+```]
 
 #### Example Response
 ```json
@@ -192,8 +263,8 @@ curl -s -X POST http://localhost:3002/graphql \
   "data": {
     "getPrice": {
       "assetA": "XLM",
-      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-      "pairKey": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM",
+      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPPRE34K4KZVN",
+      "pairKey": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN/XLM",
       "price": 0.1245,
       "sdexPrice": 0.1244,
       "ammPrice": 0.1246,
@@ -213,12 +284,12 @@ curl -s -X POST http://localhost:3002/graphql \
 
 ### 2. `getBestRoute`
 
-Simulates swap execution for an explicit order amount across both SDEX order books and AMM liquidity pools, calculating projected output tokens and slippage.
+Simulates swap execution for an explicit order amount across both NDEX order books and AMM liquidity pools, calculating projected output tokens and slippage.
 
 #### Query Definition
 ```graphql
 query GetBestExecutionRoute($assetA: String!, $assetB: String!, $amount: Float!) {
-  getBestRoute(assetA: $assetA, assetB: $assetB, amount: $amount) {
+  getBestRoute(assetA: $assetA, assetB: $assetB, Amount: $amount) {
     route
     sdexPrice
     ammPrice
@@ -230,18 +301,18 @@ query GetBestExecutionRoute($assetA: String!, $assetB: String!, $amount: Float!)
 ```
 
 #### Runnable `curl` Command
-```bash
+[```bash
 curl -s -X POST http://localhost:3002/graphql \
   -H "Content-Type: application/json" \
   -d '{
     "query": "query GetBestExecutionRoute($assetA: String!, $assetB: String!, $amount: Float!) { getBestRoute(assetA: $assetA, assetB: $assetB, amount: $amount) { route sdexPrice ammPrice estimatedOutput slippagePct recommendation } }",
     "variables": {
       "assetA": "XLM",
-      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRR34K4KZVN",
       "amount": 10000.0
     }
   }'
-```
+```]
 
 #### Example Response
 ```json
@@ -265,10 +336,12 @@ curl -s -X POST http://localhost:3002/graphql \
 
 Retrieves historical aggregated price buckets (OHLCV and VWAP) for a given pair and timeframe window (`1m`, `5m`, `1h`, `24h`).
 
+`from` and `to` are optional ISO 8601 timestamps that constrain the query to an explicit time range. The range is **exclusive at the upper end** — a bucket is returned only if its start is `>= from` and `< to`. This is deliberately different from the REST `history` route, which is inclusive at both ends and thus double-counts boundary buckets across adjacent windows. When `from` omitted the range extends backward from `to` (or now) for at most `limit` buckets; when `to` omitted the range extends forward from `from` (or the oldest available bucket) to now. A `from` later than `to` is an error, as is a range that would produce more buckets than the server allows (the same cap the REST history route rejects as over-large).
+
 #### Query Definition
 ```graphql
-query GetPairHistory($assetA: String!, $assetB: String!, $window: String!, $limit: Int) {
-  getPriceHistory(assetA: $assetA, assetB: $assetB, window: $window, limit: $limit) {
+query GetPairHistory($assetA: String!, $assetB: String!, $window: String!, $from: String, $to: String, $limit: Int) {
+  getPriceHistory(assetA: $assetA, assetB: $assetB, window: $window, from: $from, to: $to, limit: $limit) {
     bucket
     window
     vwap
@@ -285,19 +358,21 @@ query GetPairHistory($assetA: String!, $assetB: String!, $window: String!, $limi
 ```
 
 #### Runnable `curl` Command
-```bash
+[```bash
 curl -s -X POST http://localhost:3002/graphql \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "query GetPairHistory($assetA: String!, $assetB: String!, $window: String!, $limit: Int) { getPriceHistory(assetA: $assetA, assetB: $assetB, window: $window, limit: $limit) { bucket window vwap sdexVwap ammVwap volume tradeCount open close high low } }",
+    "query": "query GetPairHistory($assetA: String!, $assetB: String!, $window: String!, $from: String, $to: String, $limit: Int) { getPriceHistory(assetA: $assetA, assetB: $assetB, window: $window, from: $from, to: $to, limit: $limit) { bucket window vwap sdexVwap ammVwap volume tradeCount open close high low } }",
     "variables": {
       "assetA": "XLM",
-      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      "assetB": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN",
       "window": "1h",
+      "from": "2026-10-16T00:00:00.000Z",
+      "to": "2026-10-17T00:00:00.000Z",
       "limit": 5
     }
   }'
-```
+```]
 
 #### Example Response
 ```json
@@ -312,10 +387,10 @@ curl -s -X POST http://localhost:3002/graphql \
         "ammVwap": 0.1244,
         "volume": 68420.0,
         "tradeCount": 142,
-        "open": 0.1239,
+        "open": 0.1241,
         "close": 0.1245,
-        "high": 0.1248,
-        "low": 0.1237
+        "high": 0.1250,
+        "low": 0.1238
       }
     ]
   }
@@ -326,12 +401,168 @@ curl -s -X POST http://localhost:3002/graphql \
 
 ### 4. `listPairs`
 
-Lists all canonical pair keys actively registered and watched by the indexers on the active network.
+Returns the canonical list of pair keys currently being tracked and priced by the service.
 
 #### Query Definition
 ```graphql
-query ListWatchedPairs {
+query {
   listPairs
+}
+```
+
+#### Runnable `curl` Command
+[```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query { listPairs }"
+  }'
+```]
+
+#### Example Response
+```json
+{
+  "data": {
+    "listPairs": [
+      "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN/XLM",
+      "AQU:XLM:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPRE34K4KZVN"
+    ]
+  }
+}
+```
+
+---
+
+### 5. `screener`
+
+Screens tracked pairs by volume, 24-hour change, price and AMM liquidity,
+with cursor pagination. It shares its implementation with the REST
+`GET /screener` route: same filters, same sort fields, same cursor semantics
+and the same `[1, 100]` limit clamp (never rejected).
+
+#### Arguments
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `filters` | `ScreenerFilters` | none | Numeric filters (`volume`, `change24hMin`, `change24hMax`, `priceMin`, `priceMax`, `liquidity`); omitted fields do not filter. Each numeric filter is a lower/upper bound as its name says. |
+| `sortBy` | `String` | `"volume"` | One of `volume`, `change_24h`, `price`, `liquidity`. |
+| `order` | `ScreenerSortOrder` | `DESC` | `ASC` or `DESC`. |
+| `cursor` | `String` | none | Opaque `nextCursor` from the previous page. |
+| `limit` | `Int` | `20` | Page size, clamped to `[1, 100]`. |
+
+> [!IMPORTANT]
+> **`market_cap` is rejected, not ignored.** Lens has no circulating supply
+data to compute a market cap from. Both the `marketCap` filter and
+> `sortBy: "market_cap"` fail the query with an `UNSUPPORTED_PARAMETER` /
+> `INVALID_INPUT` error carrying the same explanation REST gives — never a
+> silent null. Use `liquidity` instead.
+
+#### Query Definition
+```graphql
+query ScreenPairs($filters: ScreenerFilters, $sortBy: String, $limit: Int) {
+  screener(filters: $filters, sortBy: $sortBy, limit: $limit) {
+    network
+    hasMore
+    nextCursor
+    rows {
+      pairKey
+      volume
+      price
+      change24h
+      liquidity
+      liquidityUnit
+    }
+  }
+}
+```
+
+#### Runnable `curl` Command
+[```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query ScreenPairs($filters: ScreenerFilters, $sortBy: String, $limit: Int) { screener(filters: $filters, sortBy: $sortBy, limit: $limit) { network hasMore nextCursor rows { pairKey volume price change24h liquidity liquidityUnit } } }",
+    "variables": {
+      "filters": { "volume": 1000, "change24hMin": -10 },
+      "sortBy": "liquidity",
+      "limit": 5
+    }
+  }'
+```]
+
+#### Example Response
+```json
+{
+  "data": {
+    "screener": {
+      "network": "testnet",
+      "hasMore": true,
+      "nextCursor": "eyJib2x1bWUiOjUwMDAwfQ==",
+      "rows": [
+        {
+          "pairKey": "XLM/USDC",
+          "volume": 1425000.5,
+          "price": 0.1245,
+          "change24h": 1.25,
+          "liquidity": 83000.4,
+          "liquidityUnit": "USDC"
+        }
+      ]
+    }
+  }
+}
+```
+
+To fetch the next page, pass the previous response's `nextCursor` back as the
+`cursor` argument. `nextCursor` is `null` on the last page; `hasMore` reports
+whether another page exists.
+
+---
+
+### 6. `volumes` and `spreads`
+
+GraphQL counterparts of REST `GET /volumes/:asset` and `GET /spreads/:asset`.
+Each resolver calls the REST route's own implementation (`computeVolumes` in
+`src/routes/volumes.ts`, `computeSpreads` in `src/routes/spreads.ts`), so the
+figures cannot drift between the two surfaces.
+
+| Argument | `volumes` | `spreads` |
+|---|---|---|
+| `asset` | required, e.g. `XLM` | required, e.g. `XLM` |
+| `window` | `24h` (default), `7d`, `30d` | `5m` (default), `15m`, `1h`, `24h` |
+| `network` | `testnet` / `mainnet`, defaults to the active network | `testnet` / `mainnet`, defaults to the active network |
+
+An unrecognised `window` or `network` fails with `INVALID_INPUT` and the same
+message REST returns with its 400. The network answered for is echoed in
+`network`; the two chains are never pooled.
+
+Per-venue results are a typed list of `VenueQuote`, so a client can select
+just the fields it wants per venue:
+
+- `volumes.venues`: `venue`, `volume` (in the asset's own units, summed across
+  pairs) and `aggregator`. This is REST's `byVenue` map as a list, in REST's
+  `venues` order. Every other REST field (`totals`, `netVolume`,
+  `grossVolume`, `totalVolume`, trade counts, trade-size statistics, `status`,
+  `provenance`) is returned under the same name.
+- `spreads.venues`: one entry per (venue, pair), tightest first, with `pairKey`,
+  `bid`, `ask`, `mid`, `spreadBps`, `spreadPct`, `observations` and `lastSeen`.
+  `tightest` is the first of them, or `null` when no venue quoted the asset.
+
+Fields that belong to the other query are `null` on a `VenueQuote`.
+
+#### Query Definition
+```graphql
+query VenueViews($asset: String!, $network: String) {
+  volumes(asset: $asset, window: "24h", network: $network) {
+    network
+    totals { net gross }
+    venues { venue volume aggregator }
+  }
+  spreads(asset: $asset, window: "5m", network: $network) {
+    network
+    tightest { venue pairKey spreadBps }
+    venues { venue pairKey bid ask spreadBps }
+  }
 }
 ```
 
@@ -340,235 +571,87 @@ query ListWatchedPairs {
 curl -s -X POST http://localhost:3002/graphql \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "query ListWatchedPairs { listPairs }"
+    "query": "query VenueViews($asset: String!, $network: String) { volumes(asset: $asset, network: $network) { network totals { net gross } venues { venue volume aggregator } } spreads(asset: $asset, network: $network) { network tightest { venue pairKey spreadBps } } }",
+    "variables": { "asset": "XLM", "network": "testnet" }
   }'
-```
-
-#### Example Response
-```json
-{
-  "data": {
-    "listPairs": [
-      "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM"
-    ]
-  }
-}
 ```
 
 ---
 
 ## Live Price Subscriptions (`graphql-transport-ws`)
 
-Lens exposes a real-time price streaming subscription:
-```graphql
-subscription OnPriceUpdated($pair: String!, $network: String) {
-  priceUpdated(pair: $pair, network: $network) {
-    pair
-    price
-    ts
-    network
-  }
-}
-```
-
-Every time an ingester (SDEX Horizon stream, Horizon AMM polling, or Soroswap reserve poller) publishes a new price update, the event is emitted to connected subscribers filtering for that pair.
-
----
+Live price updates are streamed over WebSocket using the [`graphql-transport-ws`](https://github.com/enisdenjo/graphql-ws) subprotocol. The client must negotiate this subprotocol during the WebSocket handshake.
 
 ### Protocol Handshake Walkthrough
 
-Mercurius operates with `fullWsTransport: true` and `wsDefaultSubprotocol: 'graphql-transport-ws'`. The connection handshake proceeds through the following exact sequence:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Client
-    participant Server as Lens API (/graphql)
-
-    Note over Client,Server: Step 1: Open WebSocket with subprotocol
-    Client->>Server: WebSocket Connect (Sec-WebSocket-Protocol: graphql-transport-ws)
-    Server-->>Client: 101 Switching Protocols
-
-    Note over Client,Server: Step 2: Connection Initialization Handshake
-    Client->>Server: {"type": "connection_init"}
-    Server-->>Client: {"type": "connection_ack"}
-
-    Note over Client,Server: Step 3: Start Subscription
-    Client->>Server: {"id": "1", "type": "subscribe", "payload": {"query": "subscription($pair: String!) { priceUpdated(pair: $pair) { pair price ts network } }", "variables": {"pair": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM"}}}
-
-    Note over Client,Server: Step 4: Streamed Events
-    Server-->>Client: {"id": "1", "type": "next", "payload": {"data": {"priceUpdated": {"pair": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM", "price": 0.1245, "ts": "2026-10-17T04:15:00.000Z", "network": "mainnet"}}}}
-
-    Note over Client,Server: Step 5: Unsubscribe & Close
-    Client->>Server: {"id": "1", "type": "complete"}
-```
-
-#### Frame Specifications
-1. **Connection Init**: Client sends `{"type":"connection_init"}` immediately upon opening the socket.
-2. **Connection Ack**: Server acknowledges with `{"type":"connection_ack"}`.
-3. **Subscribe**: Client sends `{"id":"1","type":"subscribe","payload":{"query":"subscription($pair: String!) { priceUpdated(pair: $pair) { pair price ts network } }","variables":{"pair":"USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM"}}}`.
-4. **Next**: Server pushes data updates using `{"id":"1","type":"next","payload":{"data":{"priceUpdated":{"pair":"USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM","price":0.1245,"ts":"2026-10-17T04:15:00.000Z","network":"mainnet"}}}}`.
-5. **Complete**: Client requests cancellation of that subscription via `{"id":"1","type":"complete"}`.
-
----
+1. Open a WebSocket to `ws://localhost:3002/graphql` with the subprotocol `graphql-transport-ws`.
+2. Send a `connection_init`" message. The server replies with `connection_ack` on success.
+3. Send a `subscribe` message containing the GraphQL subscription document and variables.
+4. Receive `data` messages as price updates arrive.
+5. Send `complete` to unsubscribe, or close the socket.
 
 ### Network Filtering Semantics
 
-- **Dual-Network Deployments**: In dual-network setups, both testnet and mainnet ingesters run concurrently and emit events onto the same pubsub channel.
-- **`network: "mainnet"` or `"testnet"`**: Specifying the network narrows the stream to updates originating strictly from that chain.
-- **Omitting `network` (or `null`)**: Delivers updates from **all** enabled networks. In this mode, clients **must** inspect the `network` property on each incoming payload to avoid treating testnet prices as mainnet prices.
+The `priceUpdated` subscription accepts an optional `network` argument:
 
----
+- @omitted or `null`: receive updates from all networks.
+- `"testnet"`: receive only testnet updates.
+- `"mainnet" : receive only mainnet updates.
 
 ### Runnable Client Example (Raw WebSocket & Handshake)
-
-This runnable Node.js script demonstrates the raw handshake protocol directly without third-party GraphQL client abstractions, using only the standard `ws` library:
 
 ```typescript
 import WebSocket from 'ws';
 
-const WS_URL = 'ws://localhost:3002/graphql';
-const SUBPROTOCOL = 'graphql-transport-ws';
-
-const targetPair = 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM';
-const targetNetwork = 'mainnet';
-
-const ws = new WebSocket(WS_URL, SUBPROTOCOL);
+const ws = new WebSocket('ws://localhost:3002/graphql', 'graphql-transport-ws');
 
 ws.on('open', () => {
-  console.log('[ws] Connected. Sending connection_init handshake...');
-  // 1. Send connection_init
   ws.send(JSON.stringify({ type: 'connection_init' }));
 });
 
-ws.on('message', (raw: Buffer) => {
-  const message = JSON.parse(raw.toString());
-
-  // 2. Handle connection_ack
-  if (message.type === 'connection_ack') {
-    console.log('[ws] Handshake acknowledged (connection_ack). Registering subscription...');
-    
-    // 3. Send subscription request
-    const subscribeFrame = {
-      id: 'sub-1',
+ws.on('message', (raw) => {
+  const msg = JSON.parse(raw.toString());
+  if (msg.type === 'connection_ack') {
+    ws.send(JSON.stringify({
+      id: '1',
       type: 'subscribe',
       payload: {
-        query: `
-          subscription WatchPrice($pair: String!, $network: String) {
-            priceUpdated(pair: $pair, network: $network) {
-              pair
-              price
-              ts
-              network
-            }
-          }
-        `,
-        variables: {
-          pair: targetPair,
-          network: targetNetwork,
-        },
+        query: `subscription PriceUpdates($pair: String!) { priceUpdated(pair: $pair) { pair price ts network } }`,
+        variables: { pair: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPPRE34K4KZVN/XLM' },
       },
-    };
-    ws.send(JSON.stringify(subscribeFrame));
-    return;
-  }
-
-  // 4. Handle incoming streamed price data
-  if (message.type === 'next' && message.id === 'sub-1') {
-    const update = message.payload.data.priceUpdated;
-    console.log(`[price] ${update.network.toUpperCase()} ${update.pair} -> $${update.price} (${update.ts})`);
-    return;
-  }
-
-  // Handle errors or completion
-  if (message.type === 'error') {
-    console.error('[ws] Subscription error:', message.payload);
+    }));
+  } else if (msg.type === 'data') {
+    console.log('price update', msg.payload.data.priceUpdated);
   }
 });
-
-ws.on('error', (err) => console.error('[ws] Socket error:', err));
-ws.on('close', (code, reason) => console.log(`[ws] Disconnected: ${code} - ${reason.toString()}`));
-
-// To unsubscribe gracefully later:
-// ws.send(JSON.stringify({ id: 'sub-1', type: 'complete' }));
-// ws.close();
 ```
-
----
 
 ### Runnable Client Example (`graphql-ws` Library)
 
-If you prefer using the official [`graphql-ws`](https://github.com/enisdenjo/graphql-ws) client library:
-
-```bash
-npm install graphql-ws ws
-```
-
 ```typescript
 import { createClient } from 'graphql-ws';
-import WebSocket from 'ws'; // Node.js environment (browsers use native window.WebSocket)
+import WebSocket from 'ws';
 
 const client = createClient({
   url: 'ws://localhost:3002/graphql',
-  webSocketImpl: WebSocket,
+  webSocketImpl: WebSocket as any,
 });
 
 const unsubscribe = client.subscribe(
-  {
-    query: `
-      subscription WatchPrice($pair: String!, $network: String) {
-        priceUpdated(pair: $pair, network: $network) {
-          pair
-          price
-          ts
-          network
-        }
-      }
-    `,
-    variables: {
-      pair: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM',
-      network: 'mainnet',
-    },
-  },
-  {
-    next: (data) => console.log('Live price update:', data.data?.priceUpdated),
-    error: (err) => console.error('Subscription error:', err),
-    complete: () => console.log('Subscription completed'),
-  }
+  { query: `subscription PriceUpdates($pair: String!) { priceUpdated(pair: $pair) { pair price ts network } }`, variables: { pair: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPPPPRE34K4KZVN/XLM' } },
+  { next: (data) => console.log('price update', data), error: console.error, complete: () => console.log('done') },
 );
 
-// To stop listening:
-// unsubscribe();
+// Call unsubscribe() to stop the stream.
 ```
 
 ---
 
 ## Capabilities & Gaps Against REST
 
-Lens was initially built around an OpenAPI-specified REST API. While GraphQL provides flexible projection and real-time WebSocket subscriptions, certain REST endpoints and operational capabilities do **not** have a GraphQL equivalent today.
-
-The following matrix documents the differences explicitly:
-
-| Capability / Resource | REST Route | GraphQL Operation | Status & Gaps |
-|---|---|---|---|
-| **Aggregated Spot Price** | `GET /price/:assetA/:assetB` | `Query.getPrice` | **Full Parity**: Returns price, multi-window VWAP, volume, and routing. |
-| **Best Route Simulation** | `GET /price/:assetA/:assetB/route` | `Query.getBestRoute` | **Full Parity**: Simulates swap execution for an input amount. |
-| **Price Bucket History** | `GET /price/:assetA/:assetB/history` | `Query.getPriceHistory` | **Full Parity**: Returns OHLCV and VWAP buckets (`1m`, `5m`, `1h`, `24h`). |
-| **Watched Pairs List** | `GET /pairs` | `Query.listPairs` | **Full Parity**: Returns array of canonical watched pair keys. |
-| **Real-Time Price Stream** | `GET /ws` (Raw JSON WebSocket) | `Subscription.priceUpdated` | **GraphQL Preferred**: Structured typed pubsub with network and pair filtering over standard `graphql-transport-ws`. |
-| **Per-Request Network Scoping** | `?network=testnet\|mainnet` & `x-network` header | *No query-level parameter* | **REST Only**: GraphQL queries resolve strictly against the instance's active network (`activeNetwork`). Only `priceUpdated` subscription accepts a `network` filter argument. |
-| **Order Book Depth & Slippage** | `GET /price/:assetA/:assetB/depth` | *No equivalent* | **REST Only**: Simulated order book depth curves and slippage ladders across amounts have no GraphQL equivalent. |
-| **Manipulation-Resistant TWAP** | `GET /price/twap/:assetA/:assetB` | *No equivalent* | **REST Only**: Interquartile range (IQR) trimmed time-weighted average price calculation is only available on REST. |
-| **Source-Specific VWAP** | `GET /price/vwap/:assetA/:assetB` | *No equivalent* | **REST Only**: Filtered VWAP calculation targeting a specific venue (`source=SDEX` or `source=AMM`) is REST-only. |
-| **OHLCV Candle Time-Series** | `GET /candles/:assetA/:assetB` | *No equivalent* | **REST Only**: Configurable candlestick intervals (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`) with arbitrary `from` and `to` timestamps are REST-only. |
-| **High-Density History & CSV** | `GET /prices/history` | *No equivalent* | **REST Only**: Historical 1-minute price snapshot queries and CSV downloads (`?format=csv`) are REST-only. |
-| **AMM Liquidity Pool Catalog** | `GET /pools` | *No equivalent* | **REST Only**: Enumerating pool IDs, reserve balances, and fee tiers is REST-only. |
-| **Traded Volume Breakdown** | `GET /volumes/:asset` | *No equivalent* | **REST Only**: Multi-window volume breakdowns (`24h`, `7d`, `30d`) with per-venue attribution are REST-only. |
-| **Bid/Ask Spread Metrics** | `GET /spreads/:asset` | *No equivalent* | **REST Only**: Per-venue bid/ask spread analysis is REST-only. |
-| **Oracle Price Comparison** | `GET /compare/:asset` | *No equivalent* | **REST Only**: Cross-checking Lens prices against external oracles (e.g. Reflector) is REST-only. |
-| **Market Screener** | `GET /screener` | *No equivalent* | **REST Only**: Multi-pair ranking by volume, liquidity, price change, and spread is REST-only. |
-| **Peg / Benchmark Deviation** | `GET /benchmark/:asset` | *No equivalent* | **REST Only**: Stablecoin peg-deviation metrics against reference targets are REST-only. |
-| **Synthetic Asset Basket** | `GET /basket` | *No equivalent* | **REST Only**: Computing weighted portfolio valuation across multiple assets is REST-only. |
-| **Indexer Synchronization & Health** | `GET /status` | *No equivalent* | **REST Only**: Checking ledger heights, node lag seconds, and indexer operational status is REST-only. |
-| **x402 Micropayment Facilitator** | `/verify`, `/settle`, `/supported`, `/discovery/resources`, `/usage/me` | *No equivalent* | **REST Only**: All x402 payment validation, settlement, and bazaar resource discovery routes are REST-only. |
-| **Webhook Management** | `POST /webhooks`, `DELETE /webhooks/:id` | *No equivalent* | **REST Only**: Subscribing to price-threshold alert webhooks is REST-only. |
+| Capability | REST `/prices/history` | GraphQL `getPriceHistory` |
+|---|---|---|
+| Explicit time range | `from` / `to` | `from` / `to` |
+| Boundary inclusivity | inclusive at both ends | exclusive at the upper (`to`) end |
+| Over-large range rejection | yes | yes (same cap) |
+| `from` after `to` is an error | yes | yes |

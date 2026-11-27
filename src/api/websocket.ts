@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import websocket from '@fastify/websocket'
-import { priceEmitter, PRICE_UPDATE, PriceUpdateEvent } from '../events'
-import { activeNetwork, type NetworkName } from '../config'
+import { config, type NetworkName } from '../config'
 import { X402_NETWORK_LABEL, paymentAddressFor, getX402ResourceServer } from '../x402/network'
 import { resolveNetworkName } from '../middleware/network'
 import { fanOutManager } from '../ws/fanout'
 import { v4 as uuid } from 'uuid'
+import { createInternalErrorBody, getCorrelationId } from '../errors'
 
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://x402.org/facilitator'
 
@@ -24,20 +24,6 @@ export async function registerWebSocket(app: FastifyInstance) {
       return
     }
     const network: NetworkName = resolved.network
-
-    // This process only ingests and streams live prices for `activeNetwork`
-    // (see src/config.ts) — the underlying price events carry no network tag
-    // yet (that's the deeper aggregation-layer work), so a request for any
-    // other network can't be honestly served here.
-    if (network !== activeNetwork) {
-      socket.send(JSON.stringify({
-        type: 'error',
-        status: 400,
-        message: `This instance streams "${activeNetwork}" only; requested "${network}"`,
-      }))
-      socket.close()
-      return
-    }
 
     const paymentAddress = paymentAddressFor(network)
     const paymentHeader = (req.headers['x-payment'] as string) || (req.query as any).payment
@@ -68,22 +54,30 @@ export async function registerWebSocket(app: FastifyInstance) {
             socket.send(JSON.stringify({ type: 'error', message: 'Invalid payment' }))
             socket.close()
           } else {
-            setupStream(socket, req)
+            setupStream(socket, req, network)
           }
         })
         .catch(err => {
-          socket.send(JSON.stringify({ type: 'error', message: err.message }))
+          const correlationId = getCorrelationId(req)
+          const log = req?.log ?? app?.log
+          if (log && typeof log.error === 'function') {
+            log.error({ err, correlationId }, 'WebSocket internal error')
+          }
+          socket.send(JSON.stringify({
+            type: 'error',
+            ...createInternalErrorBody(correlationId),
+          }))
           socket.close()
         })
       return
     }
 
-    setupStream(socket, req)
+    setupStream(socket, req, network)
   })
 
-  function setupStream(socket: any, req: FastifyRequest) {
-    app.log.info('[ws] Connection authorized')
-    socket.send(JSON.stringify({ type: 'status', message: 'Streaming active' }))
+  function setupStream(socket: any, req: FastifyRequest, network: NetworkName) {
+    app.log.info({ network }, '[ws] Connection authorized')
+    socket.send(JSON.stringify({ type: 'status', message: 'Streaming active', network }))
 
     // Register with fan-out manager for backpressure-aware broadcasting
     const clientId = uuid()
@@ -108,10 +102,41 @@ export async function registerWebSocket(app: FastifyInstance) {
       // the only backpressure signal available, and every threshold in
       // FanOutManager is measured against it.
       bufferedAmount: () => socket.bufferedAmount,
+    }, network)
+
+    // Heartbeat ping/pong handling
+    const pingIntervalMs = config.ws.pingIntervalMs
+    const maxMissedPings = config.ws.maxMissedPings
+    let missedPings = 0
+
+    const heartbeatInterval = setInterval(() => {
+      missedPings++
+      if (missedPings > maxMissedPings) {
+        app.log.warn(`[ws] Client ${clientId} missed ${missedPings - 1} consecutive ping(s) (threshold: ${maxMissedPings}), closing dead connection`)
+        clearInterval(heartbeatInterval)
+        unsubscribe()
+        if (typeof socket.terminate === 'function') {
+          socket.terminate()
+        } else {
+          socket.close()
+        }
+        return
+      }
+
+      if (socket.readyState === 1) { // OPEN
+        if (typeof socket.ping === 'function') {
+          socket.ping()
+        }
+      }
+    }, pingIntervalMs)
+
+    socket.on('pong', () => {
+      missedPings = 0
     })
 
     socket.on('close', () => {
       app.log.info('[ws] Connection closed')
+      clearInterval(heartbeatInterval)
       unsubscribe()
     })
   }
