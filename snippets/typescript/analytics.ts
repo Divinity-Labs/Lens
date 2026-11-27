@@ -177,3 +177,12 @@ const BASE_URL = requireEnv('LENS_BASE_URL')
   const res = await fetch(url, { headers })
   console.log("getLendingRates", res.status, await res.json())
 }
+
+// getAccuracy: GET /v1/accuracy
+{
+  const url = new URL("/v1/accuracy", BASE_URL)
+  url.search = new URLSearchParams([["network","testnet"]]).toString()
+  const headers: Record<string, string> = {}
+  const res = await fetch(url, { headers })
+  console.log("getAccuracy", res.status, await res.json())
+}

@@ -88,3 +88,7 @@ print("getCorrelation", res.status_code, res.json())
 # getLendingRates: GET /v1/rates
 res = requests.get(BASE_URL + "/v1/rates", params=[], headers={}, timeout=30)
 print("getLendingRates", res.status_code, res.json())
+
+# getAccuracy: GET /v1/accuracy
+res = requests.get(BASE_URL + "/v1/accuracy", params=[["network","testnet"]], headers={}, timeout=30)
+print("getAccuracy", res.status_code, res.json())
