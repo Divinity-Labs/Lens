@@ -7,6 +7,7 @@ import { phoenixAdapter } from './phoenix'
 import { blendAdapter } from './blend'
 import { kucoinAdapter, startKuCoinIngester } from './kucoin'
 import { gateioAdapter, startGateioIngester } from './gateio'
+import { coinbaseAdapter } from './coinbase'
 import type { VenueAdapter } from './types'
 
 export * from './types'
@@ -37,6 +38,7 @@ export const allVenueAdapters: VenueAdapter[] = [
   phoenixAdapter,
   kucoinAdapter,
   gateioAdapter,
+  coinbaseAdapter,
 ]
 
 /**
