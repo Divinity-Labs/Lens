@@ -1852,13 +1852,25 @@ describe('payment audit ledger', () => {
     const parsedUnknown = JSON.parse(unknownRes.content[0].text);
     expect(parsedUnknown.code).toBe('ERR_UNKNOWN_TOOL');
 
-    // 4. Verify metrics in registry output
+    // 4. Lens data tool call is labelled with its own tool name, never 'unknown'
+    const lensRes = await handlerSuccess({
+      params: {
+        name: 'lens_list_pairs',
+        arguments: {}
+      }
+    });
+    expect(lensRes.isError).toBe(true);
+    const parsedLens = JSON.parse(lensRes.content[0].text);
+    expect(parsedLens.code).toBe('ERR_INTERNAL_FAILURE');
+
+    // 5. Verify metrics in registry output
     const metricsOutput = await getMetrics();
     expect(metricsOutput).toContain('mcp_tool_calls_total');
     expect(metricsOutput).toContain('tool="paid_call"');
     expect(metricsOutput).toContain('outcome="success"');
     expect(metricsOutput).toContain('outcome="error"');
     expect(metricsOutput).toContain('tool="unknown"');
+    expect(metricsOutput).toContain('tool="lens_list_pairs"');
     expect(metricsOutput).toContain('mcp_tool_duration_seconds');
     expect(metricsOutput).toContain('mcp_errors_total');
     expect(metricsOutput).toContain('code="ERR_PAYMENT_REJECTED"');

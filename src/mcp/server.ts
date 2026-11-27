@@ -473,6 +473,7 @@ export class BazaarMcpServer {
       const tool =
         (VALID_TOOL_NAMES as readonly string[]).includes(toolName) ||
         toolName === LENS_PRICE_TOOL_NAME ||
+        isLensDataToolName(toolName) ||
         toolName === 'payment_budget'
           ? toolName
           : 'unknown';

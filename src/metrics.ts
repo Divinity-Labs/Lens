@@ -314,7 +314,7 @@ export function setPoolMetricsUpdater(updater: () => void) {
 
 // MCP metrics
 // All label sets are closed to prevent high-cardinality label explosion.
-// `tool` is restricted to known tool names ('bazaar_search', 'paid_call', 'lens_price') or 'unknown'.
+// `tool` is restricted to known tool names ('bazaar_search', 'paid_call', 'lens_price', 'lens_list_pairs', 'lens_get_pools', 'lens_screen_pairs', 'payment_budget') or 'unknown'.
 // `outcome` is 'success' or 'error'.
 // `code` is restricted to MCP_ERROR_CODES values.
 export const mcp_tool_calls_total = new Counter({
