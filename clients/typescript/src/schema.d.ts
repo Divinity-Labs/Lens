@@ -952,6 +952,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/accuracy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get recommendation accuracy reports comparing quotes to realised executions
+         * @description Returns accuracy reports with deviation metrics and provenance for quotes versus actual trades.
+         */
+        get: operations["getAccuracy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4543,6 +4563,50 @@ export interface operations {
                 content?: never;
             };
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getAccuracy: {
+        parameters: {
+            query?: {
+                /** @description Filter by trading pair key (e.g. USDC:XLM) */
+                pair?: string;
+                /** @description Filter by execution venue (e.g. SDEX, AMM) */
+                venue?: string;
+                /** @description Evaluation window in minutes */
+                window?: number;
+                /** @description Stellar network to answer for — `testnet` or `mainnet`. Defaults to this instance's configured `STELLAR_NETWORK`. An unrecognised value is rejected with 400. DB-backed reads are currently served from whichever network this instance indexes, even when another is requested. */
+                network?: components["parameters"]["NetworkQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accuracy report response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        network: string;
+                        query: Record<string, never>;
+                        reports: Record<string, never>[];
+                    };
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
 }
