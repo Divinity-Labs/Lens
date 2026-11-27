@@ -2869,6 +2869,15 @@
               "default": 1000
             },
             "description": "Maximum number of history points to return"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Keyset pagination cursor from nextCursor"
           }
         ],
         "responses": {
@@ -2976,18 +2985,6 @@
               "default": 1
             },
             "description": "Deviation percentage threshold for outside-band duration calculation"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 5000,
-              "default": 1000
-            },
-            "description": "Maximum number of comparisons evaluated"
           }
         ],
         "responses": {
@@ -7441,6 +7438,7 @@
           "to",
           "band",
           "points",
+          "hasMore",
           "summary"
         ],
         "additionalProperties": true,
@@ -7475,6 +7473,15 @@
             "items": {
               "$ref": "#/components/schemas/OracleComparisonPoint"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "description": "Opaque cursor for fetching the next page of comparison points"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether additional points exist beyond this page"
           },
           "summary": {
             "type": "array",
@@ -7520,6 +7527,10 @@
           },
           "band": {
             "type": "number"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the summary was computed over a truncated sample set"
           },
           "summary": {
             "type": "array",
