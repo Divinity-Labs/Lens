@@ -9,7 +9,6 @@ import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
-import { getPairsForNetwork } from '../pairsRegistry'
 import { isAdminConfigured } from './auth'
 import '../middleware/network'
 import {
@@ -25,46 +24,14 @@ import {
 import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
 import { getRetentionPath } from '../jobs/retentionStatus'
-import { apiError } from '../errors'
+import { parsePositiveAmount } from '../utils/amounts'
+import { parseLimit } from '../pagination'
 
-function makePairKey(a: string, b: string): string {
-  return [a, b].sort().join('/')
-}
+import { apiError } from '../errors'
+import { findWatchedPair } from '../utils/watchedPair'
 
 export const HISTORY_DEFAULT_LIMIT = 100
 export const HISTORY_MAX_LIMIT = 1000
-
-/**
- * Resolve a requested pair against the ones this network watches.
- *
- * The issuer is honoured when the caller supplies one. Asset codes are not
- * unique on Stellar, so the issuer is the only thing that identifies an asset.
- * A bare code still matches on code alone.
- */
-export function findPair(assetA: string, assetB: string, network: NetworkName) {
-  const parse = (a: string) => {
-    if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
-    const [code, issuer] = a.split(':')
-    return { code: (code ?? '').toUpperCase(), issuer: issuer ?? null }
-  }
-  const qA = parse(assetA)
-  const qB = parse(assetB)
-
-  const matches = (
-    q: { code: string; issuer: string | null },
-    side: { code: string; issuer?: string | null },
-  ) => {
-    if (q.code !== side.code.toUpperCase()) return false
-    if (!q.issuer || !side.issuer) return true
-    return q.issuer === side.issuer
-  }
-
-  return getPairsForNetwork(network).find(
-    p =>
-      (matches(qA, p.assetA) && matches(qB, p.assetB)) ||
-      (matches(qA, p.assetB) && matches(qB, p.assetA)),
-  )
-}
 
 export async function registerRESTRoutes(app: FastifyInstance) {
   installResponseValidation(app)
@@ -175,7 +142,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       price_requests_total.inc()
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
+      const pair = findWatchedPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
@@ -231,10 +198,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { config: { scope: 'read:prices' }, schema: { response: { 200: routeResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
-      const amount = parseFloat(req.query.amount ?? '1000')
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send(apiError('invalid_parameter', 'amount must be a positive number'))
+      // Validate amount before the pair check: a malformed request parameter
+      // is a 400 regardless of whether the pair is watched.
+      const parsedAmount = parsePositiveAmount(req.query.amount)
+      if ('error' in parsedAmount) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedAmount.error))
+      }
+      const amount = parsedAmount.value
       const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
+      const pair = findWatchedPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const decimalFormat = resolveDecimalFormat(req)
@@ -242,7 +214,182 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
       }
-      return routeInfo.route
+      return routeInfo
+    }
+  )
+
+  // GET /price/:assetA/:assetB/history?window=1h&limit=100
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { window?: string; limit?: string; decimals?: string; decimalFormat?: string }
+  }>(
+    '/price/:assetA/:assetB/history',
+    { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
+    async (req, reply) => {
+      const window = req.query.window ?? '1h'
+      if (!['1m', '5m', '1h', '24h'].includes(window)) {
+        return reply.status(400).send(apiError('bad_window', 'window must be one of: 1m, 5m, 1h, 24h'))
+      }
+
+      const parsedLimit = parseLimit(req.query.limit, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedLimit.error))
+      }
+      const { limit } = parsedLimit
+
+      const { assetA, assetB } = req.params
+      const network = req.network ?? activeNetwork
+      const pair = findWatchedPair(assetA, assetB, network)
+      if (!pair) {
+        return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      }
+      const pairKey = pair.pairKey
+
+      const decimalFormat = resolveDecimalFormat(req)
+      if (decimalFormat === 'string') {
+        reply.header('x-decimal-format', 'string')
+      }
+
+      const result = await pgPool.query(
+        `SELECT bucket, window, vwap::numeric, sdex_vwap::numeric, amm_vwap::numeric,
+                volume::numeric, trade_count, open_price::numeric, close_price::numeric,
+                high_price::numeric, low_price::numeric
+         FROM price_aggregates
+         WHERE pair_key = $1 AND window = $2 AND network = $3
+         ORDER BY bucket DESC
+         LIMIT $4`,
+        [pairKey, window, network, limit]
+      )
+
+      const windowMs: Record<string, number> = {
+        '1m': 60_000,
+        '5m': 300_000,
+        '1h': 3600_000,
+        '24h': 86400_000,
+      }
+      const span = (windowMs[window] ?? 3600_000) * limit
+      const now = new Date()
+      const queryStart = new Date(now.getTime() - span)
+
+      const overlappingGaps = await findOverlappingGaps({
+        network,
+        pair: pairKey,
+        start: queryStart,
+        end: now,
+      })
+
+      const gapDeclaration = overlappingGaps.length > 0 ? { incomplete: true, gaps: overlappingGaps } : {}
+
+      return {
+        pairKey,
+        network,
+        window,
+        buckets: result.rows.map(r => ({
+          bucket: r.bucket,
+          vwap: formatDecimal(r.vwap, decimalFormat),
+          sdexVwap: formatDecimal(r.sdex_vwap, decimalFormat),
+          ammVwap: formatDecimal(r.amm_vwap, decimalFormat),
+          volume: formatDecimal(r.volume, decimalFormat),
+          tradeCount: r.trade_count !== null && r.trade_count !== undefined ? parseInt(String(r.trade_count), 10) : null,
+          open: formatDecimal(r.open_price, decimalFormat),
+          close: formatDecimal(r.close_price, decimalFormat),
+          high: formatDecimal(r.high_price, decimalFormat),
+          low: formatDecimal(r.low_price, decimalFormat),
+        })),
+        ...gapDeclaration,
+      }
+    }
+  )
+
+  // GET /pools?cursor=&limit= lives in src/routes/pools.ts, next to /pairs and
+  // /screener, so the `lens_get_pools` MCP tool runs the same listPools this
+  // route does; registerPoolsRoutes() is called from app.ts.
+
+  // GET /price/:assetA/:assetB/depth?amount=1000
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { amount?: string; decimals?: string; decimalFormat?: string }
+  }>(
+    '/price/:assetA/:assetB/depth',
+    {
+      config: { scope: 'read:prices' },
+      schema: { response: { 200: depthResponseSchema, 503: depthResponseSchema } },
+    },
+    async (req, reply) => {
+      const { assetA, assetB } = req.params
+      // Validate amount before the pair check so malformed query parameters
+      // (trailing junk like `100abc`, Infinity, 0, negatives) return 400 on
+      // any pair, watched or not.
+      const parsedAmount = parsePositiveAmount(req.query.amount)
+      if ('error' in parsedAmount) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedAmount.error))
+      }
+      const amount = parsedAmount.value
+      const network = req.network ?? activeNetwork
+      const pair = findWatchedPair(assetA, assetB, network)
+
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+
+      // Depth reads are network-scoped on both legs (pool_snapshots and the
+      // price_points subquery that names this pair's pools), so a mainnet pair
+      // is never priced off a testnet pool's reserves.
+      // Argument order is (network, pairKey, amount, feeOpts). network and
+      // pairKey are both strings, so swapping them compiles cleanly and then
+      // prices every pair against a network named "XLM/USDC" — worth reading
+      // twice before editing this line.
+      const depthResult = await getDepth(network, pair.pairKey, amount, {
+        horizonUrl: getNetworkConfig(network).horizon.url,
+      })
+
+      // An unavailable answer is a 503, not a 200 with zeros: the pair is
+      // watched, we simply cannot price it right now, and a caller retrying
+      // later is the correct response to that.
+      return reply.status(depthResult.status === 'unavailable' ? 503 : 200).send({
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        // pairKey and network come from depthResult, which carries both on each
+        // arm of the union. Naming pairKey here too made it a duplicate key.
+        ...depthResult,
+      })
+    }
+  )
+
+  // GET /impact/:assetA/:assetB?thresholds=1,5,10
+  app.get<{
+    Params: { assetA: string; assetB: string }
+    Querystring: { thresholds?: string; liquidityFraction?: string }
+  }>(
+    '/impact/:assetA/:assetB',
+    { schema: { response: { 200: impactResponseSchema } } },
+    async (req, reply) => {
+      const { assetA, assetB } = req.params
+      let thresholds: number[] = [1, 5, 10]
+      if (req.query.thresholds !== undefined) {
+        const parts = req.query.thresholds.split(',')
+        const parsedThresholds: number[] = []
+        for (const part of parts) {
+          const parsed = parsePositiveAmount(part, '', 'thresholds')
+          if ('error' in parsed) {
+            return reply.status(400).send(apiError('invalid_parameter', 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1'))
+          }
+          parsedThresholds.push(parsed.value)
+        }
+        thresholds = parsedThresholds
+      }
+
+      const parsedFraction = parsePositiveAmount(req.query.liquidityFraction, '0.5', 'liquidityFraction')
+      if ('error' in parsedFraction || parsedFraction.value > 1) {
+        return reply.status(400).send(apiError('invalid_parameter', 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1'))
+      }
+      const liquidityFraction = parsedFraction.value
+
+      const network = req.network ?? activeNetwork
+      const pair = findWatchedPair(assetA, assetB, network)
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+
+      const impact = await getImpact(pair.pairKey, { thresholds, liquidityFraction }, network)
+      if (!impact) return reply.status(404).send(apiError('unknown_pair', `No AMM liquidity available for ${assetA}/${assetB}`))
+      return { assetA: pair.assetA.code, assetB: pair.assetB.code, pairKey: pair.pairKey, ...impact }
     }
   )
 }

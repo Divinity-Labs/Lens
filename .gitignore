@@ -1,6 +1,5 @@
 node_modules/
 dist/
-.env
 *.tsbuildinfo
 
 # Kiro IDE editor-assistant artifacts (spec files, hooks, etc.)
@@ -11,3 +10,4 @@ oracle/contract/target/
 examples/oracle-relay/contract/target/
 examples/oracle-relay/contract/Cargo.lock
 oracle/contract/test_snapshots/
+config.bat

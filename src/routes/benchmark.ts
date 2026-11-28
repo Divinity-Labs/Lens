@@ -77,7 +77,10 @@ export async function registerBenchmarkRoutes(app: FastifyInstance) {
       const targetPrice = explicitTarget ?? configuredTargetPrice(network, asset)
       const hasTarget = targetPrice !== null
 
-      // `network` is not optional: the same pair key exists on both chains.
+      // `network` is not optional here: `price_points` indexes `network` as the
+      // leading column of (network, pair_key, timestamp), and the same pair key
+      // exists on both chains — an unfiltered read blends two separate markets
+      // into a deviation figure nobody traded at.
       const query = `
         SELECT
           (SELECT ${priceExpr} FROM price_points WHERE pair_key = $1 AND network = $2 ORDER BY COALESCE(observed_at, timestamp) DESC LIMIT 1) AS latest_price,
