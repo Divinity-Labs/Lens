@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Extended typecheck: covers src, tests, scripts, and examples (except portfolio-nav which has its own deps). Run via: npm run typecheck",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "baseUrl": "."
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*",
+    "scripts/**/*",
+    "examples/alert-bot/**/*",
+    "examples/mcp-server/**/*",
+    "examples/oracle-relay/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "examples/portfolio-nav"
+  ]
+}
