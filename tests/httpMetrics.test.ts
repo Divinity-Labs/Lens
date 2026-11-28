@@ -6,13 +6,13 @@ import { register, http_requests_total, http_request_duration_seconds } from '..
 /** Every `http_requests_total` sample currently in the registry. */
 async function requestSamples() {
   const metric = await register.getSingleMetric('http_requests_total')!.get()
-  return metric.values
+  return metric.values as Array<{ metricName?: string; value: number; labels: Partial<Record<string, string | number>> }>
 }
 
 /** Every `http_request_duration_seconds` sample currently in the registry. */
 async function durationSamples() {
   const metric = await register.getSingleMetric('http_request_duration_seconds')!.get()
-  return metric.values
+  return metric.values as Array<{ metricName?: string; value: number; labels: Partial<Record<string, string | number>> }>
 }
 
 /** The `_count` samples of the duration histogram — one per label combination. */

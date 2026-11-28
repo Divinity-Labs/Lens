@@ -82,7 +82,7 @@ describe('admin key security contract', () => {
       createdAt: Date
       revokedAt: Date | null
     }>()
-    create.mockImplementation(async ({ data }: any) => {
+    create.mockImplementation((async ({ data }: any) => {
       const row = {
         id: 'generated-key-id',
         ratePerMin: 60,
@@ -96,16 +96,16 @@ describe('admin key security contract', () => {
       }
       rows.set(row.id, row)
       return row as any
-    })
-    findUnique.mockImplementation(async ({ where }: any) => {
+    }) as any)
+    findUnique.mockImplementation((async ({ where }: any) => {
       return ([...rows.values()].find((row) =>
         where.id ? row.id === where.id : row.hash === where.hash) ?? null) as any
-    })
-    update.mockImplementation(async ({ where, data }: any) => {
+    }) as any)
+    update.mockImplementation((async ({ where, data }: any) => {
       const row = rows.get(where.id)!
       Object.assign(row, data)
       return row as any
-    })
+    }) as any)
 
     const app = await appWithAdminAndAuth()
     try {

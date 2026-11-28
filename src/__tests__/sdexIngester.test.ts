@@ -38,6 +38,7 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
 })
 
 // ── Imports ──────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ingestPair } from '../ingest/venues/sdex'
 
 describe('SDEX Ingester', () => {

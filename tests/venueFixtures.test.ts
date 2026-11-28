@@ -7,6 +7,7 @@
  * behaviour is pinned by the captured files under tests/fixtures/venues.
  */
 import http from 'node:http'
+import { describe, expect, it, test } from 'vitest'
 import https from 'node:https'
 import fs from 'node:fs'
 import path from 'node:path'

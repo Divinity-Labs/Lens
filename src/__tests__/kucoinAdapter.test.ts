@@ -235,7 +235,9 @@ describe('KuCoin Adapter - CexAdapter & VenueAdapter Interface Contract', () => 
       }),
     })
 
-    const book = await kucoinAdapter.fetchOrderBook('XLM', 'USDT', 1)
+    const fetchOrderBook = kucoinAdapter.fetchOrderBook
+    expect(fetchOrderBook).toBeDefined()
+    const book = await fetchOrderBook!('XLM', 'USDT', 1)
     expect(book).not.toBeNull()
     expect(book!.pair).toBe('XLM/USDT')
     expect(book!.bids).toHaveLength(1)

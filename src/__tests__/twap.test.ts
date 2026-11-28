@@ -260,7 +260,8 @@ describe('VWAP Computation', () => {
     // Manual VWAP: Σ(price*volume)/Σ(volume)
     // = (100*1000 + 102*2000 + 98*1500 + 101*500) / 5000
     const expectedVWAP = (100 * 1000 + 102 * 2000 + 98 * 1500 + 101 * 500) / 5000
-    expect(Math.abs(result.vwap - expectedVWAP)).toBeLessThan(0.01)
+    expect(typeof result.vwap).toBe('number')
+    expect(Math.abs((result.vwap as number) - expectedVWAP)).toBeLessThan(0.01)
     expect(result.outlierRejected).toBe(0)
   })
 

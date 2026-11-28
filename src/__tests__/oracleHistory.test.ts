@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import Fastify from 'fastify'
+import Fastify, { type FastifyInstance } from 'fastify'
 
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
@@ -213,7 +213,7 @@ describe('Oracle comparison persistence', () => {
 })
 
 describe('GET /compare/:asset/history and /compare/:asset/summary endpoints', () => {
-  let app: Fastify.FastifyInstance
+  let app: FastifyInstance
 
   beforeEach(async () => {
     mockQuery.mockReset()

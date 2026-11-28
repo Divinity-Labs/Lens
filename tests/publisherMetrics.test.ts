@@ -77,7 +77,7 @@ const NOW_MS = 1_760_000_400_000
 const TICK = 1_760_000_400
 
 const XLM: Sep40Asset = { kind: 'other', symbol: 'XLM' }
-const USDC_SAC_ID = new Asset('USDC', configMock.getNetworkConfig().pairs[0].assetB.issuer!).contractId(
+const USDC_SAC_ID = new Asset('USDC', configMock.getNetworkConfig('testnet').pairs[0].assetB.issuer!).contractId(
   TESTNET_PASSPHRASE
 )
 
@@ -118,7 +118,7 @@ function fakeFeed(options: FeedOptions = {}) {
 function fakeDeps(feed: Sep40Feed, aggregateValue: Partial<AggregateSource> = {}) {
   const deps: PublicationDeps = {
     feed,
-    pairs: configMock.getNetworkConfig().pairs,
+    pairs: configMock.getNetworkConfig('testnet').pairs,
     async aggregate() {
       return { price: 0.05, stale: false, lastTradeAgeSeconds: 5, ...aggregateValue }
     },
@@ -133,11 +133,11 @@ function fakeDeps(feed: Sep40Feed, aggregateValue: Partial<AggregateSource> = {}
 /** Every sample of a metric, in prom-client's `Metric.get()` shape. */
 async function samples(name: string) {
   const metric = await register.getSingleMetric(name)!.get()
-  return metric.values
+  return metric.values as Array<{ metricName?: string; labels?: Partial<Record<string, string | number>>; value: number }>
 }
 
 function valueFor(
-  values: { labels?: Record<string, string | number>; value: number }[],
+  values: Array<{ metricName?: string; labels?: Partial<Record<string, string | number>>; value: number }>,
   match: Record<string, string>
 ): number {
   return (
@@ -331,6 +331,6 @@ describe('publisher cycle metrics', () => {
     // `le` is prom-client's histogram bucket label, not a call-site label.
     expect(await scrapedLabelNames('publisher_cycle_duration_seconds')).toEqual(['le', 'network'])
 
-    expect(await register.metrics()).not.toContain(configMock.getNetworkConfig().pairs[0].pairKey)
+    expect(await register.metrics()).not.toContain(configMock.getNetworkConfig('testnet').pairs[0].pairKey)
   })
 })

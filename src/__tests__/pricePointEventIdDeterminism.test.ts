@@ -99,14 +99,14 @@ describe('AMM snapshot event id is content-derived (#237)', () => {
 })
 
 describe('Soroswap snapshot event id is content-derived (#237)', () => {
-  it('is identical for the same reserves at different wall-clock times', () => {
+  it('is identical for the same reserves at different wall-clock times', async () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date('2026-10-17T08:00:00.000Z'))
-      const [first] = soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
+      const [first] = await soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
 
       vi.setSystemTime(new Date('2026-10-17T08:00:30.000Z'))
-      const [second] = soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
+      const [second] = await soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
 
       expect(second.eventId).toBe(first.eventId)
       expect(first.eventId).toEqual(expect.any(String))
@@ -115,9 +115,9 @@ describe('Soroswap snapshot event id is content-derived (#237)', () => {
     }
   })
 
-  it('changes when the reserves change', () => {
-    const [a] = soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
-    const [b] = soroswapAdapter.derive([10_000_000n, 2_100_000n], soroswapTarget, mockPair as any, 'testnet')
+  it('changes when the reserves change', async () => {
+    const [a] = await soroswapAdapter.derive([10_000_000n, 2_000_000n], soroswapTarget, mockPair as any, 'testnet')
+    const [b] = await soroswapAdapter.derive([10_000_000n, 2_100_000n], soroswapTarget, mockPair as any, 'testnet')
     expect(b.eventId).not.toBe(a.eventId)
   })
 })

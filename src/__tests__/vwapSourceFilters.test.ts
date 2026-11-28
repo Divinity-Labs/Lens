@@ -228,18 +228,18 @@ describe('Issue #652: VWAP on-chain source filters & failure handling', () => {
   })
 
   it('8. An adapter with no onChain flag defaults to not on-chain', () => {
-    const adapterWithoutFlag: VenueAdapter = {
+    // Only the identity fields matter to isOnChainVenue. The object used to
+    // carry an old adapter shape (fetch/persist, kind 'cex', classification
+    // 'secondary') that the interface no longer has.
+    const adapterWithoutFlag = {
       name: 'NewExchange',
-      kind: 'cex',
+      kind: 'unknown',
       source: 'NewExchange',
       sourceTimeCapability: { status: 'unavailable' },
-      classification: 'secondary',
+      classification: 'aggregator',
       type: 'CEX',
       description: 'Adapter without explicit onChain flag',
-      fetch: async () => [],
-      derive: () => [],
-      persist: async () => {},
-    }
+    } as unknown as VenueAdapter
     expect(isOnChainVenue(adapterWithoutFlag)).toBe(false)
   })
 
