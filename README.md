@@ -143,6 +143,7 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/v1/rates` | Query latest lending and borrow rates across pools |
 | GET | `/v1/assets` | List tracked assets with metadata and verification status |
 | GET | `/v1/assets/:code` | Get metadata and verification status for a specific asset |
+| GET | `/v1/accuracy` | Get recommendation accuracy reports comparing quotes to realised executions |
 <!-- ENDPOINTS:END -->
 
 The table above is generated from [`openapi.yaml`](openapi.yaml) by `npm run openapi:gen`;
@@ -184,6 +185,7 @@ the committed table differs from a fresh generation.
 | Is this stablecoin still holding its peg? | `GET /v1/pegs` | `GET /pegs?network=testnet` |
 | How much of the market can Lens actually see? | `GET /v1/coverage` | `GET /coverage?network=testnet` |
 | For one asset, which venues is Lens watching and how much do they cover? | `GET /v1/coverage/:asset` | `GET /coverage/XLM?network=testnet` |
+| How accurate were Lens routing and price predictions compared to realised trades? | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM&window=1440&network=testnet` |
 | What are the historical OHLCV candlestick bars for a trading pair? | `GET /v1/candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` |
 | What were the historical price buckets for a pair over a recent window? | `GET /v1/price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` |
 | Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /v1/prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` |

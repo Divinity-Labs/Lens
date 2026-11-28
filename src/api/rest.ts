@@ -7,6 +7,7 @@ import { price_requests_total } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
 import { getBestRoute } from '../aggregator/bestRoute'
+import { recordRecommendationQuote } from '../services/accuracy'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
 import { isAdminConfigured } from './auth'
@@ -250,6 +251,21 @@ export async function registerRESTRoutes(app: FastifyInstance) {
 
       const decimalFormat = resolveDecimalFormat(req)
       const routeInfo = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
+      if (routeInfo.route !== 'UNKNOWN' && routeInfo.estimatedOutput > 0) {
+        const assetAStr = pair.assetA.issuer ? `${pair.assetA.code}:${pair.assetA.issuer}` : pair.assetA.code
+        const assetBStr = pair.assetB.issuer ? `${pair.assetB.code}:${pair.assetB.issuer}` : pair.assetB.code
+        const canonicalPairKey = [assetAStr, assetBStr].sort().join('/')
+        void recordRecommendationQuote({
+          network,
+          pairKey: canonicalPairKey,
+          assetA: assetAStr,
+          assetB: assetBStr,
+          recommendedVenue: routeInfo.route,
+          predictedPrice: routeInfo.estimatedOutput / amount,
+          predictedSlippage: routeInfo.slippagePct,
+          estimatedOutput: routeInfo.estimatedOutput,
+        }).catch((err) => req.log.debug({ err }, 'failed to record recommendation quote'))
+      }
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
         return {

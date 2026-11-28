@@ -42,6 +42,7 @@ import { registerSettleRoute } from './routes/facilitator'
 import { registerApiVersioning, rewriteVersionedApiUrl } from './api/versioning'
 import { registerDispersionRoutes } from './routes/dispersion'
 import { registerHealthRoutes } from './routes/health'
+import { registerAccuracyRoutes } from './routes/accuracy'
 import { registerTvlRoutes } from './routes/tvl'
 import { registerCachePolicy } from './middleware/cachePolicy'
 import { registerFiatRoutes } from './routes/fiat'
@@ -266,6 +267,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerSettleRoute(app)
   await registerDispersionRoutes(app)
   await registerHealthRoutes(app)
+  await registerAccuracyRoutes(app)
   await registerTvlRoutes(app)
   await registerGraphQL(app, options.graphqlUi)
   await registerWebSocket(app)
@@ -293,3 +295,4 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   return app
 }
+

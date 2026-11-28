@@ -10,7 +10,7 @@ At startup, `verifyDatabaseSchema()` and `assertSchemaValid()` in `src/db/schema
 
 ## Table Inventory
 
-All 17 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, grouped by role. Every table except `webhook_delivery_failures` and `api_keys` carries a `network` column (`testnet` or `mainnet`) so queries, caches, and retention jobs isolate networks cleanly.
+All 19 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, grouped by role. Every table except `webhook_delivery_failures` and `api_keys` carries a `network` column (`testnet` or `mainnet`) so queries, caches, and retention jobs isolate networks cleanly.
 
 ### Core Time-Series & Ingestion
 
@@ -43,9 +43,11 @@ All 17 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, group
 | `venue_dispersions` | Computed cross-venue price spread percentage (`max_spread_pct`, per-venue prices) and alert flag | `src/reconciliation/dispersion.ts` | `src/reconciliation/dispersion.ts` | PK `id` (`uuid`); Index `(network, pair_key, timestamp DESC)` | Yes | None |
 | `oracle_publications` | Audit record of each SEP-40 Soroban on-chain price publication (`tx_hash`, prices JSON, ledger, fee) | `src/publish/publisher.ts` | None (audit/publication log) | PK `id` (`uuid`); Indexes `(network, pair_key, created_at DESC)`, `(network, quoted_asset, feed_timestamp DESC)` | Yes | None |
 | `oracle_comparisons` | Comparison sample between Lens price and external oracle (Band, Reflector) with deviation basis points | `src/services/oracleComparison.ts` | `src/services/oracleComparison.ts`, `src/jobs/oracleRetention.ts` | PK `id` (`uuid`); Indexes `(network, asset, timestamp DESC)`, `(network, asset, oracle, timestamp DESC)` | Yes | `src/jobs/oracleRetention.ts` prunes rows >30 days (`ORACLE_COMPARISON_RETENTION_DAYS`, hourly BullMQ/fallback) |
+| `recommendation_quotes` | Recorded routing/price prediction quote (`recommended_venue`, `predicted_price`, `predicted_slippage`, `estimated_output`) for accuracy evaluation | `src/api/rest.ts`, `src/services/accuracy.ts` | `src/routes/accuracy.ts`, `src/services/accuracy.ts` | PK `(network, id)`; Indexes `(network, pair_key, timestamp DESC)`, `(network, recommended_venue, pair_key, timestamp DESC)` | Yes | None |
+| `realised_trade_executions` | Realised on-chain trade execution (`venue`, `realised_price`, `realised_slippage`, `tx_hash`) linked to a `recommendation_quotes` row | `src/ingest/venues/sdex.ts`, `src/services/accuracy.ts` | `src/routes/accuracy.ts`, `src/services/accuracy.ts` | PK `(network, id)`; Indexes `(network, pair_key, venue, timestamp DESC)`, `(network, quote_id)` | Yes | None |
 
 ## Growth & Storage Profile
-
 - **High-frequency append tables with active retention**: `price_points` (daily/period partitioning + 30-day rollup into 1h `price_aggregates` and batched prune), `price_snapshots` (30-day batched prune), `lending_rates` (30-day batched prune), and `oracle_comparisons` (30-day batched prune).
 - **High-frequency append / telemetry tables without automated retention yet**: `pool_snapshots`, `price_aggregates`, `venue_dispersions`, `quarantined_price_points`, `webhook_delivery_failures`, `ingestion_gaps`, `settlement_attempts`, and `oracle_publications`. Among these, `pool_snapshots` and `venue_dispersions` grow continuously on ingester/reconciliation cadence, while failure/quarantine/publication tables grow proportionally to incident or publication frequency.
 - **Bounded / low-cardinality tables**: `indexer_state`, `pair_configs`, `api_keys`, `bazaar_resources`, and `webhooks`.
+
