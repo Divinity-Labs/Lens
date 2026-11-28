@@ -21,20 +21,27 @@ FROM node:22-slim
 # in — or `prisma migrate deploy` at start-up crash-loops.
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
+# The server runs as the built-in non-root `node` user, and so does everything
+# from here on. /app is handed to it while it is still empty, and every file is
+# then written or copied as `node`. Changing the owner afterwards with
+# `chown -R` works too, but it copies all of /app into a second layer: measured
+# on this image, 1.17 GB became 1.6 GB.
+RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
+USER node
 
 # Copy production dependencies (exact versions from package-lock.json)
-COPY package*.json ./
-COPY prisma ./prisma/
+COPY --chown=node:node package*.json ./
+COPY --chown=node:node prisma ./prisma/
 RUN npm ci --omit=dev
 
 # Copy built assets
-COPY --from=builder /app/dist ./dist
+COPY --chown=node:node --from=builder /app/dist ./dist
 # Prisma engine and generated client are needed
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --chown=node:node --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --chown=node:node --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 # Need prisma for the auto-migration in src/db/migrate.ts
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --chown=node:node --from=builder /app/node_modules/prisma ./node_modules/prisma
 
 # Set environment variables
 ENV NODE_ENV=production
@@ -43,15 +50,12 @@ ENV HOST=0.0.0.0
 
 EXPOSE 3002
 
-# The server runs as the built-in non-root `node` user. Everything under /app
-# is chowned to it first, so `prisma migrate deploy` — run at start-up from
-# src/index.ts via src/db/migrate.ts (PRISMA_CLI, `node
-# node_modules/prisma/build/index.js`, which only needs to read the Prisma
-# files and execute the query-engine binary) — and the app itself never need
-# root. The Prisma client targets `debian-openssl-3.0.x` in
-# prisma/schema.prisma, which matches this Debian-based image.
-RUN chown -R node:node /app
-USER node
+# `prisma migrate deploy` runs at start-up from src/index.ts via
+# src/db/migrate.ts (PRISMA_CLI, `node node_modules/prisma/build/index.js`).
+# It only needs to read the Prisma files and execute the query-engine binary,
+# all owned by `node` above, so neither it nor the app ever needs root. The
+# Prisma client targets `debian-openssl-3.0.x` in prisma/schema.prisma, which
+# matches this Debian-based image.
 
 # Liveness only: /live answers as long as the event loop is turning and
 # touches neither Postgres nor Redis (see docs/health.md). /ready must not be
