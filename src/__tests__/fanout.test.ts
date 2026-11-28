@@ -43,25 +43,28 @@ vi.mock('../events', () => ({
     off: vi.fn(),
     listenerCount: vi.fn().mockReturnValue(0),
   },
-  PRICE_UPDATE: 'price:update',
-  PriceUpdateEvent: class {},
+  PRICE_PUBLISHED: 'price:published',
 }))
 
 vi.mock('prom-client', () => {
-  function MockMetric(options: { name: string }) {
-    const metricName = options.name
-    this.inc = vi.fn()
-    this.dec = vi.fn()
-    this.set = vi.fn()
-    this.labels = vi.fn((value: string) => {
-      metricLabelValues.push({ metric: metricName, value })
+  class MockMetric {
+    inc = vi.fn()
+    dec = vi.fn()
+    set = vi.fn()
+    labels = vi.fn((value: string) => {
+      metricLabelValues.push({ metric: this.metricName, value })
       return this
     })
-    this.observe = vi.fn()
-    this.startTimer = vi.fn(() => vi.fn())
+    observe = vi.fn()
+    startTimer = vi.fn(() => vi.fn())
+    private metricName: string
+    constructor(options: { name: string }) {
+      this.metricName = options.name
+    }
   }
   return {
     register: { metrics: vi.fn().mockResolvedValue('') },
+    collectDefaultMetrics: vi.fn(),
     // src/metrics.ts builds its own Registry; src/ws/fanout.ts registers the
     // websocket metrics on it so /metrics actually exports them.
     Registry: class {

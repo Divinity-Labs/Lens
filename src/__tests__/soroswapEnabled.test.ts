@@ -32,6 +32,7 @@ vi.mock('../pairsRegistry', () => mocks.pairsRegistry)
 vi.mock('../db', () => ({ upsertPricePoints: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('../webhookDispatcher', () => ({ dispatchPriceUpdate: vi.fn().mockResolvedValue(undefined) }))
 
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { startSoroswapIngester } from '../ingest/venues/soroswap'
 
 describe('startSoroswapIngester', () => {

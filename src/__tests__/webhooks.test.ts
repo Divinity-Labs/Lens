@@ -316,6 +316,9 @@ describe('POST /webhooks', () => {
     vi.mocked(prisma.webhook.create).mockImplementation(async (args: any) => {
       return { id: 'wh-e2e', ...args.data }
     })
+    vi.mocked(prisma.webhook.create).mockImplementation((async (args: any) => {
+      return { id: 'wh-e2e', ...args.data }
+    }) as any)
 
     // Register with swapped order: USDC/native, threshold 5 (meaning 5 USDC per XLM, or 0.2 XLM per USDC), direction 'above'
     // Swapped canonical: XLM/USDC, threshold 1/5 = 0.2, direction 'below'
@@ -366,6 +369,7 @@ describe('POST /webhooks', () => {
     const [calledUrl, calledOpts] = vi.mocked(global.fetch).mock.calls[0]
     expect(calledUrl).toBe('https://webhook.internal/receive')
     const payload = JSON.parse(calledOpts.body)
+    const payload = JSON.parse(String(calledOpts?.body))
     expect(payload.assetA).toBe('XLM')
     expect(payload.assetB).toBe('USDC')
     expect(payload.price).toBe(0.18)

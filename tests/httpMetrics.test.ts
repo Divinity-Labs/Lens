@@ -6,19 +6,27 @@ import { register, http_requests_total, http_request_duration_seconds } from '..
 /** Every `http_requests_total` sample currently in the registry. */
 async function requestSamples() {
   const metric = await register.getSingleMetric('http_requests_total')!.get()
-  return metric.values
+  return metric.values as Array<{ metricName?: string; value: number; labels: Partial<Record<string, string | number>> }>
 }
 
 /** Every `http_request_duration_seconds` sample currently in the registry. */
 async function durationSamples() {
   const metric = await register.getSingleMetric('http_request_duration_seconds')!.get()
-  return metric.values
+  return metric.values as Array<{ metricName?: string; value: number; labels: Partial<Record<string, string | number>> }>
 }
 
 /** The `_count` samples of the duration histogram — one per label combination. */
 async function durationCounts() {
   return (await durationSamples()).filter(v => v.metricName === 'http_request_duration_seconds_count')
 }
+
+it('exports runtime metrics with the Lens label on repeated scrapes', async () => {
+  for (let pass = 0; pass < 2; pass++) {
+    const scrape = await register.metrics()
+    expect(scrape).toMatch(/^process_resident_memory_bytes\{app="lens"\} /m)
+    expect(scrape).toMatch(/^nodejs_eventloop_lag_seconds\{app="lens"\} /m)
+  }
+})
 
 /**
  * Builds an app wired the way src/index.ts wires it: the metrics plugin is

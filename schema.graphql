@@ -283,8 +283,13 @@ type Query {
   The time range is inclusive at both ends: a bucket is included if bucket >= from and bucket <= to.
   Because both endpoints are inclusive, querying adjacent windows (e.g. [t0, t1] and [t1, t2]) will
   return the boundary bucket at t1 in both results.
+  
+  window must be one of 1m, 5m, 1h, 24h. limit must be at least 1 and is capped at 1000.
+  The network argument (testnet or mainnet) defaults to the active network; only that
+  network's buckets are returned. An unknown pair fails with PAIR_NOT_FOUND, and a bad
+  window, limit or network fails with INVALID_INPUT.
   """
-  getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int, from: String, to: String): [PriceBucket]
+  getPriceHistory(assetA: String!, assetB: String!, window: String!, limit: Int, from: String, to: String, network: String): [PriceBucket]
   listPairs: [String]! @deprecated(reason: "Use 'pairs' instead")
   pairs: [Pair!]!
 
@@ -330,10 +335,17 @@ type Subscription {
   Streams a PriceUpdate every time an ingester records a new price for the
   given pair.
   
-  The network argument narrows the stream to one chain. It is optional, and
-  omitting it delivers every enabled network — the right default only if you
-  read the network field on each message, since a dual-network deployment
-  otherwise interleaves two chains prices on one stream.
+  The pair must name a pair watched on the requested network. Either asset
+  order is accepted and is normalised to the stored pair key. A pair that
+  is not watched fails the subscription with PAIR_NOT_FOUND instead of
+  waiting forever for data that can never arrive.
+  
+  The network argument narrows the stream to one chain. It must be
+  "testnet" or "mainnet"; any other value fails the subscription with
+  INVALID_INPUT. It is optional, and omitting it delivers every enabled
+  network — the right default only if you read the network field on each
+  message, since a dual-network deployment otherwise interleaves two
+  chains prices on one stream.
   """
   priceUpdated(pair: String!, network: String): PriceUpdate!
 }

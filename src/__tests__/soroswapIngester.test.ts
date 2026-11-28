@@ -44,6 +44,7 @@ vi.mock('../ingest/venues/soroswap', async (importOriginal) => {
 })
 
 // ── Imports ──────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   calcSpotPrice,
   ingestPool,
@@ -59,6 +60,7 @@ import {
   type PoolEntry,
   type SoroswapToken,
 } from '../ingest/venues/soroswap'
+import { fetchOk, fetchFailed } from '../ingest/fetchResult'
 import { upsertPricePoints } from '../db'
 import { dispatchPriceUpdate } from '../webhookDispatcher'
 import { price_rejected_total } from '../metrics'
@@ -192,7 +194,7 @@ describe('ingestPool', () => {
 
     // See the note in ammIngester.test.ts: the network passed in must be the
     // one written, so this uses a network the process is not running as.
-    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, 'mainnet')
+    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, 'mainnet', fetchTokenDecimals)
 
     expect(upsertPricePoints).toHaveBeenCalledWith(
       expect.arrayContaining([
@@ -212,7 +214,7 @@ describe('ingestPool', () => {
   it('skips price storage when pool is empty (zero reserves)', async () => {
     const mockFetch = vi.fn().mockResolvedValue([0n, 0n])
 
-    await ingestPool(mockPoolEntry, mockPair as any, mockFetch)
+    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, undefined, fetchTokenDecimals)
 
     expect(upsertPricePoints).not.toHaveBeenCalled()
     expect(dispatchPriceUpdate).not.toHaveBeenCalled()
@@ -221,7 +223,7 @@ describe('ingestPool', () => {
   it('skips price storage when fetchPoolReserves returns null (RPC error)', async () => {
     const mockFetch = vi.fn().mockResolvedValue(null)
 
-    await ingestPool(mockPoolEntry, mockPair as any, mockFetch)
+    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, undefined, fetchTokenDecimals)
 
     expect(upsertPricePoints).not.toHaveBeenCalled()
   })
@@ -235,7 +237,7 @@ describe('ingestPool', () => {
     // victim (e.g. "stores a price point") would fail intermittently.
     ;(upsertPricePoints as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('DB error'))
 
-    await expect(ingestPool(mockPoolEntry, mockPair as any, mockFetch)).resolves.toBeUndefined()
+    await expect(ingestPool(mockPoolEntry, mockPair as any, mockFetch, undefined, fetchTokenDecimals)).resolves.toBeUndefined()
   })
 
   it('correctly reads and scales for tokens with decimals other than 7 (#227)', async () => {
@@ -269,7 +271,7 @@ describe('ingestPool', () => {
     // Extremely small price (1n / 100_000_000_000_000n = 1e-14 < 1e-10 min)
     const mockFetch = vi.fn().mockResolvedValue([1n, 100_000_000_000_000n])
 
-    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, 'testnet')
+    await ingestPool(mockPoolEntry, mockPair as any, mockFetch, 'testnet', fetchTokenDecimals)
 
     expect(upsertPricePoints).not.toHaveBeenCalled()
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -333,17 +335,20 @@ describe('fetchSoroswapTokenList', () => {
   })
 
   it('returns tokens from a successful fetch', async () => {
-    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue([xlmToken, usdcToken])
+    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue(fetchOk([xlmToken, usdcToken]))
 
     const result = await fetchSoroswapTokenList()
-    expect(result).toHaveLength(2)
-    expect(result[0].symbol).toBe('XLM')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toHaveLength(2)
+      expect(result.data[0].symbol).toBe('XLM')
+    }
   })
 
-  it('returns empty array on fetch failure', async () => {
-    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue([])
+  it('returns a failure result on fetch failure', async () => {
+    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue(fetchFailed(new Error('token list unreachable')))
 
     const result = await fetchSoroswapTokenList()
-    expect(result).toEqual([])
+    expect(result.ok).toBe(false)
   })
 })

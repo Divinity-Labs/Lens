@@ -84,9 +84,14 @@ export async function fetchSdexTrades(
   }
 }
 
+export interface DeriveSdexOptions {
+  observedAtSource?: 'now' | 'ledger_close'
+}
+
 export function deriveSdexPricePoints(
   raw: SdexRawTrades,
-  pair: WatchedPair
+  pair: WatchedPair,
+  options: DeriveSdexOptions = {}
 ): { points: VenuePricePoint[]; finalLedger: number; lastPagingToken: string } | null {
   const { records, stateId, lastLedger } = raw
 
@@ -111,8 +116,8 @@ export function deriveSdexPricePoints(
       ? parseFloat(t.price.n) / parseFloat(t.price.d)
       : parseFloat(t.price.d) / parseFloat(t.price.n)
 
-    const now = new Date()
     const sourceTime = new Date(t.ledger_close_time)
+    const observedAt = options.observedAtSource === 'ledger_close' ? sourceTime : new Date()
 
     return {
       assetA: pair.assetA.code,
@@ -123,9 +128,9 @@ export function deriveSdexPricePoints(
       baseVolume: parseFloat(t.base_amount),
       counterVolume: parseFloat(t.counter_amount),
       ledger: ledgers[i],
-      observedAt: now,
+      observedAt,
       sourceTime,
-      timestamp: now,
+      timestamp: observedAt,
       eventId: t.id,
     }
   })
@@ -207,6 +212,7 @@ export const sdexAdapter: VenueAdapter<WatchedPair, SdexRawTrades> = {
   name: 'SDEX',
   kind: 'orderbook',
   source: 'SDEX',
+  onChain: true,
   sourceTimeCapability: { status: 'provided', semantic: 'ledger_close' },
   classification: 'primary',
   type: 'Order Book',

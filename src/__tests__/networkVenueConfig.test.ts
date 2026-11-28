@@ -6,6 +6,7 @@
  * the env vars set for that test.
  */
 
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { StrKey } from '@stellar/stellar-sdk'
 
 // config.ts logs invalid contract ids through the structured logger; capture

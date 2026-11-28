@@ -8,6 +8,23 @@ import Fastify from 'fastify';
  * It demonstrates how an agent can discover resources and make a paid call
  * without having any pre-existing integration with the target service.
  */
+
+/**
+ * The MCP client types tool-result content as unknown, so pull the first
+ * text block out with a runtime check instead of indexing it blindly.
+ */
+function firstText(result: unknown): string {
+  const blocks = (result as { content?: unknown } | null | undefined)?.content
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    throw new Error('tool result has no content')
+  }
+  const first = blocks[0] as { text?: unknown }
+  if (typeof first.text !== 'string') {
+    throw new Error('tool result has no text content')
+  }
+  return first.text
+}
+
 async function main() {
   // 1. Start a mock Bazaar API server for the demonstration
   const app = Fastify();
@@ -92,7 +109,8 @@ async function main() {
   console.log('[agent] Available resources:', resources.resources.map(r => r.uri).join(', '));
 
   const statusResource = await client.readResource({ uri: 'lens://status' });
-  console.log('[agent] lens://status:', statusResource.contents[0].text);
+  const statusContent = statusResource.contents[0]
+  console.log('[agent] lens://status:', 'text' in statusContent ? statusContent.text : '(binary content)');
   console.log('[agent] version:', statusResource.contents[0]._meta?.version);
 
   const BAZAAR_URL = 'http://localhost:3000';
@@ -108,9 +126,9 @@ async function main() {
   });
 
   if (priceResult.isError) {
-    console.log('[agent] lens_get_price refused:', JSON.parse(priceResult.content[0].text).reason);
+    console.log('[agent] lens_get_price refused:', JSON.parse(firstText(priceResult)).reason);
   } else {
-    const price: any = priceResult.structuredContent ?? JSON.parse(priceResult.content[0].text);
+    const price: any = priceResult.structuredContent ?? JSON.parse(firstText(priceResult));
     console.log(
       `[agent] ${price.pairKey} on ${price.network}: ${price.price} ${price.quote.code} per ${price.base.code} ` +
         `(confidence ${price.confidence}, ${price.sources} source(s), last trade ${price.lastTradeAgeSeconds}s ago, ` +
@@ -133,10 +151,10 @@ async function main() {
     });
     
     if (searchResult.isError) {
-      console.log(`[agent] Search failed. Code: ${JSON.parse(searchResult.content[0].text).code}`);
+      console.log(`[agent] Search failed. Code: ${JSON.parse(firstText(searchResult)).code}`);
     } else {
-      console.log('[agent] Search result:', searchResult.content[0].text);
-      const data = JSON.parse(searchResult.content[0].text);
+      console.log('[agent] Search result:', firstText(searchResult));
+      const data = JSON.parse(firstText(searchResult));
       if (Array.isArray(data.resources) && data.resources.length > 0) {
         paidEndpoint = data.resources[0].url;
       } else {
@@ -166,12 +184,12 @@ async function main() {
     });
     
     if (paidResult.isError) {
-      const errorData = JSON.parse(paidResult.content[0].text);
+      const errorData = JSON.parse(firstText(paidResult));
       console.log(`[agent] Paid call failed with deterministic code: ${errorData.code}`);
       console.log(`[agent] Reason: ${errorData.reason}`);
     } else {
       console.log('[agent] Paid call succeeded! Retrieved data:');
-      console.log(paidResult.content[0].text);
+      console.log(firstText(paidResult));
     }
   } catch (err: any) {
     console.error('[agent] Paid call error:', err.message);

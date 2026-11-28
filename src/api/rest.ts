@@ -24,55 +24,14 @@ import {
 import { findOverlappingGaps } from '../backfill/gaps'
 import { getDepth, getImpact } from '../pricing/depth'
 import { getRetentionPath } from '../jobs/retentionStatus'
+import { parsePositiveAmount } from '../utils/amounts'
+import { parseLimit } from '../pagination'
 
 import { apiError } from '../errors'
-function makePairKey(a: string, b: string): string {
-  return [a, b].sort().join('/')
-}
+import { findWatchedPair } from '../utils/watchedPair'
 
 export const HISTORY_DEFAULT_LIMIT = 100
 export const HISTORY_MAX_LIMIT = 1000
-
-/**
- * Resolve a requested pair against the ones this network watches.
- *
- * The issuer is honoured when the caller supplies one. It used to be discarded
- * outright — `a.split(':')[0]` — so every asset called USDC was the same asset,
- * and a request for Circle's mainnet USDC was answered with testnet USDC's
- * price, stamped `"network":"testnet"`, at 1.72 per XLM against a real ~0.18.
- *
- * That is the worst failure mode an oracle has: not a refusal, but a confident
- * wrong number. Asset codes are not unique on Stellar — anyone can issue
- * "USDC", and Horizon lists many — so the issuer is the only thing that
- * identifies an asset. A bare code still matches on code alone, since callers
- * quoting XLM or a single-issuer asset rely on that.
- */
-function findPair(assetA: string, assetB: string, network: NetworkName) {
-  const parse = (a: string) => {
-    if (a.toLowerCase() === 'native') return { code: 'XLM', issuer: null as string | null }
-    const [code, issuer] = a.split(':')
-    return { code: (code ?? '').toUpperCase(), issuer: issuer ?? null }
-  }
-  const qA = parse(assetA)
-  const qB = parse(assetB)
-
-  const matches = (
-    q: { code: string; issuer: string | null },
-    side: { code: string; issuer?: string | null },
-  ) => {
-    if (q.code !== side.code.toUpperCase()) return false
-    // Only enforce the issuer when both sides name one; XLM has none, and a
-    // caller passing a bare code is not asserting which issuer they meant.
-    if (!q.issuer || !side.issuer) return true
-    return q.issuer === side.issuer
-  }
-
-  return getNetworkConfig(network).pairs.find(
-    p =>
-      (matches(qA, p.assetA) && matches(qB, p.assetB)) ||
-      (matches(qA, p.assetB) && matches(qB, p.assetA)),
-  )
-}
 
 export async function registerRESTRoutes(app: FastifyInstance) {
   // Validate every response against its declared schema in dev/test (no-op in
@@ -219,7 +178,7 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       price_requests_total.inc()
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
+      const pair = findWatchedPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const rawThreshold = req.query?.staleThreshold ?? req.query?.staleThresholdSeconds
@@ -278,12 +237,15 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { config: { scope: 'read:prices' }, schema: { response: { 200: routeResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
-      const amount = parseFloat(req.query.amount ?? '1000')
       // Validate amount before the pair check: a malformed request parameter
       // is a 400 regardless of whether the pair is watched.
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send(apiError('invalid_parameter', 'amount must be a positive number'))
+      const parsedAmount = parsePositiveAmount(req.query.amount)
+      if ('error' in parsedAmount) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedAmount.error))
+      }
+      const amount = parsedAmount.value
       const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
+      const pair = findWatchedPair(assetA, assetB, network)
       if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const decimalFormat = resolveDecimalFormat(req)
@@ -310,18 +272,28 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     '/price/:assetA/:assetB/history',
     { config: { scope: 'read:history' }, schema: { response: { 200: historyResponseSchema } } },
     async (req, reply) => {
+      const window = req.query.window ?? '1h'
+      if (!['1m', '5m', '1h', '24h'].includes(window)) {
+        return reply.status(400).send(apiError('bad_window', 'window must be one of: 1m, 5m, 1h, 24h'))
+      }
+
+      const parsedLimit = parseLimit(req.query.limit, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT)
+      if ('error' in parsedLimit) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedLimit.error))
+      }
+      const { limit } = parsedLimit
+
       const { assetA, assetB } = req.params
       const network = req.network ?? activeNetwork
-      const window = req.query.window ?? '1h'
-      const limit = Math.min(parseInt(req.query.limit ?? String(HISTORY_DEFAULT_LIMIT), 10), HISTORY_MAX_LIMIT)
-      const pairKey = makePairKey(assetA, assetB)
+      const pair = findWatchedPair(assetA, assetB, network)
+      if (!pair) {
+        return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      }
+      const pairKey = pair.pairKey
+
       const decimalFormat = resolveDecimalFormat(req)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
-      }
-
-      if (!['1m', '5m', '1h', '24h'].includes(window)) {
-        return reply.status(400).send(apiError('bad_window', 'window must be one of: 1m, 5m, 1h, 24h'))
       }
 
       const result = await pgPool.query(
@@ -391,15 +363,18 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { assetA, assetB } = req.params
-      // Number(), not parseFloat(): parseFloat('100abc') is 100, so a typo in a
-      // query string would silently price a different trade than the caller
-      // asked for. Trailing junk is a 400.
-      const amount = Number(req.query.amount ?? '1000')
+      // Validate amount before the pair check so malformed query parameters
+      // (trailing junk like `100abc`, Infinity, 0, negatives) return 400 on
+      // any pair, watched or not.
+      const parsedAmount = parsePositiveAmount(req.query.amount)
+      if ('error' in parsedAmount) {
+        return reply.status(400).send(apiError('invalid_parameter', parsedAmount.error))
+      }
+      const amount = parsedAmount.value
       const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
+      const pair = findWatchedPair(assetA, assetB, network)
 
       if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
-      if (isNaN(amount) || amount <= 0) return reply.status(400).send(apiError('invalid_parameter', 'amount must be a positive number'))
 
       // Depth reads are network-scoped on both legs (pool_snapshots and the
       // price_points subquery that names this pair's pools), so a mainnet pair
@@ -434,23 +409,29 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     { schema: { response: { 200: impactResponseSchema } } },
     async (req, reply) => {
       const { assetA, assetB } = req.params
-      const network = req.network ?? activeNetwork
-      const pair = findPair(assetA, assetB, network)
-      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
+      let thresholds: number[] = [1, 5, 10]
+      if (req.query.thresholds !== undefined) {
+        const parts = req.query.thresholds.split(',')
+        const parsedThresholds: number[] = []
+        for (const part of parts) {
+          const parsed = parsePositiveAmount(part, '', 'thresholds')
+          if ('error' in parsed) {
+            return reply.status(400).send(apiError('invalid_parameter', 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1'))
+          }
+          parsedThresholds.push(parsed.value)
+        }
+        thresholds = parsedThresholds
+      }
 
-      const thresholds = req.query.thresholds
-        ? req.query.thresholds.split(',').map(Number)
-        : [1, 5, 10]
-      const liquidityFraction = req.query.liquidityFraction === undefined
-        ? 0.5
-        : Number(req.query.liquidityFraction)
-      if (
-        thresholds.length === 0 ||
-        thresholds.some(value => !Number.isFinite(value) || value <= 0) ||
-        !Number.isFinite(liquidityFraction) || liquidityFraction <= 0 || liquidityFraction > 1
-      ) {
+      const parsedFraction = parsePositiveAmount(req.query.liquidityFraction, '0.5', 'liquidityFraction')
+      if ('error' in parsedFraction || parsedFraction.value > 1) {
         return reply.status(400).send(apiError('invalid_parameter', 'thresholds must be positive numbers and liquidityFraction must be between 0 and 1'))
       }
+      const liquidityFraction = parsedFraction.value
+
+      const network = req.network ?? activeNetwork
+      const pair = findWatchedPair(assetA, assetB, network)
+      if (!pair) return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${network}`))
 
       const impact = await getImpact(pair.pairKey, { thresholds, liquidityFraction }, network)
       if (!impact) return reply.status(404).send(apiError('unknown_pair', `No AMM liquidity available for ${assetA}/${assetB}`))

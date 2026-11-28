@@ -96,7 +96,7 @@ async function samples(name: string) {
 }
 
 /** `{ network: 'mainnet': 5, network: 'testnet': 3 }`-shaped lookup by label. */
-function byLabel(values: { labels?: Record<string, string | number>; value: number }[], label: string) {
+function byLabel(values: Array<{ labels?: Partial<Record<string, string | number>>; value: number }>, label: string) {
   return Object.fromEntries(
     values.map(v => [String((v.labels as Record<string, string>)[label]), v.value])
   )

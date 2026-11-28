@@ -22,6 +22,7 @@ import WebSocket from 'ws'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { registerGraphQL } from '../src/api/graphql'
 import { publishPriceUpdate } from '../src/events'
+import type { NetworkName } from '../src/config'
 
 // The sandbox caps open file descriptors at 1024, and every WS connection
 // holds one client fd plus one server fd — so past roughly 500 concurrent
@@ -41,7 +42,7 @@ const PAIRS = [
 // Subscriptions are network-scoped here — the production shape, where a
 // listener watches one chain. The dual-network event feed is what makes the
 // old single-topic fan-out pay twice for every pair's subscribers.
-const NETWORKS = ['mainnet', 'testnet']
+const NETWORKS: NetworkName[] = ['mainnet', 'testnet']
 const SUBPROTOCOL = 'graphql-transport-ws'
 
 const SUBSCRIBE_QUERY = `

@@ -39,7 +39,7 @@ describe('REST route regression: documented curl route exists', () => {
         const methods = Array.isArray(route.method) ? route.method : [route.method]
         for (const method of methods) {
           if (method === 'HEAD' || method === 'OPTIONS') continue
-          const path = route.url ?? route.template
+          const path = route.url
           if (path) registeredPaths.add(`${method} ${path}`)
         }
       },

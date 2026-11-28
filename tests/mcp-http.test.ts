@@ -429,7 +429,7 @@ describe('MCP HTTP transport parity', () => {
       authorization: `Bearer ${TEST_AUTH_TOKEN}`,
     });
     expect(listed.status).toBe(200);
-    const body = await listed.json();
+    const body = (await listed.json()) as { result: { tools: Array<{ name: string }> } };
     expect(body.result.tools.map((tool: any) => tool.name)).toEqual(['bazaar_search', 'paid_call']);
   });
 
@@ -443,7 +443,7 @@ describe('MCP HTTP transport parity', () => {
     });
 
     expect(listed.status).toBe(200);
-    const body = await listed.json();
+    const body = (await listed.json()) as { result: { tools: Array<{ name: string }> } };
     expect(body.result.tools.map((tool: any) => tool.name)).toEqual(['bazaar_search', 'paid_call']);
   });
 });

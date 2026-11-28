@@ -7,6 +7,7 @@
  * XLM against a real ~0.18. A 404 would have been correct; a confident wrong
  * number is the one outcome a price feed must never produce.
  */
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 const TESTNET_USDC = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'
 const MAINNET_USDC = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
 

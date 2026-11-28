@@ -4,6 +4,7 @@ import { prisma } from '../db'
 import { activeNetwork, getNetworkConfig, type NetworkName } from '../config'
 import { resolveNetworkName } from '../middleware/network'
 import { apiError } from '../errors'
+import { findWatchedPair } from '../utils/watchedPair'
 
 function isValidHttpsUrl(raw: string): boolean {
   try {
@@ -107,6 +108,17 @@ export async function registerWebhookRoutes(app: FastifyInstance) {
     }
 
     const { pair, isReversed } = match
+    const pair = findWatchedPair(assetA, assetB, targetNetwork)
+    if (!pair) {
+      return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${targetNetwork}`))
+    }
+
+    // Determine orientation: does input assetA match pair.assetA?
+    const matchA =
+      parsedA.code === pair.assetA.code &&
+      (!parsedA.issuer || !pair.assetA.issuer || parsedA.issuer === pair.assetA.issuer)
+
+    const isReversed = !matchA
     const storedA = pair.assetA.code
     const storedB = pair.assetB.code
     const storedThreshold = isReversed ? 1 / threshold : threshold

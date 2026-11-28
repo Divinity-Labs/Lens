@@ -134,10 +134,6 @@ export const ENDPOINT_METADATA: Record<string, { displayPath?: string; descripti
     displayPath: '/discovery/resources?type=&payTo=&network=&extensions=&limit=&offset=',
     description: 'Bazaar catalog of x402-discoverable resources (spec: [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md))',
   },
-  'GET /usage/me': {
-    displayPath: '/usage/me',
-    description: 'Usage and quota for the calling API key (requires `Authorization: Bearer <key>`)',
-  },
   'GET /supported': {
     displayPath: '/supported',
     description: 'Payment kinds and extensions this facilitator supports',
@@ -157,10 +153,6 @@ export const ENDPOINT_METADATA: Record<string, { displayPath?: string; descripti
   'DELETE /webhooks/{id}': {
     displayPath: '/webhooks/:id',
     description: 'Delete a webhook subscription',
-  },
-  'GET/POST /graphql': {
-    displayPath: '/graphql',
-    description: 'GraphQL query/mutation endpoint (GraphiQL IDE at `/graphiql`, docs: [`docs/graphql.md`](docs/graphql.md))',
   },
 }
 
