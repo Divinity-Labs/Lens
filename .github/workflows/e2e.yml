@@ -1,0 +1,90 @@
+name: Docker build & end-to-end
+
+# `tests/integration/e2e.test.ts` is opt-in (LENS_E2E=1) and the build job never
+# sets it, so the compose stack and the Dockerfile were only exercised when
+# someone deployed. This is the dedicated integration job the suite's comment
+# promises: it builds the image with the GitHub Actions layer cache, then runs
+# the suite against the same compose stack the suite starts.
+
+on:
+  # Every push to main: a merge can break the Dockerfile even when the PR did
+  # not touch it, and this job is the only thing that builds the image.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'docker-compose.e2e.yml'
+      - 'prisma/**'
+      - 'package*.json'
+      - 'src/index.ts'
+      - 'tests/integration/e2e.test.ts'
+      - '.github/workflows/e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Build image & run e2e
+    runs-on: ubuntu-latest
+    # The suite starts Postgres, Redis and Lens, so a hung image build or
+    # compose up must fail the job rather than occupy a runner indefinitely.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: lens:e2e
+          # Cache layers between runs: the Dockerfile reinstalls dependencies
+          # and compiles the whole service, which is the slowest part of the
+          # job and rarely changes between PRs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run the end-to-end suite
+        env:
+          LENS_E2E: '1'
+          # Build through Bake so the compose build inside the suite reuses the
+          # builder (and the layer cache) the step above primed.
+          COMPOSE_BAKE: 'true'
+        run: npx vitest run tests/integration/e2e.test.ts
+
+      # The suite writes this before tearing the stack down, because `down`
+      # removes the containers the logs come from. On failure it is the only
+      # record of why the stack did not answer.
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Safety net for a suite killed before its own afterAll ran.
+      - name: Tear the stack down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down --volumes --remove-orphans || true
