@@ -82,7 +82,7 @@ res = requests.get(BASE_URL + "/v1/basket", params=[["asset","XLM"],["asset","US
 print("getBasket", res.status_code, res.json())
 
 # getCorrelation: GET /v1/correlation
-res = requests.get(BASE_URL + "/v1/correlation", params=[["assets","XLM,USDC"],["network","testnet"]], headers={}, timeout=30)
+res = requests.get(BASE_URL + "/v1/correlation", params=[["assets","XLM,EURC"],["network","testnet"]], headers={}, timeout=30)
 print("getCorrelation", res.status_code, res.json())
 
 # getLendingRates: GET /v1/rates

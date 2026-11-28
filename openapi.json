@@ -3412,18 +3412,19 @@
     "/v1/correlation": {
       "get": {
         "x-question": "Do these assets move together, or are they genuinely diversified?",
-        "x-example": "GET /correlation?asset=XLM&asset=USDC&window=30d&network=testnet",
+        "x-example": "GET /correlation?assets=XLM,EURC&quote=USDC&window=30d&network=testnet",
         "x-order": 26,
         "x-category": "Comparative Analytics & Market Quality",
         "operationId": "getCorrelation",
         "summary": "Compute price correlation matrix across a basket of assets over a window",
+        "description": "Every requested asset is priced in one quote asset, using only stored\npairs between that asset and the quote (the stored direction is\nhonoured; no cross rates are derived). Prices are bucketed in the\ndatabase, one close per asset per bucket, and the Pearson coefficient\nis computed on bucket-to-bucket simple returns over intervals both\nassets share. An asset with no pair against the quote gets\n`coefficient: null`, `status: insufficient`, `reason: no_quote_pair`.\nA series whose returns never change gets `coefficient: null`,\n`status: zero_variance`.\n",
         "security": [],
         "parameters": [
           {
             "name": "assets",
             "in": "query",
             "required": true,
-            "description": "Comma-separated or repeated asset codes (at least two)",
+            "description": "Comma-separated or repeated asset codes, at least two and at most ten. Must not include the quote asset.",
             "schema": {
               "oneOf": [
                 {
@@ -3437,7 +3438,19 @@
                 }
               ]
             },
-            "example": "XLM,USDC"
+            "example": "XLM,EURC"
+          },
+          {
+            "name": "quote",
+            "in": "query",
+            "required": false,
+            "description": "Asset code every requested asset is priced in. Defaults to USDC. Must not be one of the requested assets.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{1,12}$",
+              "default": "USDC"
+            },
+            "example": "USDC"
           },
           {
             "name": "window",
@@ -3473,7 +3486,14 @@
             }
           },
           "400": {
-            "description": "Missing or invalid parameters"
+            "description": "Missing or invalid parameters, more than ten assets, or the quote asset listed in assets (invalid_parameter)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -7887,9 +7907,13 @@
         "required": [
           "network",
           "window",
+          "quote",
+          "method",
+          "bucketSeconds",
           "startTime",
           "endTime",
           "assets",
+          "unquotedAssets",
           "matrix",
           "sampleCounts",
           "pairs"
@@ -7914,6 +7938,21 @@
               "30d"
             ]
           },
+          "quote": {
+            "type": "string",
+            "description": "Asset code every series is priced in"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "pearson_simple_returns"
+            ],
+            "description": "Pearson coefficient on bucket-to-bucket simple returns of the bucket close"
+          },
+          "bucketSeconds": {
+            "type": "integer",
+            "description": "Bucket width used for the series (60 up to 1h, 300 up to 24h, 3600 up to 7d, 14400 beyond)"
+          },
           "startTime": {
             "type": "string",
             "format": "date-time"
@@ -7924,6 +7963,13 @@
           },
           "assets": {
             "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unquotedAssets": {
+            "type": "array",
+            "description": "Requested assets with no pair against the quote in the window",
             "items": {
               "type": "string"
             }
@@ -7941,7 +7987,7 @@
           },
           "sampleCounts": {
             "type": "object",
-            "description": "Overlapping sample count per pair",
+            "description": "Number of returns over shared intervals per pair",
             "additionalProperties": {
               "type": "object",
               "additionalProperties": {
@@ -7964,6 +8010,7 @@
           "assetB",
           "coefficient",
           "status",
+          "reason",
           "sampleCount",
           "provenance"
         ],
@@ -7978,14 +8025,26 @@
           "coefficient": {
             "type": "number",
             "nullable": true,
-            "description": "Pearson correlation coefficient between -1 and 1, or null if insufficient"
+            "description": "Pearson correlation coefficient of returns between -1 and 1, or null when it cannot be computed"
           },
           "status": {
             "type": "string",
             "enum": [
               "computed",
-              "insufficient"
+              "insufficient",
+              "zero_variance"
             ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "no_quote_pair",
+              "insufficient_overlap",
+              "zero_variance",
+              null
+            ],
+            "description": "Why the coefficient is null; null when computed"
           },
           "sampleCount": {
             "type": "integer"
