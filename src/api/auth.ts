@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import { createHash, timingSafeEqual } from 'crypto'
 import fp from 'fastify-plugin'
 import { prisma } from '../db'
+import { logAuditEvent } from './audit'
 import { config } from '../config'
 import { api_key_auth_failures_total, admin_auth_failures_total, api_key_cache_lookups_total } from '../metrics'
 
@@ -22,11 +23,29 @@ export interface ApiKeyContext {
   ratePerMin: number
   ratePerDay: number
   scopes: string[]
+  /** The admin credential that minted this key, when it was minted by a named admin. */
+  createdByAdminId?: string
 }
+
+/**
+ * Identity of an authenticated admin, attached to each request as
+ * `req.adminCredential` once the admin hook has validated the request.
+ *
+ * `id: 'legacy'` is the shared `ADMIN_TOKEN`; any other id is a named credential
+ * from the `admin_credentials` table.
+ */
+export interface AdminCredentialContext {
+  id: string
+  name: string
+}
+
+/** Identity recorded for requests authenticated with the shared ADMIN_TOKEN. */
+export const LEGACY_ADMIN_IDENTITY: AdminCredentialContext = { id: 'legacy', name: 'legacy-admin' }
 
 declare module 'fastify' {
   interface FastifyRequest {
     apiKey?: ApiKeyContext
+    adminCredential?: AdminCredentialContext
   }
   interface FastifyContextConfig {
     /** When true, this route is genuinely public and requires no authentication (e.g. health probes). */
@@ -262,6 +281,7 @@ async function lookupApiKeyResult(
           // the kind of break that looks like an authorization bug rather than
           // a caching one.
           scopes: record.scopes ?? [],
+          createdByAdminId: record.createdByAdminId ?? undefined,
         },
       }
     : { found: false }
@@ -383,6 +403,109 @@ export async function checkAndIncrementDailyUsage(
 
 export function resetDailyUsage(): void {
   inMemoryDailyUsage.clear()
+}
+
+/** Prefix of every named admin credential (see `generateAdminCredential`). */
+export const ADMIN_CREDENTIAL_PREFIX = 'admin_'
+
+/**
+ * Looks up a named admin credential by its plaintext value, returning its
+ * identity only when it exists and has not been revoked.
+ */
+export async function lookupAdminCredential(plaintext: string): Promise<AdminCredentialContext | null> {
+  const record = await prisma.adminCredential.findUnique({ where: { hash: hashApiKey(plaintext) } })
+  if (!record || record.revokedAt) return null
+  return { id: record.id, name: record.name }
+}
+
+/** The admin secret a request carries: `X-Admin-Token`, else a bearer token. */
+function suppliedAdminToken(req: FastifyRequest): string | null {
+  const header = req.headers['x-admin-token']
+  if (typeof header === 'string' && header.length > 0) return header
+  return extractBearer(req.headers['authorization'])
+}
+
+export type AdminAuthOutcome =
+  | { ok: true; admin: AdminCredentialContext }
+  | { ok: false; reason: 'not_configured' | 'unauthorized' }
+
+/**
+ * Authenticates an admin request and says WHO it is, not just whether it may
+ * pass.
+ *
+ * Two kinds of secret are accepted, in the same headers (`X-Admin-Token` or
+ * `Authorization: Bearer`):
+ *  - the shared `ADMIN_TOKEN`, checked first and in constant time through
+ *    {@link checkAdminAuth}; it is attributed as `legacy-admin`. It stays the
+ *    bootstrap secret for minting the first named credential.
+ *  - a named credential (`admin_…`) from the `admin_credentials` table, so each
+ *    action is attributable to one person and one person can be revoked.
+ *
+ * Only `admin_`-prefixed tokens cost a database lookup, so a flood of garbage
+ * tokens cannot be turned into queries. A lookup that fails closes the door
+ * (`unauthorized`) rather than letting the request through.
+ *
+ * `not_configured` keeps its #508 meaning: ADMIN_TOKEN is unset and the caller
+ * did not present a valid named credential, so the surface is reported as
+ * disabled rather than the operator being told their token is wrong.
+ */
+export async function authenticateAdmin(req: FastifyRequest): Promise<AdminAuthOutcome> {
+  if (req.adminCredential) return { ok: true, admin: req.adminCredential }
+
+  const legacy = checkAdminAuth(req)
+  if (legacy === 'authorized') return { ok: true, admin: LEGACY_ADMIN_IDENTITY }
+
+  const token = suppliedAdminToken(req)
+  if (token?.startsWith(ADMIN_CREDENTIAL_PREFIX)) {
+    try {
+      const named = await lookupAdminCredential(token)
+      if (named) return { ok: true, admin: named }
+    } catch (err) {
+      log.error({ err }, 'admin credential lookup failed; refusing the request')
+    }
+  }
+
+  if (legacy === 'not_configured') return { ok: false, reason: 'not_configured' }
+
+  if (token) {
+    // A rejected secret is worth a trail (logAuditEvent never throws).
+    await logAuditEvent('admin_auth_failed', { req, details: { reason: 'invalid_token' } })
+  }
+  return { ok: false, reason: 'unauthorized' }
+}
+
+/** Sends the response for a failed {@link authenticateAdmin}. */
+export function sendAdminAuthFailure(
+  reply: FastifyReply,
+  reason: 'not_configured' | 'unauthorized',
+): FastifyReply {
+  if (reason === 'not_configured') {
+    return reply.status(503).send({
+      error: 'Service Unavailable',
+      code: 'admin_not_configured',
+      message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
+    })
+  }
+  // Only a real rejection is a failure. An unconfigured surface is a deployment
+  // fact, and counting it would turn one misconfigured environment into a
+  // permanent stream of auth-failure alerts.
+  admin_auth_failures_total.inc()
+  return reply.status(401).send({
+    error: 'Unauthorized',
+    code: 'admin_unauthorized',
+    message: 'Provide a valid X-Admin-Token header.',
+  })
+}
+
+/**
+ * Resolves the admin identity from a request, or null when it is not an admin.
+ * Thin wrapper over {@link authenticateAdmin} for callers that do not care why.
+ */
+export async function resolveAdminIdentity(
+  req: FastifyRequest,
+): Promise<AdminCredentialContext | null> {
+  const outcome = await authenticateAdmin(req)
+  return outcome.ok ? outcome.admin : null
 }
 
 /**
@@ -544,6 +667,10 @@ export const registerApiKeyAuth = fp(apiKeyAuthPlugin, { name: 'api-key-auth' })
  * by asserting on routes registered through `buildApp`'s own sequence.
  */
 async function adminAuthHookPlugin(app: FastifyInstance) {
+  if (!app.hasRequestDecorator('adminCredential')) {
+    app.decorateRequest('adminCredential', undefined)
+  }
+
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     if (!isAdminRoute(req)) return
 
@@ -552,25 +679,11 @@ async function adminAuthHookPlugin(app: FastifyInstance) {
     // no ADMIN_TOKEN answers 401 "provide a valid token" to an operator who
     // supplied a perfectly good one — and the 503 the handlers would have
     // returned is unreachable.
-    const auth = checkAdminAuth(req)
-    if (auth === 'not_configured') {
-      return reply.status(503).send({
-        error: 'Service Unavailable',
-        code: 'admin_not_configured',
-        message: 'Admin surface is disabled: ADMIN_TOKEN is not configured on this server.',
-      })
-    }
-    if (auth !== 'authorized') {
-      // Only a real rejection is a failure. An unconfigured surface is a
-      // deployment fact, and counting it here would turn one misconfigured
-      // environment into a permanent stream of auth-failure alerts.
-      admin_auth_failures_total.inc()
-      return reply.status(401).send({
-        error: 'Unauthorized',
-        code: 'admin_unauthorized',
-        message: 'Provide a valid X-Admin-Token header.',
-      })
-    }
+    const outcome = await authenticateAdmin(req)
+    if (!outcome.ok) return sendAdminAuthFailure(reply, outcome.reason)
+
+    // Handlers read this to attribute what they do (audit log, createdByAdminId).
+    req.adminCredential = outcome.admin
   })
 }
 
