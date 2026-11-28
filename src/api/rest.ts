@@ -6,7 +6,7 @@ import { isBootComplete } from '../health'
 import { price_requests_total } from '../metrics'
 import { getCachedPrice, setCachedPrice } from '../redis'
 import { getAggregatedPrice } from '../aggregator/vwap'
-import { getBestRoute, makePairKey } from '../aggregator/bestRoute'
+import { getBestRoute } from '../aggregator/bestRoute'
 import { recordRecommendationQuote } from '../services/accuracy'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
@@ -252,9 +252,9 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const decimalFormat = resolveDecimalFormat(req)
       const routeInfo = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
       if (routeInfo.route !== 'UNKNOWN' && routeInfo.estimatedOutput > 0) {
-        const canonicalPairKey = makePairKey(pair.assetA, pair.assetB)
         const assetAStr = pair.assetA.issuer ? `${pair.assetA.code}:${pair.assetA.issuer}` : pair.assetA.code
         const assetBStr = pair.assetB.issuer ? `${pair.assetB.code}:${pair.assetB.issuer}` : pair.assetB.code
+        const canonicalPairKey = [assetAStr, assetBStr].sort().join('/')
         void recordRecommendationQuote({
           network,
           pairKey: canonicalPairKey,
