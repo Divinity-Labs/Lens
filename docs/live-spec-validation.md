@@ -63,5 +63,5 @@ To validate a local or remote deployment against the spec:
 npm run spec:validate-live
 
 # Validate a specific remote environment
-LIVE_API_URL=https://lens.stellar.org npm run spec:validate-live
+LIVE_API_URL=https://lens.example npm run spec:validate-live
 ```
