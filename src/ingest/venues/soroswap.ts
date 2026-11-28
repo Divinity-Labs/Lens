@@ -18,6 +18,7 @@ import {
   Keypair,
   scValToNative,
   Account,
+  Asset,
 } from '@stellar/stellar-sdk'
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { price_rejected_total } from '../../metrics'
@@ -57,14 +58,38 @@ export function _getLastPrice(network: NetworkName, pairKey: string): number | u
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SoroswapToken {
+  /** Soroban contract id of the token. */
   address: string
   symbol: string
   name: string
   decimals: number
+  /** Classic issuer, when the token is a Stellar Asset Contract for an issued asset. */
+  issuer?: string
 }
 
+/**
+ * One entry of the published list as it is today:
+ * https://raw.githubusercontent.com/soroswap/token-list/main/tokenList.json
+ * (`version` 1.6.3 when this was written). `issuer` is absent for
+ * Soroban-native tokens.
+ */
+export interface SoroswapListedAsset {
+  code: string
+  contract: string
+  name?: string
+  decimals?: number
+  issuer?: string
+}
+
+/**
+ * The list body. Soroswap publishes `assets` (with `network`); the older
+ * `tokens` shape is still read so a self-hosted list in that format keeps
+ * working.
+ */
 export interface SoroswapTokenList {
-  tokens: SoroswapToken[]
+  network?: string
+  assets?: SoroswapListedAsset[]
+  tokens?: SoroswapToken[]
 }
 
 export interface PoolEntry {
@@ -83,24 +108,105 @@ export const SOROSWAP_SOURCE = 'soroswap_amm'
  *
  * `{ ok: true, data: [] }` means the list was fetched and is empty.
  * `{ ok: false }` means it could not be fetched (network error, timeout,
- * non-2xx, or a body without a `tokens` array) — the caller must not read that
- * as "Soroswap lists no tokens". It is still a value rather than a throw, so a
+ * non-2xx, a body with neither an `assets` nor a `tokens` array, or a list
+ * published for a different network) — the caller must not read that as
+ * "Soroswap lists no tokens". It is still a value rather than a throw, so a
  * Soroswap outage stays isolated from the other ingesters.
  */
 export async function fetchSoroswapTokenList(
   tokenListUrl: string = getNetworkConfig(activeNetwork).soroswap.tokenListUrl,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  network: NetworkName = activeNetwork
 ): Promise<FetchResult<SoroswapToken[]>> {
   try {
     const res = await fetchWithTimeout(tokenListUrl, { signal })
     if (!res.ok) throw new Error(`Soroswap token list returned HTTP ${res.status}`)
-    const data = (await res.json()) as SoroswapTokenList
-    if (!Array.isArray(data?.tokens)) throw new Error('Soroswap token list response has no tokens array')
-    return fetchOk(data.tokens)
+    return fetchOk(parseSoroswapTokenList(await res.json(), network))
   } catch (err) {
     log.error({ err }, 'failed to fetch token list')
     return fetchFailed(err)
   }
+}
+
+/**
+ * Normalise a token-list body to `SoroswapToken[]`.
+ *
+ * Soroswap moved its published list from `tokens[] {address, symbol}` to
+ * `assets[] {contract, code, issuer}`. The adapter only read the old shape, so
+ * against the live list every cycle failed with "no tokens array" and Soroswap
+ * produced no prices. Both shapes are read now.
+ *
+ * The list also says which network it describes. The default URL serves the
+ * mainnet list to testnet too; its contract ids do not exist on testnet, and
+ * pricing testnet pairs from mainnet ids is the cross-network blend the
+ * `network` column exists to prevent. A list for another network is refused.
+ */
+export function parseSoroswapTokenList(body: unknown, network: NetworkName): SoroswapToken[] {
+  const data = body as SoroswapTokenList | null
+  if (!data || typeof data !== 'object') throw new Error('Soroswap token list response is not an object')
+
+  if (typeof data.network === 'string' && data.network.toLowerCase() !== network) {
+    throw new Error(`Soroswap token list is for ${data.network}, not ${network}`)
+  }
+
+  if (Array.isArray(data.assets)) {
+    return data.assets
+      .filter((a) => typeof a?.contract === 'string' && typeof a?.code === 'string')
+      .map((a) => ({
+        address: a.contract,
+        symbol: a.code,
+        name: a.name ?? a.code,
+        decimals: typeof a.decimals === 'number' ? a.decimals : 7,
+        ...(a.issuer ? { issuer: a.issuer } : {}),
+      }))
+  }
+  if (Array.isArray(data.tokens)) return data.tokens
+  throw new Error('Soroswap token list response has neither an assets nor a tokens array')
+}
+
+/**
+ * The Stellar Asset Contract id of a watched classic asset on `network`.
+ * Derived, not looked up: it is a hash of the asset and the network passphrase.
+ * `null` for an asset the SDK rejects (bad code or issuer).
+ */
+export function stellarAssetContractId(
+  asset: WatchedPair['assetA'],
+  network: NetworkName
+): string | null {
+  try {
+    const passphrase = getNetworkConfig(network).network.passphrase ?? Networks.PUBLIC
+    const classic = asset.issuer ? new Asset(asset.code, asset.issuer) : Asset.native()
+    return classic.contractId(passphrase)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The Soroswap token for a watched asset, matched on contract id.
+ *
+ * Matching on symbol picked whichever token with that code came first: the
+ * live list has two `XRP` tokens from different issuers, and any issuer can
+ * list a `USDC`. The watched asset's own contract id - derived from code,
+ * issuer and network - names exactly one token.
+ *
+ * Native XLM is not in the published list; Soroswap pools it through its Stellar
+ * Asset Contract, so that contract stands in for it (7 decimals, as every
+ * classic asset).
+ */
+export function resolveSoroswapToken(
+  tokens: SoroswapToken[],
+  asset: WatchedPair['assetA'],
+  network: NetworkName
+): SoroswapToken | undefined {
+  const contractId = stellarAssetContractId(asset, network)
+  if (!contractId) return undefined
+  const listed = tokens.find((t) => t.address === contractId)
+  if (listed) return listed
+  if (!asset.issuer) {
+    return { address: contractId, symbol: 'XLM', name: 'Stellar Lumens', decimals: 7 }
+  }
+  return undefined
 }
 
 // ── Pool discovery ────────────────────────────────────────────────────────────
@@ -437,7 +543,8 @@ export async function ingestPool(
 
 /**
  * Discover Soroswap pools for a watched pair, then snapshot each pool's price.
- * Matches pair assets to token list by symbol; filters to watched pairs only.
+ * Matches pair assets to the token list by contract id (code + issuer +
+ * network); filters to watched pairs only.
  */
 export async function ingestPair(
   pair: WatchedPair,
@@ -452,12 +559,8 @@ export async function ingestPair(
   network: NetworkName = activeNetwork,
   signal?: AbortSignal
 ): Promise<void> {
-  const tokenA = tokens.find(
-    (t) => t.symbol.toUpperCase() === pair.assetA.code.toUpperCase()
-  )
-  const tokenB = tokens.find(
-    (t) => t.symbol.toUpperCase() === pair.assetB.code.toUpperCase()
-  )
+  const tokenA = resolveSoroswapToken(tokens, pair.assetA, network)
+  const tokenB = resolveSoroswapToken(tokens, pair.assetB, network)
 
   if (!tokenA || !tokenB) {
     log.debug({ pair: pair.pairKey }, 'no Soroswap token found; skipping')
@@ -518,11 +621,11 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
 
   async discover(pair: WatchedPair, network: NetworkName): Promise<PoolEntry[]> {
     const netConfig = getNetworkConfig(network)
-    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl)
+    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, undefined, network)
     if (!fetched.ok) throw fetched.error
     const tokens = fetched.data
-    const tokenA = tokens.find((t) => t.symbol.toUpperCase() === pair.assetA.code.toUpperCase())
-    const tokenB = tokens.find((t) => t.symbol.toUpperCase() === pair.assetB.code.toUpperCase())
+    const tokenA = resolveSoroswapToken(tokens, pair.assetA, network)
+    const tokenB = resolveSoroswapToken(tokens, pair.assetB, network)
     if (!tokenA || !tokenB) return []
 
     const poolAddresses = await fetchPoolsFromFactory(
@@ -593,7 +696,7 @@ export const soroswapAdapter: VenueAdapter<PoolEntry, [bigint, bigint]> = {
     // neither a failure nor a success and leaves the recorded state alone.
     if (signal?.aborted) return
     const netConfig = getNetworkConfig(network)
-    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, signal)
+    const fetched = await fetchSoroswapTokenList(netConfig.soroswap.tokenListUrl, signal, network)
     if (!fetched.ok) {
       // #329: without the token list no Soroswap pool can be priced, so the
       // venue has failed for this pair — not answered with nothing.
