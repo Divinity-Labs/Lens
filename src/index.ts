@@ -165,7 +165,9 @@ async function main() {
     }
   }
 
-  await safePrune()
+  // Fire maintenance in the background so ingesters are not delayed (#697).
+  // Errors are caught internally by the safe* wrappers; this just stops blocking.
+  safePrune().catch((err) => log.warn({ err }, 'background safePrune failed'))
 
   {
     let fallbackTimer: NodeJS.Timeout | undefined
@@ -247,7 +249,7 @@ async function main() {
     }
   }
 
-  await safeRatePrune()
+  safeRatePrune().catch((err) => log.warn({ err }, 'background safeRatePrune failed'))
 
   {
     let rateRetentionQueue: ReturnType<typeof createRateRetentionQueue> | undefined
@@ -306,7 +308,7 @@ async function main() {
     }
   }
 
-  await safeMaintainPartitions()
+  safeMaintainPartitions().catch((err) => log.warn({ err }, 'background safeMaintainPartitions failed'))
 
   {
     let partitionQueue: ReturnType<typeof createPricePointsPartitionQueue> | undefined
