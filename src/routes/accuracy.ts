@@ -26,10 +26,7 @@ export async function registerAccuracyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const parsed = AccuracyQuerySchema.safeParse(req.query)
       if (!parsed.success) {
-        return reply.status(400).send({
-          error: 'INVALID_QUERY',
-          details: formatValidationError(parsed.error),
-        })
+        return reply.status(400).send(formatValidationError(parsed.error))
       }
 
       const network = ((req as any).network ?? parsed.data.network ?? activeNetwork) as NetworkName

@@ -185,6 +185,7 @@ the committed table differs from a fresh generation.
 | Is this stablecoin still holding its peg? | `GET /v1/pegs` | `GET /pegs?network=testnet` |
 | How much of the market can Lens actually see? | `GET /v1/coverage` | `GET /coverage?network=testnet` |
 | For one asset, which venues is Lens watching and how much do they cover? | `GET /v1/coverage/:asset` | `GET /coverage/XLM?network=testnet` |
+| How accurate were Lens routing and price predictions compared to realised trades? | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM&window=1440&network=testnet` |
 | What are the historical OHLCV candlestick bars for a trading pair? | `GET /v1/candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` |
 | What were the historical price buckets for a pair over a recent window? | `GET /v1/price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` |
 | Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /v1/prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` |
@@ -205,7 +206,6 @@ the committed table differs from a fresh generation.
 | How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` |
 | How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` |
 | How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` |
-| How accurate were Lens routing and price predictions compared to realised trades? | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:XLM&window=1440&network=testnet` |
 <!-- QUESTION_INDEX_END -->
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is

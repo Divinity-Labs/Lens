@@ -1,6 +1,10 @@
 import { prisma } from '../db'
 import type { NetworkName } from '../config'
 
+export const MIN_ACCURACY_SAMPLES = 5
+export const MAX_ACCURACY_ROWS = 5000
+const QUOTE_MATCH_WINDOW_MS = 15 * 60 * 1000
+
 export interface RecordQuoteParams {
   network: NetworkName
   pairKey: string
@@ -76,17 +80,72 @@ export async function recordRealisedExecution(params: RecordExecutionParams) {
   })
 }
 
+export async function recordObservedExecutionFromIngest(params: {
+  network: NetworkName
+  pairKey: string
+  venue: string
+  realisedPrice: number
+  txHash?: string
+  timestamp?: Date
+}) {
+  if (!Number.isFinite(params.realisedPrice) || params.realisedPrice <= 0) return null
+
+  const observedAt = params.timestamp ?? new Date()
+  const cutoff = new Date(observedAt.getTime() - QUOTE_MATCH_WINDOW_MS)
+
+  const recentQuote = await prisma.recommendationQuote.findFirst({
+    where: {
+      network: params.network,
+      pairKey: params.pairKey,
+      recommendedVenue: params.venue,
+      timestamp: {
+        gte: cutoff,
+        lte: observedAt,
+      },
+    },
+    orderBy: { timestamp: 'desc' },
+  })
+
+  if (!recentQuote) return null
+
+  const predictedPrice = Number(recentQuote.predictedPrice)
+  const realisedSlippage =
+    predictedPrice > 0
+      ? Math.max(0, ((predictedPrice - params.realisedPrice) / predictedPrice) * 100)
+      : undefined
+
+  return recordRealisedExecution({
+    network: params.network,
+    pairKey: params.pairKey,
+    venue: params.venue,
+    realisedPrice: params.realisedPrice,
+    realisedSlippage,
+    quoteId: recentQuote.id,
+    txHash: params.txHash,
+    timestamp: observedAt,
+  })
+}
+
 export async function getAccuracyReport(options: {
   network: NetworkName
   pairKey?: string
   venue?: string
   windowMinutes?: number
+  minSamples?: number
+  maxRows?: number
 }): Promise<VenuePairAccuracyReport[]> {
-  const { network, pairKey, venue, windowMinutes = 1440 } = options
+  const {
+    network,
+    pairKey,
+    venue,
+    windowMinutes = 1440,
+    minSamples = MIN_ACCURACY_SAMPLES,
+    maxRows = MAX_ACCURACY_ROWS,
+  } = options
   const since = new Date(Date.now() - windowMinutes * 60 * 1000)
 
-  // Fetch executions with their matched prediction quote or match against the most recent quote
-  const executions = await prisma.realisedTradeExecution.findMany({
+  // Fetch bounded recent executions with their matched prediction quote
+  const recentExecutions = await prisma.realisedTradeExecution.findMany({
     where: {
       network,
       ...(pairKey ? { pairKey } : {}),
@@ -96,8 +155,11 @@ export async function getAccuracyReport(options: {
     include: {
       quote: true,
     },
-    orderBy: { timestamp: 'asc' },
+    orderBy: { timestamp: 'desc' },
+    take: Math.min(Math.max(1, maxRows), MAX_ACCURACY_ROWS),
   })
+
+  const executions = [...recentExecutions].reverse()
 
   // Group by pairKey and venue
   const groups = new Map<string, typeof executions>()
@@ -155,7 +217,7 @@ export async function getAccuracyReport(options: {
       }
     }
 
-    if (validPairs.length === 0) {
+    if (validPairs.length < minSamples) {
       reports.push({
         network,
         pairKey: groupPair,
@@ -168,7 +230,7 @@ export async function getAccuracyReport(options: {
           errorBars: null,
         },
         provenance: {
-          sampleCount: 0,
+          sampleCount: validPairs.length,
           venues: [groupVenue],
           oldestSample: sampleList[0]?.timestamp.toISOString() ?? null,
           newestSample: sampleList[sampleList.length - 1]?.timestamp.toISOString() ?? null,

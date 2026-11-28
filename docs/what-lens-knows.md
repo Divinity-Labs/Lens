@@ -16,19 +16,19 @@ A developer arriving at Lens does not browse by HTTP verb or path parameter. The
 2. **Market Overview & Liquidity Pools (Steps 7–17)**:
    Having evaluated immediate execution, the developer surveys market breadth: *"Which trading pairs are tracked?"* (`/pairs`), *"How do I track a new asset?"* (`POST /pairs`), *"Which AMM pools exist and what are their reserves?"* (`/pools`), and *"Where is cross-venue volume concentrated?"* (`/volumes/:asset`, `/venues`). Totals and one-request overviews answer the same question at the level of the whole network (`/tvl`, `/snapshot`), and lending venues answer what capital earns or costs (`/rates`, `/rates/:asset`).
 
-3. **Comparative Analytics & Market Quality (Steps 18–53)**:
+3. **Comparative Analytics & Market Quality (Steps 18–33)**:
    Here Lens answers analytical questions that raw Horizon endpoints cannot: *"Which venue has the tightest bid-ask spread?"* (`/spreads/:asset`), *"Which pairs are top gainers or most liquid today?"* (`/screener`, `/movers`), *"Is a pegged stablecoin holding its target price?"* (`/benchmark/:asset`, `/pegs`), and *"How do Lens prices compare to external oracles?"* (`/compare/:asset`, plus its window statistics and history). Then the questions about trust in the data itself: whether venues disagree and which is the outlier (`/dispersion`), whether on-chain trades rich or cheap to the centralised market (`/premium/:assetA/:assetB`), how much of the market is actually observed (`/coverage`), and whether a basket is genuinely diversified (`/basket`, `/correlation`).
 
-4. **Historical Trends & Robust Averages (Steps 33–37)**:
+4. **Historical Trends & Robust Averages (Steps 34–38)**:
    Developers building charting UIs, backtesting trading models, or writing smart contracts need temporal data: *"Can I get OHLCV candlesticks?"* (`/candles/:assetA/:assetB`), *"What were recent rolling price buckets?"* (`/price/:assetA/:assetB/history`), *"Where can I query raw 1-minute historical snapshots or export CSV?"* (`/prices/history`), and *"What is the manipulation-resistant TWAP or VWAP for on-chain settlement?"* (`/price/twap/...`, `/price/vwap/...`).
 
-5. **Multi-Query & Streaming (Steps 38–39)**:
+5. **Multi-Query & Streaming (Steps 39–40)**:
    For complex web apps and trading bots: *"How do I fetch multiple prices and routes in a single request or initiate WebSocket subscriptions?"* (`GET /graphql`, `POST /graphql`).
 
-6. **System Health & Venue Infrastructure (Steps 40–45)**:
+6. **System Health & Venue Infrastructure (Steps 41–46)**:
    Operational confidence before going live: *"Is the indexer lagging and what is the latest ledger?"* (`/status`), *"Which venue adapters are active and healthy?"* (`/venues/registry`), the two probes an orchestrator needs to tell a live process from a ready one (`/live`, `/ready`), and *"What is my API key quota?"* (`/usage`, `/usage/me`).
 
-7. **Automation, Discovery & Payments (Steps 46–52)**:
+7. **Automation, Discovery & Payments (Steps 47–53)**:
    Production integration and economic rails: *"What payable resources are discoverable via x402 Bazaar?"* (`/discovery/resources`), *"Can I find the right endpoint by describing what I want?"* (`/discovery/search`), *"How can my application receive push alerts on price thresholds?"* (`POST /webhooks`, `DELETE /webhooks/:id`), and *"How do x402 micro-payments verify and settle?"* (`/supported`, `/verify`, `/settle`).
 
 ---
@@ -69,27 +69,27 @@ A developer arriving at Lens does not browse by HTTP verb or path parameter. The
 | 30 | Is this stablecoin still holding its peg? | `GET /v1/pegs` | `GET /pegs?network=testnet` | Comparative Analytics & Market Quality |
 | 31 | How much of the market can Lens actually see? | `GET /v1/coverage` | `GET /coverage?network=testnet` | Comparative Analytics & Market Quality |
 | 32 | For one asset, which venues is Lens watching and how much do they cover? | `GET /v1/coverage/:asset` | `GET /coverage/XLM?network=testnet` | Comparative Analytics & Market Quality |
-| 33 | What are the historical OHLCV candlestick bars for a trading pair? | `GET /v1/candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` | Historical Trends & Robust Averages |
-| 34 | What were the historical price buckets for a pair over a recent window? | `GET /v1/price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` | Historical Trends & Robust Averages |
-| 35 | Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /v1/prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` | Historical Trends & Robust Averages |
-| 36 | What is the manipulation-resistant time-weighted average price (TWAP) for settlement? | `GET /v1/price/twap/:assetA/:assetB` | `GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet` | Historical Trends & Robust Averages |
-| 37 | What is the volume-weighted average price (VWAP) across venues for a pair? | `GET /v1/price/vwap/:assetA/:assetB` | `GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet` | Historical Trends & Robust Averages |
-| 38 | How do I query multiple prices, routes, and analytics in a single GET request? | `GET /v1/graphql` | `GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D` | Multi-Query & Streaming |
-| 39 | How do I execute complex GraphQL operations or initiate WebSocket subscriptions? | `POST /v1/graphql` | `POST /graphql` | Multi-Query & Streaming |
-| 40 | Is the Lens indexer healthy, up to date, and what is the latest processed ledger? | `GET /v1/status` | `GET /status?network=testnet` | System Health & Venue Infrastructure |
-| 41 | Which venue adapters (order books, AMMs, oracles) are registered and live? | `GET /v1/venues/registry` | `GET /venues/registry?network=testnet` | System Health & Venue Infrastructure |
-| 42 | Is the service process alive at all? | `GET /v1/live` | `GET /live` | System Health & Venue Infrastructure |
-| 43 | Is it safe to send traffic yet, or are dependencies still starting? | `GET /v1/ready` | `GET /ready` | System Health & Venue Infrastructure |
-| 44 | How many requests have I made and what is my remaining API key quota? | `GET /v1/usage/me` | `GET /usage/me` | System Health & Venue Infrastructure |
-| 45 | How much of my API quota have I used? | `GET /v1/usage` | `GET /usage` | System Health & Venue Infrastructure |
-| 46 | What payable endpoints and datasets are discoverable in the x402 Bazaar catalog? | `GET /v1/discovery/resources` | `GET /discovery/resources?network=testnet` | Automation, Discovery & Payments |
-| 47 | Can I find the right endpoint by describing what I want in plain language? | `GET /v1/discovery/search` | `GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5` | Automation, Discovery & Payments |
-| 48 | Which payment schemes and token mechanisms does this x402 facilitator support? | `GET /v1/supported` | `GET /supported` | Automation, Discovery & Payments |
-| 49 | How do I verify a signed x402 payment payload before fulfilling a service? | `POST /v1/verify` | `POST /verify` | Automation, Discovery & Payments |
-| 50 | How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` | Automation, Discovery & Payments |
-| 51 | How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` | Automation, Discovery & Payments |
-| 52 | How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` | Automation, Discovery & Payments |
-| 53 | How accurate were Lens routing and price predictions compared to realised trades? | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:XLM&window=1440&network=testnet` | Comparative Analytics & Market Quality |
+| 33 | How accurate were Lens routing and price predictions compared to realised trades? | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM&window=1440&network=testnet` | Comparative Analytics & Market Quality |
+| 34 | What are the historical OHLCV candlestick bars for a trading pair? | `GET /v1/candles/:assetA/:assetB` | `GET /candles/XLM/USDC?interval=1h&network=testnet` | Historical Trends & Robust Averages |
+| 35 | What were the historical price buckets for a pair over a recent window? | `GET /v1/price/:assetA/:assetB/history` | `GET /price/XLM/USDC/history?window=1h&network=testnet` | Historical Trends & Robust Averages |
+| 36 | Where can I query raw 1-minute historical snapshots or export them as CSV? | `GET /v1/prices/history` | `GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet` | Historical Trends & Robust Averages |
+| 37 | What is the manipulation-resistant time-weighted average price (TWAP) for settlement? | `GET /v1/price/twap/:assetA/:assetB` | `GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet` | Historical Trends & Robust Averages |
+| 38 | What is the volume-weighted average price (VWAP) across venues for a pair? | `GET /v1/price/vwap/:assetA/:assetB` | `GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet` | Historical Trends & Robust Averages |
+| 39 | How do I query multiple prices, routes, and analytics in a single GET request? | `GET /v1/graphql` | `GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D` | Multi-Query & Streaming |
+| 40 | How do I execute complex GraphQL operations or initiate WebSocket subscriptions? | `POST /v1/graphql` | `POST /graphql` | Multi-Query & Streaming |
+| 41 | Is the Lens indexer healthy, up to date, and what is the latest processed ledger? | `GET /v1/status` | `GET /status?network=testnet` | System Health & Venue Infrastructure |
+| 42 | Which venue adapters (order books, AMMs, oracles) are registered and live? | `GET /v1/venues/registry` | `GET /venues/registry?network=testnet` | System Health & Venue Infrastructure |
+| 43 | Is the service process alive at all? | `GET /v1/live` | `GET /live` | System Health & Venue Infrastructure |
+| 44 | Is it safe to send traffic yet, or are dependencies still starting? | `GET /v1/ready` | `GET /ready` | System Health & Venue Infrastructure |
+| 45 | How many requests have I made and what is my remaining API key quota? | `GET /v1/usage/me` | `GET /usage/me` | System Health & Venue Infrastructure |
+| 46 | How much of my API quota have I used? | `GET /v1/usage` | `GET /usage` | System Health & Venue Infrastructure |
+| 47 | What payable endpoints and datasets are discoverable in the x402 Bazaar catalog? | `GET /v1/discovery/resources` | `GET /discovery/resources?network=testnet` | Automation, Discovery & Payments |
+| 48 | Can I find the right endpoint by describing what I want in plain language? | `GET /v1/discovery/search` | `GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5` | Automation, Discovery & Payments |
+| 49 | Which payment schemes and token mechanisms does this x402 facilitator support? | `GET /v1/supported` | `GET /supported` | Automation, Discovery & Payments |
+| 50 | How do I verify a signed x402 payment payload before fulfilling a service? | `POST /v1/verify` | `POST /verify` | Automation, Discovery & Payments |
+| 51 | How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` | Automation, Discovery & Payments |
+| 52 | How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` | Automation, Discovery & Payments |
+| 53 | How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` | Automation, Discovery & Payments |
 
 ---
 
@@ -141,7 +141,7 @@ A developer arriving at Lens does not browse by HTTP verb or path parameter. The
 | **Is this stablecoin still holding its peg?** | `GET /v1/pegs` | `GET /pegs?network=testnet` | Get peg deviation and window statistics for all configured pegged assets |
 | **How much of the market can Lens actually see?** | `GET /v1/coverage` | `GET /coverage?network=testnet` | Get overall market coverage ratio and cross-venue activity |
 | **For one asset, which venues is Lens watching and how much do they cover?** | `GET /v1/coverage/:asset` | `GET /coverage/XLM?network=testnet` | Get market coverage ratio and venue breakdown for a specific asset |
-| **How accurate were Lens routing and price predictions compared to realised trades?** | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:XLM&window=1440&network=testnet` | Get recommendation accuracy reports comparing quotes to realised executions |
+| **How accurate were Lens routing and price predictions compared to realised trades?** | `GET /v1/accuracy` | `GET /accuracy?pair=USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM&window=1440&network=testnet` | Get recommendation accuracy reports comparing quotes to realised executions |
 
 ### Historical Trends & Robust Averages
 

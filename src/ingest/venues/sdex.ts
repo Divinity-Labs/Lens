@@ -3,6 +3,8 @@ import { trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '
 import { config, activeNetwork, type NetworkName } from '../../config'
 import { getHorizonServer } from '../../network/clients'
 import { upsertPricePoints, getIndexerState, setIndexerCursor } from '../../db'
+import { makePairKey } from '../../aggregator/bestRoute'
+import { recordObservedExecutionFromIngest } from '../../services/accuracy'
 import { resolvePageLedgers } from '../toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
@@ -181,6 +183,16 @@ export async function writeSdexPricePoints(
       currentPrice,
       network,
     }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
+
+    const canonicalPairKey = makePairKey(pair.assetA, pair.assetB)
+    void recordObservedExecutionFromIngest({
+      network,
+      pairKey: canonicalPairKey,
+      venue: 'SDEX',
+      realisedPrice: currentPrice,
+      txHash: typeof (latest as any).txHash === 'string' ? (latest as any).txHash : undefined,
+      timestamp: tradeTime,
+    }).catch((err) => log.debug({ pair: pair.pairKey, err }, 'failed to record realised execution'))
   }
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)

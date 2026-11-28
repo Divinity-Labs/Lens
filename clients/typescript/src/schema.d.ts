@@ -4568,7 +4568,7 @@ export interface operations {
     getAccuracy: {
         parameters: {
             query?: {
-                /** @description Filter by trading pair key (e.g. USDC:XLM) */
+                /** @description Filter by canonical trading pair key (e.g. USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM) */
                 pair?: string;
                 /** @description Filter by execution venue (e.g. SDEX, AMM) */
                 venue?: string;
@@ -4604,6 +4604,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        code: string;
                     };
                 };
             };

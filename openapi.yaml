@@ -50,7 +50,7 @@ paths:
       summary: List registered venues and their network liveness
       x-question: "Which venue adapters (order books, AMMs, oracles) are registered and live?"
       x-example: "GET /venues/registry?network=testnet"
-      x-order: 41
+      x-order: 42
       x-category: "System Health & Venue Infrastructure"
       description: Returns each registered venue adapter for the selected network. Liveness is based on recent price writes where available; on-demand adapters without persisted price points report unknown.
       security: []
@@ -143,7 +143,7 @@ paths:
     get:
       x-question: "Is the service process alive at all?"
       x-example: "GET /live"
-      x-order: 42
+      x-order: 43
       x-category: "System Health & Venue Infrastructure"
       operationId: getLive
       summary: Liveness probe
@@ -216,7 +216,7 @@ paths:
     get:
       x-question: "Is it safe to send traffic yet, or are dependencies still starting?"
       x-example: "GET /ready"
-      x-order: 43
+      x-order: 44
       x-category: "System Health & Venue Infrastructure"
       operationId: getReady
       summary: Readiness probe
@@ -280,7 +280,7 @@ paths:
       summary: Get API status and indexer state
       x-question: "Is the Lens indexer healthy, up to date, and what is the latest processed ledger?"
       x-example: "GET /status?network=testnet"
-      x-order: 40
+      x-order: 41
       x-category: "System Health & Venue Infrastructure"
       security: []
       parameters:
@@ -706,7 +706,7 @@ paths:
         rows were summed in; values are narrowed to JSON numbers at the edge.
       x-question: "What were the historical price buckets for a pair over a recent window?"
       x-example: "GET /price/XLM/USDC/history?window=1h&network=testnet"
-      x-order: 34
+      x-order: 35
       x-category: "Historical Trends & Robust Averages"
       security: []
       parameters:
@@ -895,7 +895,7 @@ paths:
         time ascending, default limit 500, maximum 5000.
       x-question: "What are the historical OHLCV candlestick bars for a trading pair?"
       x-example: "GET /candles/XLM/USDC?interval=1h&network=testnet"
-      x-order: 33
+      x-order: 34
       x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
@@ -1019,7 +1019,7 @@ paths:
       summary: Get historical 1-minute price snapshots
       x-question: "Where can I query raw 1-minute historical snapshots or export them as CSV?"
       x-example: "GET /prices/history?pair=XLM/USDC&interval=1m&network=testnet"
-      x-order: 35
+      x-order: 36
       x-category: "Historical Trends & Robust Averages"
       description: >-
         Returns minute-resolution price snapshots for a pair over [from, to],
@@ -1458,7 +1458,7 @@ paths:
       summary: Get a manipulation-resistant time-weighted average price
       x-question: "What is the manipulation-resistant time-weighted average price (TWAP) for settlement?"
       x-example: "GET /price/twap/XLM/USDC?window=60&sampleInterval=60&method=iqr&network=testnet"
-      x-order: 36
+      x-order: 37
       x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
@@ -1534,7 +1534,7 @@ paths:
       summary: Get a volume-weighted average price
       x-question: "What is the volume-weighted average price (VWAP) across venues for a pair?"
       x-example: "GET /price/vwap/XLM/USDC?window=60&source=SDEX&method=iqr&network=testnet"
-      x-order: 37
+      x-order: 38
       x-category: "Historical Trends & Robust Averages"
       security:
         - x402: []
@@ -2482,7 +2482,7 @@ paths:
       summary: Browse the x402 Bazaar catalog of discoverable resources
       x-question: "What payable endpoints and datasets are discoverable in the x402 Bazaar catalog?"
       x-example: "GET /discovery/resources?network=testnet"
-      x-order: 46
+      x-order: 47
       x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
@@ -2544,7 +2544,7 @@ paths:
     get:
       x-question: "Can I find the right endpoint by describing what I want in plain language?"
       x-example: "GET /discovery/search?q=price%20of%20XLM%20in%20dollars&limit=5"
-      x-order: 47
+      x-order: 48
       x-category: "Automation, Discovery & Payments"
       operationId: searchDiscoveryResources
       summary: Natural language search with ranking and quality evaluation for discoverable resources
@@ -2633,7 +2633,7 @@ paths:
       summary: Subscribe to a price-threshold webhook
       x-question: "How can my application receive push alerts when a price crosses a threshold?"
       x-example: "POST /webhooks"
-      x-order: 51
+      x-order: 52
       x-category: "Automation, Discovery & Payments"
       description: >-
         Registers an HTTPS endpoint to be called when the pair's price crosses
@@ -2681,7 +2681,7 @@ paths:
       summary: Delete a webhook subscription
       x-question: "How do I cancel an existing price threshold alert webhook?"
       x-example: "DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet"
-      x-order: 52
+      x-order: 53
       x-category: "Automation, Discovery & Payments"
       security: []
       parameters:
@@ -2702,7 +2702,7 @@ paths:
       summary: Get usage and quota for the calling API key
       x-question: "How many requests have I made and what is my remaining API key quota?"
       x-example: "GET /usage/me"
-      x-order: 44
+      x-order: 45
       x-category: "System Health & Venue Infrastructure"
       security:
         - apiKeyAuth: []
@@ -2725,7 +2725,7 @@ paths:
     get:
       x-question: "How much of my API quota have I used?"
       x-example: "GET /usage"
-      x-order: 45
+      x-order: 46
       x-category: "System Health & Venue Infrastructure"
       operationId: getCallerUsage
       summary: Get usage and quota for the calling API key (alias for /usage/me)
@@ -2752,7 +2752,7 @@ paths:
       summary: List the payment kinds and extensions this facilitator supports
       x-question: "Which payment schemes and token mechanisms does this x402 facilitator support?"
       x-example: "GET /supported"
-      x-order: 48
+      x-order: 49
       x-category: "Automation, Discovery & Payments"
       security: []
       responses:
@@ -2772,7 +2772,7 @@ paths:
       summary: Verify an x402 payment payload
       x-question: "How do I verify a signed x402 payment payload before fulfilling a service?"
       x-example: "POST /verify"
-      x-order: 49
+      x-order: 50
       x-category: "Automation, Discovery & Payments"
       security: []
       requestBody:
@@ -2807,7 +2807,7 @@ paths:
       summary: Settle an x402 payment (idempotent)
       x-question: "How do I submit and settle an x402 payment on the Stellar network?"
       x-example: "POST /settle"
-      x-order: 50
+      x-order: 51
       x-category: "Automation, Discovery & Payments"
       description: >-
         Submits the payment transaction and records the attempt keyed on its
@@ -2840,7 +2840,7 @@ paths:
       summary: Execute a GraphQL query over HTTP GET
       x-question: "How do I query multiple prices, routes, and analytics in a single GET request?"
       x-example: "GET /graphql?query=%7Bprice%28assetA%3A%22XLM%22%2CassetB%3A%22USDC%22%29%7Bprice%7D%7D"
-      x-order: 38
+      x-order: 39
       x-category: "Multi-Query & Streaming"
       security: []
       parameters:
@@ -2875,7 +2875,7 @@ paths:
       summary: Execute a GraphQL query, mutation or subscription handshake
       x-question: "How do I execute complex GraphQL operations or initiate WebSocket subscriptions?"
       x-example: "POST /graphql"
-      x-order: 39
+      x-order: 40
       x-category: "Multi-Query & Streaming"
       security:
         - x402: []
@@ -3033,8 +3033,8 @@ paths:
   /v1/accuracy:
     get:
       x-question: "How accurate were Lens routing and price predictions compared to realised trades?"
-      x-example: "GET /accuracy?pair=USDC:XLM&window=1440&network=testnet"
-      x-order: 53
+      x-example: "GET /accuracy?pair=USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM&window=1440&network=testnet"
+      x-order: 33
       x-category: "Comparative Analytics & Market Quality"
       operationId: getAccuracy
       summary: Get recommendation accuracy reports comparing quotes to realised executions
@@ -3046,7 +3046,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Filter by trading pair key (e.g. USDC:XLM)
+          description: Filter by canonical trading pair key (e.g. USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/XLM)
         - name: venue
           in: query
           required: false
@@ -3084,9 +3084,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [error]
+                required: [error, code]
                 properties:
                   error:
+                    type: string
+                  code:
                     type: string
 
 components:
