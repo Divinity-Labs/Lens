@@ -31,7 +31,7 @@ export interface AggregatedPrice {
   vwap5m: number | string
   vwap1h: number | string
   vwap24h: number | string
-  priceChange24h: number | string
+  priceChange24h: number | string | null
   lastUpdated: Date
   sources: number
   confidence: 'high' | 'medium' | 'low' | 'unknown'

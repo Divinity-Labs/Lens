@@ -5495,6 +5495,8 @@
             ]
           },
           "priceChange24h": {
+            "nullable": true,
+            "description": "24-hour percentage change vs a reference price observed 24 to 26 hours ago, or null when no price was observed in that range.",
             "oneOf": [
               {
                 "type": "number"

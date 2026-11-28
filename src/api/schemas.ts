@@ -219,7 +219,7 @@ export const priceResponseSchema = {
     vwap5m: { type: ['number', 'string'] },
     vwap1h: { type: ['number', 'string'] },
     vwap24h: { type: ['number', 'string'] },
-    priceChange24h: { type: ['number', 'string'] },
+    priceChange24h: { type: ['number', 'string', 'null'] },
     sources: { type: 'integer' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
     lastTradeAgeSeconds: { type: ['integer', 'null'] },
