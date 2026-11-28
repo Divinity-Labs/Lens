@@ -9,7 +9,7 @@ import { config, getNetworkConfig, type NetworkName } from './config'
 import { getEnabledNetworks } from './network/enabledNetworks'
 import { createLogger } from './logger'
 import { redis } from './redis'
-import { pgPool } from './db'
+import { checkDatabaseReachable, pgPool } from './db'
 import { assertSchemaValid } from './db/schemaVerify'
 import { applyMigrations } from './db/migrate'
 import { buildApp } from './app'
@@ -21,6 +21,8 @@ import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } 
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { createVenueReconciliationQueue, startVenueReconciliationWorker, scheduleVenueReconciliation, startInProcessVenueReconciliation } from './jobs/venueReconciliation'
 import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
+import { POOL_SNAPSHOT_RETENTION_ENABLED, poolSnapshotRetentionJob } from './jobs/poolSnapshotRetention'
+import { startScheduledJob } from './jobs/scheduledJob'
 import {
   createPricePointsPartitionQueue,
   startPricePointsPartitionWorker,
@@ -74,7 +76,12 @@ async function main() {
     log.warn({ err }, 'redis unavailable, continuing without cache')
   }
 
-  await pgPool.connect()
+  try {
+    await checkDatabaseReachable()
+  } catch (err) {
+    log.error({ err }, 'postgresql unreachable')
+    throw err
+  }
   log.info('postgresql connected')
 
   // Verify database schema matches expected tables and columns (#352)
@@ -141,6 +148,11 @@ async function main() {
   // schedule. If Redis is away, fall back to a plain timer that does the same
   // work in-process.
   const safePrune = async () => {
+    // This fallback run is metered the same way as the queue worker:
+    // pruneAllNetworks() records each network's run through runJob()
+    // (src/jobs/jobMetrics.ts), so no second wrapper here — it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const counts = await pruneAllNetworks()
       for (const [network, pruned] of Object.entries(counts)) {
@@ -219,6 +231,10 @@ async function main() {
 
   // ── Lending rate retention ────────────────────────────────────────────────
   const safeRatePrune = async () => {
+    // Metered per network inside pruneAllRateNetworks() (src/jobs/jobMetrics.ts),
+    // exactly as for the queue worker — no second wrapper here, it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const counts = await pruneAllRateNetworks()
       for (const [network, pruned] of Object.entries(counts)) {
@@ -248,12 +264,32 @@ async function main() {
     }
   }
 
+  // ── Pool snapshot retention (opt-in) ──────────────────────────────────────
+  // Off unless POOL_SNAPSHOT_RETENTION_ENABLED=true: the prune deletes rows,
+  // cannot be undone, and pool_snapshots has never been pruned before (#689).
+  //
+  // Not awaited: startup must not wait on a prune or on Redis. The first run
+  // is delayed, and each run drains in paused, capped batches, so a large
+  // backlog is worked off over several hourly runs in the background while
+  // the ingesters start and /ready goes healthy as usual.
+  if (POOL_SNAPSHOT_RETENTION_ENABLED) {
+    void startScheduledJob(poolSnapshotRetentionJob).catch(err => {
+      log.error({ err }, 'pool snapshot retention could not be scheduled')
+    })
+  } else {
+    log.info('pool snapshot retention disabled; set POOL_SNAPSHOT_RETENTION_ENABLED=true to prune pool_snapshots')
+  }
+
   // ── Price points partition maintenance & retention ────────────────────────
   // price_points is range-partitioned by timestamp. We pre-create future partitions
   // ahead of need so ingesters never fail on unmapped timestamp ranges. Dropping
   // expired partitions is opt-in via PRICE_POINTS_DROP_EXPIRED=true (default: off)
   // to safeguard raw historical records until rollups are complete (#231).
   const safeMaintainPartitions = async () => {
+    // Metered inside runPricePointsMaintenance() (src/jobs/jobMetrics.ts),
+    // exactly as for the queue worker — no second wrapper here, it would
+    // double-count. The catch stays because a timer has no BullMQ to
+    // report the failure to; the run is already counted as a failure.
     try {
       const result = await runPricePointsMaintenance()
       if (result.created.length > 0) {
@@ -356,10 +392,13 @@ async function main() {
     }
   }
 
-  log.info(
-    { count: getActivePairs().length, pairs: getActivePairs().map(p => p.pairKey) },
-    'watching pairs'
-  )
+  for (const network of enabledNetworks) {
+    const pairs = getActivePairs(network)
+    log.info(
+      { network, count: pairs.length, pairs: pairs.map(p => p.pairKey) },
+      'watching pairs'
+    )
+  }
 
   // ── Ready ──────────────────────────────────────────────────────────────────
   // Last, and only once every ingester above is running. `app.listen()` happens
