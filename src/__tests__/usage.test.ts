@@ -7,6 +7,9 @@ vi.mock('../db', () => ({
       findUnique: vi.fn(),
       findMany: vi.fn(),
     },
+    adminCredential: {
+      findUnique: vi.fn(),
+    },
   },
 }))
 
@@ -25,9 +28,11 @@ import { registerUsageRoutes } from '../api/usage'
 const mockFindUnique = prisma.apiKey.findUnique as any
 const mockFindMany = prisma.apiKey.findMany as any
 const mockRedisGet = redis.get as any
+const mockAdminFindUnique = prisma.adminCredential.findUnique as any
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockAdminFindUnique.mockResolvedValue(null)
 })
 
 const ORIGINAL_ADMIN_TOKEN = process.env.ADMIN_TOKEN
@@ -67,7 +72,7 @@ describe('usage endpoint', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/admin/usage/key-1',
-      headers: { 'x-admin-token': 'admin-secret' },
+      headers: { authorization: 'Bearer admin-secret' },
     })
 
     expect(res.statusCode).toBe(200)
@@ -102,7 +107,7 @@ describe('usage endpoint', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/admin/usage',
-      headers: { 'x-admin-token': 'admin-secret' },
+      headers: { authorization: 'Bearer admin-secret' },
     })
 
     expect(res.statusCode).toBe(200)
