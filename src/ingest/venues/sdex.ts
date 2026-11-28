@@ -4,7 +4,6 @@ import { config, activeNetwork, type NetworkName } from '../../config'
 import { getHorizonServer } from '../../network/clients'
 import { upsertPricePoints, getIndexerState, setIndexerCursor } from '../../db'
 import { resolvePageLedgers } from '../toid'
-import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
@@ -158,7 +157,7 @@ export async function writeSdexPricePoints(
 
   if (acceptedPoints.length > 0) {
     const latest = acceptedPoints[acceptedPoints.length - 1]
-    const { previousPrice, currentPrice } = setLastPrice('SDEX', network, trackerKey, latest.price)
+    const { currentPrice } = setLastPrice('SDEX', network, trackerKey, latest.price)
 
     trades_ingested_total.inc({ pair: pair.pairKey, network }, acceptedPoints.length)
     const tradeTime = latest.sourceTime ?? latest.observedAt ?? latest.timestamp
@@ -174,13 +173,7 @@ export async function writeSdexPricePoints(
       network,
     })
 
-    dispatchPriceUpdate({
-      assetA: pair.assetA.code,
-      assetB: pair.assetB.code,
-      previousPrice,
-      currentPrice,
-      network,
-    }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
+    // #775: no per-venue alert dispatch — see src/alerts/evaluator.ts.
   }
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)

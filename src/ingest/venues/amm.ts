@@ -2,7 +2,6 @@ import { amm_snapshots_total, trades_ingested_total, last_trade_timestamp, markI
 import { config, activeNetwork, getNetworkConfig, type NetworkName } from '../../config'
 import { upsertPricePoints, getIndexerState, setIndexerCursor, prisma } from '../../db'
 import { resolvePageLedgers } from '../toid'
-import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
 import type { WatchedPair } from '../../types'
@@ -171,7 +170,7 @@ export async function snapshotPool(
 
       if (acceptedPoints.length > 0) {
         const trackerKey = pair.pairKey
-        const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
+        setLastPrice('AMM', network, trackerKey, spotPrice)
 
         publishPriceUpdate({
           pair: pair.pairKey,
@@ -180,13 +179,7 @@ export async function snapshotPool(
           network,
         })
 
-        dispatchPriceUpdate({
-          assetA: pair.assetA.code,
-          assetB: pair.assetB.code,
-          previousPrice,
-          currentPrice: spotPrice,
-          network,
-        }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+        // #775: no per-venue alert dispatch — see src/alerts/evaluator.ts.
       }
     }
   } catch (err) {
@@ -273,7 +266,7 @@ export async function ingestPoolTrades(
 
     if (acceptedPoints.length > 0) {
       const latest = acceptedPoints[acceptedPoints.length - 1]
-      const { previousPrice, currentPrice } = setLastPrice(
+      const { currentPrice } = setLastPrice(
         'AMM',
         network,
         trackerKey,
@@ -294,13 +287,7 @@ export async function ingestPoolTrades(
         network,
       })
 
-      dispatchPriceUpdate({
-        assetA: pair.assetA.code,
-        assetB: pair.assetB.code,
-        previousPrice,
-        currentPrice,
-        network,
-      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
+      // #775: no per-venue alert dispatch — see src/alerts/evaluator.ts.
     }
 
     const lastRecord = records[records.length - 1]

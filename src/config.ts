@@ -715,6 +715,15 @@ const globalConfig = {
     cooldownSeconds: parseInt(process.env.RECONCILIATION_ALERT_COOLDOWN_SECONDS ?? '300', 10),
     pairThresholds: parsePairThresholds(process.env.RECONCILIATION_PAIR_THRESHOLDS),
   },
+  alerts: {
+    // #775: threshold webhooks are evaluated against the pair's aggregate
+    // price — the same value GET /price serves — on a short timer, never
+    // against a single venue's tick and never inline with ingestion. See
+    // docs/cookbook/alert-bot.md for the rule the three settings implement.
+    evaluationIntervalMs: parseInt(process.env.ALERT_EVALUATION_INTERVAL_MS ?? '15000', 10),
+    deadBandBps: parseInt(process.env.ALERT_DEAD_BAND_BPS ?? '10', 10),
+    cooldownSeconds: parseInt(process.env.ALERT_COOLDOWN_SECONDS ?? '300', 10),
+  },
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
     maxMissedPings: parseInt(process.env.WS_MAX_MISSED_PINGS ?? '2', 10),
@@ -832,6 +841,7 @@ export const config = {
   premium: globalConfig.premium,
   http:    globalConfig.http,
   reconciliation: globalConfig.reconciliation,
+  alerts:  globalConfig.alerts,
   ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,
@@ -841,4 +851,3 @@ export function getPairReconciliationThreshold(pairKey: string): number {
   const norm = pairKey.toUpperCase()
   return config.reconciliation.pairThresholds[norm] ?? config.reconciliation.thresholdPct
 }
-

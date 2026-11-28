@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
       poolSnapshot: {
         create: vi.fn(),
       },
+      alertPriceState: {
+        findUnique: vi.fn(),
+        upsert: vi.fn(),
+      },
     },
     upsertPricePoints: vi.fn().mockResolvedValue(undefined),
     // Synthetic paging tokens carry no TOID, so the ingesters fall back to
@@ -18,6 +22,9 @@ const mocks = vi.hoisted(() => ({
     setIndexerCursor: vi.fn().mockResolvedValue(undefined),
   },
   horizonCall: vi.fn(),
+  // #775: alerts are no longer dispatched by venue adapters, they are checked
+  // against the pair's aggregate price by the evaluator.
+  aggregate: vi.fn(),
 }))
 
 vi.mock('../db', () => ({
@@ -26,6 +33,18 @@ vi.mock('../db', () => ({
   getIndexerState: mocks.db.getIndexerState,
   setIndexerCursor: mocks.db.setIndexerCursor,
 }))
+
+vi.mock('../pairsRegistry', () => ({
+  getPairsForNetwork: () => [
+    {
+      pairKey: 'XLM-USD',
+      assetA: { code: 'XLM', issuer: null },
+      assetB: { code: 'USD', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+    },
+  ],
+}))
+
+vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: mocks.aggregate }))
 
 vi.mock('../network/clients', () => ({
   getHorizonServer: (_network: string) => ({
@@ -47,7 +66,8 @@ import { ingestPair as ingestSdexPair, _getLastPrice as getSdexLastPrice, _reset
 import { snapshotPool, ingestPoolTrades, _getLastPrice as getAmmLastPrice, _resetLastPrice as resetAmmLastPrice } from '../ingest/venues/amm'
 import { ingestPool as ingestSoroswapPool, _getLastPrice as getSoroswapLastPrice, _resetLastPrice as resetSoroswapLastPrice } from '../ingest/venues/soroswap'
 import { ingestAquariusPair, _getLastPrice as getAquariusLastPrice, _resetLastPrice as resetAquariusLastPrice } from '../ingest/venues/aquarius'
-import { dispatchPriceUpdate } from '../webhookDispatcher'
+import { dispatchPriceUpdate, resetAlertCooldown } from '../webhookDispatcher'
+import { evaluateAlertsOnce } from '../alerts/evaluator'
 import type { WatchedPair } from '../types'
 
 const mockPair: WatchedPair = {
@@ -99,6 +119,10 @@ describe('Dual-network alerts and price tracking (#188)', () => {
     resetAmmLastPrice()
     resetSoroswapLastPrice()
     resetAquariusLastPrice()
+    resetAlertCooldown()
+
+    mocks.db.prisma.alertPriceState.findUnique.mockResolvedValue(null)
+    mocks.db.prisma.alertPriceState.upsert.mockResolvedValue({} as any)
 
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response)
 
@@ -137,11 +161,22 @@ describe('Dual-network alerts and price tracking (#188)', () => {
       // Testnet lastPrice must still be 0.08, not overridden by mainnet
       expect(getSdexLastPrice('testnet', mockPair.pairKey)).toBe(0.08)
 
-      // ── STEP 3: Second trade on testnet at price 0.11 (crosses above 0.10 from 0.08) ─
+      // ── STEP 3: Second trade on testnet at price 0.11 ────────────────────────
       mocks.horizonCall.mockResolvedValueOnce({
         records: [makeTradeRecord('t-testnet-2', 11, 100)],
       })
       await ingestSdexPair(mockPair, 'testnet')
+
+      // #775: a venue tick no longer evaluates alerts — that fired one alert per
+      // venue for a single market move. The per-venue tracker is still the #188
+      // contract this suite guards, and it is still network-scoped.
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(getSdexLastPrice('testnet', mockPair.pairKey)).toBe(0.11)
+
+      // The pair-level evaluator is what fires: previous 0.08 -> aggregate 0.11.
+      mocks.db.prisma.alertPriceState.findUnique.mockResolvedValue({ price: '0.08' } as any)
+      mocks.aggregate.mockResolvedValue({ price: 0.11 })
+      await evaluateAlertsOnce('testnet')
 
       // Testnet crossed above threshold! ONLY testnet webhook should fire
       expect(global.fetch).toHaveBeenCalledOnce()
@@ -149,7 +184,6 @@ describe('Dual-network alerts and price tracking (#188)', () => {
       expect(calledUrl).toBe('https://testnet.example.com/webhook')
       const payload = JSON.parse(calledOpts.body)
       expect(payload.price).toBe(0.11)
-      expect(getSdexLastPrice('testnet', mockPair.pairKey)).toBe(0.11)
     })
   })
 

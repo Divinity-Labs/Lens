@@ -349,6 +349,23 @@ model Webhook {
   @@map("webhooks")
 }
 
+/// The price an alert evaluation last saw for a pair, one row per
+/// (network, pair). Threshold alerts are checked against the pair's aggregate
+/// price rather than each venue's (#775), so this is the pair-level "previous
+/// price" a crossing is detected from. It is persisted rather than kept in
+/// memory so a restart resumes from the last evaluated price instead of losing
+/// the crossing that happened meanwhile or inventing one by treating the first
+/// post-restart price as the previous price.
+model AlertPriceState {
+  pairKey   String   @map("pair_key")
+  network   String   @default("testnet")
+  price     Decimal  @db.Decimal(36, 18)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@id([network, pairKey])
+  @@map("alert_price_states")
+}
+
 /// Permanent webhook failures are retained for 30-day diagnosis only; replay is
 /// not automatic because a delayed alert may no longer describe the current price.
 model WebhookDeliveryFailure {

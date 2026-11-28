@@ -24,7 +24,6 @@ import { price_rejected_total } from '../../metrics'
 import { getRpcServer } from '../../network/clients'
 import { upsertPricePoints } from '../../db'
 import { markIngestSuccess } from '../../metrics'
-import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
 import { fetchWithTimeout } from '../../fetch'
@@ -406,7 +405,7 @@ export async function ingestPool(
 
     if (acceptedPoints.length > 0) {
       const trackerKey = pair.pairKey
-      const { previousPrice } = setLastPrice('Soroswap', network, trackerKey, spotPrice)
+      setLastPrice('Soroswap', network, trackerKey, spotPrice)
 
       publishPriceUpdate({
         pair: pair.pairKey,
@@ -415,13 +414,7 @@ export async function ingestPool(
         network,
       })
 
-      dispatchPriceUpdate({
-        assetA: pair.assetA.code,
-        assetB: pair.assetB.code,
-        previousPrice,
-        currentPrice: spotPrice,
-        network,
-      }).catch((err) => log.error({ pool: poolEntry.poolAddress, err }, 'webhook dispatch error'))
+      // #775: no per-venue alert dispatch — see src/alerts/evaluator.ts.
     }
 
     log.info(

@@ -1,7 +1,6 @@
 import { activeNetwork, type NetworkName } from '../../config'
 import { getActivePairs } from '../../pairsRegistry'
 import { upsertPricePoints } from '../../db'
-import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
 import { runCycleWithDeadline } from '../cycleDeadline'
@@ -70,7 +69,7 @@ export async function writeVenuePricePoints(
   if (acceptedPoints.length === 0) return
 
   const latest = acceptedPoints[acceptedPoints.length - 1]
-  const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
+  const { currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
 
   publishPriceUpdate({
     pair: pair.pairKey,
@@ -79,15 +78,10 @@ export async function writeVenuePricePoints(
     network,
   })
 
-  dispatchPriceUpdate({
-    assetA: pair.assetA.code,
-    assetB: pair.assetB.code,
-    previousPrice,
-    currentPrice,
-    network,
-  }).catch((err) =>
-    createLogger(`ingester:${venue.toLowerCase()}`).error({ err }, 'webhook dispatch error')
-  )
+  // #775: alerts are NOT dispatched from here. A venue tick is one venue's
+  // view of the pair, and checking thresholds against it fired one alert per
+  // venue for a single market move. `src/alerts/evaluator.ts` checks the
+  // pair's aggregate price on a timer instead.
 }
 
 // ── Sleep Helper ──────────────────────────────────────────────────────────────

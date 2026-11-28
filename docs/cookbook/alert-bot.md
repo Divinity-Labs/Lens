@@ -167,6 +167,51 @@ with `@x402/stellar`, base64-encode it, and pass it via `ALERT_BOT_PAYMENT`
 for how to produce that header. On testnet (the default), gating is off and
 no payment is needed.
 
+## How Lens evaluates server-side webhooks
+
+A webhook is a subscription to a **pair**, a threshold and a direction, so it is
+checked against one value: **the price of the pair**. That is the same aggregate
+`GET /price` serves (`getAggregatedPrice` — the 1h VWAP, falling back to the 24h
+VWAP and then AMM spot). It is never checked against a single venue's tick.
+
+The rule, in full:
+
+1. **One previous value per `(pair, network)`.** It is stored in the
+   `alert_price_states` table, not in memory, so a restart resumes from the
+   last price an evaluation saw. A crossing that happened while the process was
+   restarting is still detected; the first price after a restart is not treated
+   as a fresh baseline, so no crossing is invented either.
+2. **Evaluated on a timer, not inline with ingestion.** Venue adapters report
+   prices; a per-network evaluator reads the aggregate for every pair that has
+   webhooks once per `ALERT_EVALUATION_INTERVAL_MS` (default 15s) and compares
+   it with the stored value. A single market move therefore produces at most
+   one evaluation of the pair, however many venues and pools reported it — and
+   two pools of one pair sitting on either side of the threshold no longer fire
+   on every poll, because neither pool is looked at on its own.
+3. **A split market is judged on the aggregate.** If one venue stays below the
+   line and another above it, nothing fires until the price Lens serves for the
+   pair actually crosses.
+4. **A dead band stops a hovering price from firing repeatedly.** A crossing
+   only re-arms once the price has been at least `ALERT_DEAD_BAND_BPS`
+   (default 10 bps = 0.10%) on the other side of the threshold. Without it an
+   aggregate oscillating between 0.119 and 0.121 around 0.12 would cross on
+   every sample.
+5. **A cool-down caps delivery per webhook.** The same webhook is not delivered
+   twice inside `ALERT_COOLDOWN_SECONDS` (default 300s), even if the price does
+   leave the band and cross back in.
+6. **Testnet and mainnet are separate.** Webhooks are queried for one network,
+   pairs come from that network's registry, and the stored previous price is
+   keyed by network, so one chain's price can never fire the other's alert.
+
+The **first** observation of a pair on a network only records the price; it
+never alerts, because there is no previous price to have crossed from.
+
+Set `ALERT_EVALUATION_INTERVAL_MS`, `ALERT_DEAD_BAND_BPS` and
+`ALERT_COOLDOWN_SECONDS` in `.env` to tune this; they are documented in
+`.env.example`. The alert **body** is unchanged by all of the above — it is the
+same payload shown below, and it deliberately does not name a venue, because the
+price it reports is the pair's aggregate, not any one venue's.
+
 ## Server-side alternative: webhooks
 
 If you'd rather not keep a process connected, Lens can do the watching for

@@ -10,7 +10,7 @@ At startup, `verifyDatabaseSchema()` and `assertSchemaValid()` in `src/db/schema
 
 ## Table Inventory
 
-All 17 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, grouped by role. Every table except `webhook_delivery_failures` and `api_keys` carries a `network` column (`testnet` or `mainnet`) so queries, caches, and retention jobs isolate networks cleanly.
+All 18 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, grouped by role. Every table except `webhook_delivery_failures` and `api_keys` carries a `network` column (`testnet` or `mainnet`) so queries, caches, and retention jobs isolate networks cleanly.
 
 ### Core Time-Series & Ingestion
 
@@ -38,6 +38,7 @@ All 17 tables mapped in `prisma/schema.prisma` (`@@map`) are listed below, group
 | Table | Row Meaning | Writers | Readers | PK & Indexes | `network` Scoped | Retention / Partitioning |
 | --- | --- | --- | --- | --- | --- | --- |
 | `webhooks` | Registered alert webhook subscription (`asset_a`, `asset_b`, `target_price`, `condition`, `webhook_url`) | `src/routes/webhooks.ts` | `src/webhookDispatcher.ts`, `src/alerts/dispersion.ts` | PK `id` (`uuid`); Index `(network, asset_a, asset_b)` | Yes | Bounded subscription table |
+| `alert_price_states` | Last pair-level aggregate price an alert evaluation saw, used as the "previous price" for threshold crossings (#775) | `src/alerts/evaluator.ts` | `src/alerts/evaluator.ts` | PK `(network, pair_key)` | Yes | One bounded row per watched pair per network |
 | `webhook_delivery_failures` | Dead-letter record of a failed webhook delivery attempt (status, error, attempt count, payload) | `src/alerts/delivery.ts` | `src/api/admin.ts` | PK `id` (`uuid`); Index `(created_at DESC)` | No | None |
 | `ingestion_gaps` | Detected outage/backfill gap window per `(network, pair, source)` and its recovery status | `src/backfill/gaps.ts` | `src/backfill/gaps.ts` | PK `id` (`uuid`); Indexes `(network, pair, source, status)`, `(network, pair, start, end)` | Yes | None |
 | `venue_dispersions` | Computed cross-venue price spread percentage (`max_spread_pct`, per-venue prices) and alert flag | `src/reconciliation/dispersion.ts` | `src/reconciliation/dispersion.ts` | PK `id` (`uuid`); Index `(network, pair_key, timestamp DESC)` | Yes | None |

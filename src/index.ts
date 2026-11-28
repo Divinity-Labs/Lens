@@ -31,6 +31,7 @@ import {
   PRICE_POINTS_RETENTION_DAYS,
 } from './jobs/pricePointsPartitionJob'
 import { loadPersistedPairs, getActivePairs } from './pairsRegistry'
+import { startAlertEvaluator } from './alerts/evaluator'
 import { markHealthy, recordCrash } from './ingester/restart'
 import { markBootComplete } from './health'
 import { startSep40Publisher } from './publish/publisher'
@@ -390,6 +391,15 @@ async function main() {
     } else {
       log.info({ network }, 'SEP-40 publication disabled; publisher not started')
     }
+
+    // #775: threshold webhooks are checked against the pair's aggregate price
+    // — the value /price serves — once per network on a short timer. Venue
+    // ticks no longer dispatch alerts, so one market move cannot fire one
+    // alert per venue, and two pools of a pair on either side of a threshold
+    // cannot fire on every poll. Its durable state is the per-(pair, network)
+    // previous price in `alert_price_states`, so a restart neither loses nor
+    // invents a crossing.
+    startAlertEvaluator(network)
   }
 
   for (const network of enabledNetworks) {

@@ -3,7 +3,7 @@
  *
  * Tests cover:
  * - calcSpotPrice: pure function — no mocks needed
- * - ingestPool: mocked upsertPricePoints + dispatchPriceUpdate
+ * - ingestPool: mocked upsertPricePoints (alerts are evaluated per pair, not here — #775)
  * - fetchSoroswapTokenList: mocked global fetch
  * - ingestPair: pair filtering / skipping logic
  */
@@ -206,9 +206,11 @@ describe('ingestPool', () => {
       ]),
       'mainnet'
     )
-    expect(dispatchPriceUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ assetA: 'XLM', assetB: 'USDC' })
-    )
+    // #775: a pool snapshot is one venue's price for the pair, so it must not
+    // evaluate alerts — checking each pool fired an alert on every poll when
+    // two pools of the pair sat on either side of the threshold. The pair-level
+    // evaluator (src/alerts/evaluator.ts) owns that decision now.
+    expect(dispatchPriceUpdate).not.toHaveBeenCalled()
   })
 
   it('skips price storage when pool is empty (zero reserves)', async () => {
