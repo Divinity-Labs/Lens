@@ -13,7 +13,6 @@ export const TWAP_WINDOW_MAX_MINUTES = 1440
 export const TWAP_WINDOW_DEFAULT_MINUTES = 60
 export const TWAP_SAMPLE_INTERVAL_MIN_SECONDS = 1
 export const TWAP_SAMPLE_INTERVAL_MAX_SECONDS = 3600
-export const TWAP_SAMPLE_INTERVAL_DEFAULT_SECONDS = 60
 
 export const VWAP_WINDOW_MIN_MINUTES = 1
 export const VWAP_WINDOW_MAX_MINUTES = 1440
@@ -21,7 +20,7 @@ export const VWAP_WINDOW_DEFAULT_MINUTES = 60
 
 const TwapQuerySchema = z.object({
   window: z.coerce.number().int().min(TWAP_WINDOW_MIN_MINUTES).max(TWAP_WINDOW_MAX_MINUTES).default(TWAP_WINDOW_DEFAULT_MINUTES),
-  sampleInterval: z.coerce.number().int().min(TWAP_SAMPLE_INTERVAL_MIN_SECONDS).max(TWAP_SAMPLE_INTERVAL_MAX_SECONDS).default(TWAP_SAMPLE_INTERVAL_DEFAULT_SECONDS),
+  sampleInterval: z.coerce.number().int().min(TWAP_SAMPLE_INTERVAL_MIN_SECONDS).max(TWAP_SAMPLE_INTERVAL_MAX_SECONDS).optional(),
   method: z.enum(['iqr', 'modified_zscore']).default('iqr'),
   network: z.enum(['testnet', 'mainnet']).optional(),
   decimals: z.string().optional(),
@@ -102,7 +101,7 @@ export async function registerPriceRoutes(app: FastifyInstance) {
           network: result.network,
           twap: result.twap,
           windowMinutes,
-          sampleIntervalSeconds: sampleInterval,
+          sampleIntervalSeconds: sampleInterval ?? null,
           startTime: result.startTime,
           endTime: result.endTime,
           sampleCount: result.sampleCount,

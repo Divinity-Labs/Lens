@@ -2133,12 +2133,11 @@
             "name": "sampleInterval",
             "in": "query",
             "required": false,
-            "description": "Sampling grid width in seconds.",
+            "description": "Optional fixed sampling grid width in seconds (omit for continuous event-time weighting).",
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 3600,
-              "default": 60
+              "maximum": 3600
             }
           },
           {
@@ -6353,7 +6352,9 @@
             "type": "integer"
           },
           "sampleIntervalSeconds": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true,
+            "description": "Requested fixed sampling interval in seconds, or null when using continuous event-time weighting."
           },
           "startTime": {
             "type": "string",

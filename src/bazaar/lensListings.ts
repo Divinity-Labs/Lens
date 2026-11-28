@@ -130,7 +130,7 @@ export function lensListings(options: {
     pathParams: assetPair,
     queryParams: {
       window: param.integer('Averaging window in minutes, 1 to 1440. Defaults to 60.', { required: false, default: 60 }),
-      sampleInterval: param.integer('Seconds between samples inside the window, 1 to 3600. Defaults to 60.', { required: false, default: 60 }),
+      sampleInterval: param.integer('Optional fixed sampling grid in seconds, 1 to 3600. Omit it to weight each price by the exact time it was in force.', { required: false }),
       method: param.enumOf(['iqr', 'modified_zscore'], 'Outlier rejection method applied to samples before averaging. Defaults to "iqr".', {
         required: false,
         default: 'iqr',
@@ -156,7 +156,7 @@ const candlesQueryParams: Record<string, DeclaredParam> = {
 
 const twapQueryParams: Record<string, DeclaredParam> = {
   window: param.integer('Averaging window in minutes, 1 to 1440. Defaults to 60.', { required: false, default: 60 }),
-  sampleInterval: param.integer('Seconds between samples inside the window, 1 to 3600. Defaults to 60.', { required: false, default: 60 }),
+  sampleInterval: param.integer('Optional fixed sampling grid in seconds, 1 to 3600. Omit it to weight each price by the exact time it was in force.', { required: false }),
   method: param.enumOf(['iqr', 'modified_zscore'], 'Outlier rejection method applied to samples before averaging. Defaults to "iqr".', { required: false, default: 'iqr' }),
 }
 

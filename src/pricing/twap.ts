@@ -45,19 +45,41 @@ export function median(arr: number[]): number {
 // ─── TWAP Computation ─────────────────────────────────────────────────────────
 
 /**
- * Compute Time-Weighted Average Price over a configurable window.
- * Uses IQR outlier rejection by default.
+ * The last price before the window is carried in only if it was observed at most this many
+ * window lengths before the window start...
+ */
+export const TWAP_CARRY_IN_WINDOW_MULTIPLE = 3
+/** ...and never more than this many minutes before it, whatever the window. */
+export const TWAP_CARRY_IN_MAX_MINUTES = 180
+
+/**
+ * How far before the window start the carried-in price may be: the smaller of
+ * TWAP_CARRY_IN_WINDOW_MULTIPLE windows and TWAP_CARRY_IN_MAX_MINUTES. An older
+ * price is not used, so a quiet window returns no value instead of an old price.
+ */
+export function twapCarryInLookbackMinutes(windowMinutes: number): number {
+  return Math.min(windowMinutes * TWAP_CARRY_IN_WINDOW_MULTIPLE, TWAP_CARRY_IN_MAX_MINUTES)
+}
+
+/**
+ * Compute Time-Weighted Average Price over a configurable window [now - windowMinutes, now),
+ * where `now` is the database clock. Uses IQR outlier rejection by default.
  *
- * TWAP = Σ(price_i * Δt_i) / Σ(Δt_i)  where Δt_i is the time to the next sample.
+ * Default (continuous) mode integrates step-function prices in a single O(n) pass over the rows:
+ * each price is weighted by the exact duration (ms) it stayed in force from its timestamp (or
+ * `windowStart` for the carried-in prior price) until the next observation or `windowEnd`.
  *
- * Price points are fetched from the price_points table at a regular sample
- * interval. If no trades occur within a sub-interval, the last known price
- * is carried forward (prevents stale gap manipulation).
+ * When `options.sampleIntervalSeconds` is explicitly provided, uses fixed-width discrete step
+ * resampling over `[windowStart, windowEnd)` in a single forward pass with the carried-in price.
+ *
+ * The carried-in price is limited by `twapCarryInLookbackMinutes`. With no price in the window
+ * and none recent enough to carry in, the result is the empty one: twap 0, sampleCount 0.
  */
 export async function computeTWAP(
   pairKey: string,
   windowMinutes: number,
   options?: {
+    /** Optional fixed sampling grid width in seconds; omit for continuous event-time weighting. */
     sampleIntervalSeconds?: number
     outlierMethod?: 'iqr' | 'modified_zscore'
     network?: NetworkName
@@ -65,7 +87,7 @@ export async function computeTWAP(
     staleThresholdSeconds?: number
   }
 ): Promise<TWAPResult> {
-  const sampleIntervalSeconds = options?.sampleIntervalSeconds ?? 60
+  const sampleIntervalSeconds = options?.sampleIntervalSeconds
   const outlierMethod = options?.outlierMethod ?? 'iqr'
   const network = options?.network ?? activeNetwork
   const isString = options?.decimalFormat === 'string'
@@ -73,23 +95,71 @@ export async function computeTWAP(
     ?? (config as any).pricing?.staleThresholdSeconds
     ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
-  // Fetch price points within the window for the specific network, ordered by observed_at
+  const carryInMinutes = twapCarryInLookbackMinutes(windowMinutes)
+
+  // One statement, one clock. The window bounds are the database's NOW(), cut
+  // to the millisecond precision of the stored times, and come back on every
+  // row, so the weighting below uses exactly the bounds the rows were filtered
+  // by: a process clock that runs behind the database can no longer drop the
+  // newest rows. The LEFT JOIN returns a bounds-only row when nothing matched.
+  // Row times come back as timestamptz so they are read on the same basis as
+  // the bounds whatever the process time zone.
+  //
+  // Rows: up to 1 prior carry-in observation within carryInMinutes before
+  // window_start, plus all half-open in-window observations [window_start, window_end).
   const result = await pgPool.query(
-    `SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
-     FROM price_points
-     WHERE pair_key = $1
-       AND network = $3
-       AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
-     ORDER BY COALESCE(observed_at, timestamp) ASC`,
-    [pairKey, windowMinutes, network]
+    `WITH bounds AS (
+       SELECT date_trunc('milliseconds', NOW()) - ($2 || ' minutes')::interval AS window_start,
+              date_trunc('milliseconds', NOW()) AS window_end
+     ),
+     carry_in AS (
+       SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $3
+         AND COALESCE(observed_at, timestamp) >= b.window_start - ($4 || ' minutes')::interval
+         AND COALESCE(observed_at, timestamp) < b.window_start
+       ORDER BY COALESCE(observed_at, timestamp) DESC
+       LIMIT 1
+     ),
+     in_window AS (
+       SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
+       FROM price_points, bounds b
+       WHERE pair_key = $1
+         AND network = $3
+         AND COALESCE(observed_at, timestamp) >= b.window_start
+         AND COALESCE(observed_at, timestamp) < b.window_end
+       ORDER BY COALESCE(observed_at, timestamp) ASC
+     ),
+     series AS (
+       SELECT price, timestamp, observed_at FROM carry_in
+       UNION ALL
+       SELECT price, timestamp, observed_at FROM in_window
+     )
+     SELECT b.window_start, b.window_end, s.price, s.timestamp,
+            s.observed_at::timestamptz AS observed_at
+     FROM bounds b
+     LEFT JOIN series s ON TRUE
+     ORDER BY s.observed_at ASC NULLS FIRST`,
+    [pairKey, windowMinutes, network, carryInMinutes]
   )
 
-  const rows = result.rows
+  const clock = result.rows[0]
+  if (clock?.window_start == null || clock?.window_end == null) {
+    // The statement always returns the bounds row; without it there is no window to weight.
+    throw new Error('TWAP query returned no window bounds')
+  }
+  const startTime = new Date(clock.window_start)
+  const endTime = new Date(clock.window_end)
+  const windowStartMs = startTime.getTime()
+  const windowEndMs = endTime.getTime()
+
+  const rows = result.rows.filter((r: any) => r.price != null)
   if (rows.length === 0) {
     return {
       twap: isString ? '0' : 0,
-      startTime: new Date(Date.now() - windowMinutes * 60_000),
-      endTime: new Date(),
+      startTime,
+      endTime,
       sampleCount: 0,
       outlierRejected: 0,
       filterMethod: outlierMethod,
@@ -105,7 +175,7 @@ export async function computeTWAP(
   const newestTimestamp = new Date(newestRow.observed_at ?? newestRow.timestamp)
   const newestInputObservedAt = newestTimestamp.toISOString()
   const inputCount = rows.length
-  const lastTradeAgeSeconds = Math.floor((Date.now() - newestTimestamp.getTime()) / 1000)
+  const lastTradeAgeSeconds = Math.floor((windowEndMs - newestTimestamp.getTime()) / 1000)
   const stale = lastTradeAgeSeconds >= staleThreshold
 
   // Extract raw prices for outlier rejection
@@ -125,19 +195,18 @@ export async function computeTWAP(
     .map((r: any, i: number) => ({
       ts: new Date(r.observed_at ?? r.timestamp).getTime(),
       price: rawPrices[i],
+      // The decimal string as the database returned it, for exact string output.
+      raw: String(r.price),
       rejected: rejectedIndices.has(i),
     }))
     .filter((point: any) => !point.rejected)
-    .map(({ ts, price }: any) => ({ ts, price }))
+    .map(({ ts, price, raw }: any) => ({ ts, price, raw }))
     .sort((a: any, b: any) => a.ts - b.ts)
-
-  const firstPointTime = rows[0].observed_at ?? rows[0].timestamp
-  const lastPointTime = rows[rows.length - 1].observed_at ?? rows[rows.length - 1].timestamp
 
   if (validPoints.length === 0) {
     return {
-      startTime: firstPointTime,
-      endTime: lastPointTime,
+      startTime,
+      endTime,
       twap: isString ? '0' : 0,
       sampleCount: rawPrices.length,
       outlierRejected: rejected,
@@ -150,59 +219,99 @@ export async function computeTWAP(
     }
   }
 
-  // Build equi-spaced time grid and interpolate price at each sample point
-  const startTime = new Date(firstPointTime).getTime()
-  const endTime = new Date(lastPointTime).getTime()
-  const totalDurationMs = endTime - startTime
+  const carryInFloorMs = windowStartMs - carryInMinutes * 60_000
+  let twap = 0
+  let weightedSum = 0
+  let totalWeightMs = 0
 
-  if (totalDurationMs <= 0) {
-    // Single data point — use its price
-    return {
-      startTime: firstPointTime,
-      endTime: lastPointTime,
-      twap: isString ? String(rows[0].price) : validPoints[0].price,
-      sampleCount: rawPrices.length,
-      outlierRejected: rejected,
-      filterMethod: outlierMethod,
-      network,
-      newestInputObservedAt,
-      inputCount,
-      stalenessThresholdSeconds: staleThreshold,
-      stale,
+  if (sampleIntervalSeconds !== undefined) {
+    // Explicit discrete sub-sampling mode over [windowStartMs, windowEndMs) in one forward pass.
+    const sampleIntervalMs = sampleIntervalSeconds * 1000
+    let activePrice: number | null = null
+    let ptr = 0
+
+    while (ptr < validPoints.length && validPoints[ptr].ts <= windowStartMs) {
+      if (validPoints[ptr].ts >= carryInFloorMs) {
+        activePrice = validPoints[ptr].price
+      }
+      ptr++
     }
-  }
 
-  const sampleIntervalMs = sampleIntervalSeconds * 1000
-  const sampleCount = Math.max(1, Math.floor(totalDurationMs / sampleIntervalMs))
-  const interpolatedPrices: { price: number; weight: number }[] = []
-
-  for (let i = 0; i <= sampleCount; i++) {
-    const sampleTs = startTime + i * sampleIntervalMs
-    if (sampleTs > endTime) break
-
-    // Find the closest price at or before this sample time (last observation carry forward)
-    let interpolatedPrice = validPoints[0].price
-    for (let j = 0; j < validPoints.length; j++) {
-      if (validPoints[j].ts <= sampleTs) {
-        interpolatedPrice = validPoints[j].price
-      } else {
-        break
+    for (let sampleTs = windowStartMs; sampleTs < windowEndMs; sampleTs += sampleIntervalMs) {
+      while (ptr < validPoints.length && validPoints[ptr].ts <= sampleTs) {
+        activePrice = validPoints[ptr].price
+        ptr++
+      }
+      const nextTs = Math.min(sampleTs + sampleIntervalMs, windowEndMs)
+      if (activePrice !== null) {
+        const dt = nextTs - sampleTs
+        weightedSum += activePrice * dt
+        totalWeightMs += dt
       }
     }
+  } else {
+    // Continuous step-function integration in one pass over the rows.
+    let currentPrice: number | null = null
+    let currentTs = windowStartMs
 
-    // Weight: time to next sample or to end
-    const nextSampleTs = Math.min(startTime + (i + 1) * sampleIntervalMs, endTime)
-    const weight = (nextSampleTs - sampleTs) / totalDurationMs
-    interpolatedPrices.push({ price: interpolatedPrice, weight })
+    for (let i = 0; i < validPoints.length; i++) {
+      const pt = validPoints[i]
+      if (pt.ts >= windowEndMs) break
+      if (pt.ts < carryInFloorMs) continue
+
+      if (pt.ts <= windowStartMs) {
+        currentPrice = pt.price
+        currentTs = windowStartMs
+        continue
+      }
+
+      if (currentPrice !== null) {
+        const dt = pt.ts - currentTs
+        if (dt > 0) {
+          weightedSum += currentPrice * dt
+          totalWeightMs += dt
+        }
+      }
+      currentPrice = pt.price
+      currentTs = pt.ts
+    }
+
+    if (currentPrice !== null) {
+      const tailDt = windowEndMs - currentTs
+      if (tailDt > 0) {
+        weightedSum += currentPrice * tailDt
+        totalWeightMs += tailDt
+      }
+    }
   }
 
-  // Compute TWAP as weighted average
-  const twap = interpolatedPrices.reduce((sum, p) => sum + p.price * p.weight, 0)
+  // Prices the window may use: nothing older than the carry-in look-back.
+  const usable = validPoints.filter((p: any) => p.ts >= carryInFloorMs)
+  let exactTwap: string | null = null
+
+  if (totalWeightMs > 0) {
+    twap = weightedSum / totalWeightMs
+  } else if (usable.length > 0) {
+    // No price held for any measurable time inside the window. The query
+    // returns only rows before windowEnd, so it does not produce this; if a
+    // row at windowEnd does arrive, report its price, as a single-row series
+    // always has, instead of a TWAP of 0 next to a non-zero sampleCount.
+    const newest = usable[usable.length - 1]
+    twap = newest.price
+    exactTwap = newest.raw
+  }
+
+  // One price in force for the whole window averages to itself. Return its
+  // decimal string unchanged so string format keeps every decimal place
+  // instead of going through a float.
+  if (exactTwap === null && usable.length > 0 && usable.every((p: any) => p.raw === usable[0].raw)) {
+    exactTwap = usable[0].raw
+  }
 
   return {
-    twap: isString ? String(twap) : twap,
-    startTime: new Date(startTime),
-    endTime: new Date(endTime),
+    twap: isString ? (exactTwap ?? String(twap)) : twap,
+    startTime,
+    endTime,
     sampleCount: rawPrices.length,
     outlierRejected: rejected,
     filterMethod: outlierMethod,

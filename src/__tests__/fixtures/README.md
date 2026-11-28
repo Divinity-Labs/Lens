@@ -14,11 +14,13 @@ markets.
 | mainnet | 00:01 | 22 | 1 | AMM |
 | mainnet | 00:03 | 24 | 2 | AMM |
 
-The testnet's missing 00:02 sample is intentional. With one-minute TWAP
-sampling, the 00:01 price carries forward over the gap:
-`(10 × 1 + 12 × 1 + 12 × 1) / 3 = 34/3`. The 00:03 endpoint has zero
-duration weight. A single-sample TWAP is the sample price, 15, and a VWAP with
-zero total volume is 0.
+The testnet's missing 00:02 sample is intentional. Over a 10-minute TWAP window `[00:00, 00:10)` using continuous event-time weighting:
+- `00:00` (`10`) is in force over `[00:00, 00:01)` = 1 minute
+- `00:01` (`12`) is in force over `[00:01, 00:03)` = 2 minutes
+- `00:03` (`8`) is in force over `[00:03, 00:10)` = 7 minutes
+
+Hand calculation: `(10 × 1 + 12 × 2 + 8 × 7) / 10 = 90 / 10 = 9`.
+A single-sample TWAP is the sample price, 15, and a VWAP with zero total volume is 0.
 
 Hand-computed aggregate expectations:
 

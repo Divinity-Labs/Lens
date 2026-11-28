@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PRICING_EDGE_CASES, PRICING_PAIR, PRICING_POINTS, PRICING_START, DEPTH_FIXTURE } from './fixtures/pricingDataset'
 
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
-vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
+vi.mock('../db', async () => {
+  const { withTwapDbClock } = await import('../../tests/support/twapDbClock')
+  return { pgPool: { query: withTwapDbClock(mockQuery) } }
+})
 
 import { calculateOHLCV, calculateVWAP } from '../aggregator/vwap'
 import { computeTWAP, computeVWAP } from '../pricing/twap'
@@ -53,6 +56,10 @@ describe('documented deterministic pricing fixture', () => {
     installFixtureQuery()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('computes the hand-calculated VWAP independently on both networks', async () => {
     // testnet: (10*2 + 12*3 + 8*5) / (2+3+5) = 9.6
     // mainnet: (20*1 + 22*1 + 24*2) / (1+1+2) = 22.5
@@ -71,14 +78,20 @@ describe('documented deterministic pricing fixture', () => {
   })
 
   it('carries the last price across the two-minute gap for TWAP', async () => {
-    const result = await computeTWAP(PRICING_PAIR, 10, { sampleIntervalSeconds: 60, outlierMethod: 'iqr' })
-    // Samples at 00:00, 00:01 and 00:02 have prices 10, 12 and carried 12.
-    // (10 + 12 + 12) / 3 = 34/3. The 00:03 endpoint has zero duration weight.
-    expect(result.twap).toBeCloseTo(34 / 3, 12)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(PRICING_START.getTime() + 10 * 60_000))
+    const result = await computeTWAP(PRICING_PAIR, 10, { outlierMethod: 'iqr' })
+    // Each price is weighted over [00:00, 00:10) by how long it stayed in force (#650).
+    // 12 is carried across the two-minute gap to the next row at 00:03.
+    // [00:00, 00:01) = 10 (1m), [00:01, 00:03) = 12 (2m), [00:03, 00:10) = 8 (7m).
+    // (10*1 + 12*2 + 8*7) / 10 = 90/10 = 9.
+    expect(result.twap).toBeCloseTo(9, 12)
     expect(result.sampleCount).toBe(3)
   })
 
   it('uses the only price for a single-sample TWAP and returns zero for zero-volume VWAP', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(PRICING_START.getTime() + 10 * 60_000))
     mockQuery.mockResolvedValueOnce({ rows: PRICING_EDGE_CASES.singleSample })
     const twap = await computeTWAP(PRICING_PAIR, 10)
     expect(twap.twap).toBe(15)
