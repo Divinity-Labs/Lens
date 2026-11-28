@@ -1,46 +1,17 @@
+// TODO: Phoenix contract addresses not verified; using TODO placeholder discovery
 /**
- * Phoenix AMM Venue Adapter (Stellar Soroban)
+ * Phoenix AMM Venue Adapter
  *
- * Phoenix is a constant-product AMM on Soroban with live mainnet volume. This
- * adapter enumerates its pools from the protocol's own factory contract, reads
- * reserves over Soroban RPC, derives a spot price from the x*y=k invariant, and
- * stores the result in price_points with `source = 'phoenix_amm'`.
+ * Indexes Phoenix liquidity pool (Stellar classic) reserves via the
+ * Phoenix AMM API, calculates spot prices from constant-product invariants,
+ * and stores them in price_points with source = 'Phoenix_amm'.
  *
- * Discovery is a factory read, never a list kept in this repo: Phoenix opens and
- * rebalances pools on its own schedule, so a hard-coded array quietly stops
- * quoting the pools that matter. The enumerated list is cached per network for
- * `PHOENIX_POOL_CACHE_TTL_MS` and shared by every watched pair, so a cycle costs
- * one reserves read per matching pool instead of a re-enumeration per pair.
- *
- * Failure mode is "no Phoenix price", never "no Lens": an unreachable RPC yields
- * an empty pool list or a null reserve read rather than throwing, and a failed
- * refresh leaves the previous cache entry in place (stale, then retried next
- * cycle) rather than poisoning it. SDEX, Horizon AMM, Soroswap and Aquarius keep
- * ingesting regardless.
- *
- * Every row carries `source = 'phoenix_amm'` and the pool's contract id in
- * `poolId`, and the network it was read from — Phoenix prices are never blended
- * into another venue's series.
- *
- * Issue: #210
+ * Issue: #103, #218
  */
 
-import {
-  Asset,
-  Contract,
-  Keypair,
-  Networks,
-  Account,
-  StrKey,
-  TransactionBuilder,
-  BASE_FEE,
-  scValToNative,
-  xdr,
-  rpc as SorobanRpc,
-} from '@stellar/stellar-sdk'
-import { getNetworkConfig, activeNetwork, type NetworkName } from '../../config'
-import { getRpcServer } from '../../network/clients'
-import type { AssetId, WatchedPair } from '../../types'
+import { config, activeNetwork, type NetworkName } from '../../config'
+import { createLogger } from '../../logger'
+import type { WatchedPair } from '../../types'
 import type { VenueAdapter, VenuePricePoint } from './types'
 import {
   getLastPrice,

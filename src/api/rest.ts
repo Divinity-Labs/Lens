@@ -439,3 +439,4 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   )
 }
+
