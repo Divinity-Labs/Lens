@@ -436,6 +436,10 @@ function buildNetworkConfig(network: NetworkName): NetworkConfig {
     (process.env[`COINBASE_ENABLED_${suffix}`] ?? '').trim().toLowerCase() === 'true'
 
   // ── Blend lending protocol ────────────────────────────────────────────────
+  // The v1/v2 labels below are for readers only. The ingester reads each
+  // pool's version from the wasm hash of its contract instance and skips a
+  // pool whose hash is not a known Blend release (BLEND_POOL_WASM_VERSIONS in
+  // src/ingest/venues/blend.ts), so a label here never selects a number scale.
   const MAINNET_BLEND_POOLS = [
     'CAJJZSGMMM3PD7N33TAPHGBUGTB43OC73HVIK2L2G6BNGGGYOSSYBXBD', // Fixed Pool v2
     'CCCCIQSDILITHMM7PBSLVDT5MISSY7R26MNZXCX4H7J5JQ5FPIYOGYFS', // YieldBlox Pool v2

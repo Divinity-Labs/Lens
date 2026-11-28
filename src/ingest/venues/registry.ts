@@ -32,6 +32,8 @@ export interface VenueRegistration {
    * given, and for "any network" when it is not.
    */
   hasCredentials: (network?: NetworkName) => boolean
+  /** Whether this registered venue is an on-chain execution venue (defaults to true for non-CEX). */
+  onChain?: boolean
 }
 
 /**
@@ -42,34 +44,42 @@ export const registeredVenues: VenueRegistration[] = [
   {
     adapter: sdexAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: ammAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: soroswapAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: aquariusAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: defindexAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: phoenixAdapter,
     hasCredentials: () => true,
+    onChain: true,
   },
   {
     adapter: kucoinAdapter,
     hasCredentials: hasKuCoinCredentials,
+    onChain: false,
   },
   {
     adapter: gateioAdapter,
     hasCredentials: hasGateioCredentials,
+    onChain: false,
   },
   {
     // Needs no key, so it is gated on an explicit per-network switch instead
@@ -78,6 +88,31 @@ export const registeredVenues: VenueRegistration[] = [
     hasCredentials: isCoinbaseConfigured,
   },
 ]
+
+/**
+ * Determines whether a venue adapter represents an on-chain execution venue.
+ * Adapters default to not on-chain unless explicitly configured with onChain: true.
+ */
+export function isOnChainVenue(adapter: VenueAdapter): boolean {
+  if (adapter.onChain !== undefined) return adapter.onChain
+  return false
+}
+
+/**
+ * Returns the distinct list of source names for on-chain venues that may
+ * contribute to the on-chain price. Built dynamically from the venue registry
+ * without requiring any duplicate hand-maintained lists.
+ */
+export function getOnChainSources(): string[] {
+  const sources = new Set<string>()
+  for (const reg of registeredVenues) {
+    const onChain = reg.onChain !== undefined ? reg.onChain : isOnChainVenue(reg.adapter)
+    if (onChain && reg.adapter.source) {
+      sources.add(reg.adapter.source)
+    }
+  }
+  return Array.from(sources).sort()
+}
 
 /**
  * Returns all adapters that have required credentials and configuration present.
