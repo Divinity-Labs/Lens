@@ -60,6 +60,26 @@ export const amm_snapshots_total = new Counter({
   registers: [register]
 })
 
+// A replayed batch is absorbed by the unique index, so it must be visible as
+// its own signal: without it a stuck cursor silently looks like a healthy,
+// quiet venue. `source` comes from the bounded set of venue identifiers, not
+// from an upstream payload.
+export const price_points_duplicate_total = new Counter({
+  name: 'price_points_duplicate_total',
+  help: 'Price point rows rejected as duplicates by the identity index, by source and network',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
+// Rows that actually landed. Kept separate from duplicate rows so a replay
+// cannot inflate the "new data" signal the way price_points_accepted_total did.
+export const price_points_inserted_total = new Counter({
+  name: 'price_points_inserted_total',
+  help: 'Price point rows inserted, by source and network',
+  labelNames: ['source', 'network'],
+  registers: [register]
+})
+
 export const price_snapshots_total = new Counter({
   name: 'price_snapshots_total',
   help: 'Total number of 1-minute price snapshots appended',
@@ -221,9 +241,12 @@ export const horizon_rate_limit_remaining = new Gauge({
 // Ingestion health is labelled only by the finite adapter registry and the
 // two supported networks. Do not add pair or pool identifiers here: they make
 // the series count grow with user configuration and on-chain pool creation.
+// Liveness, not data progress: a venue that answers with unchanged pool state
+// still proves the ingester is alive. New rows are counted separately by
+// price_points_inserted_total, so a quiet pool never looks fresh by accident.
 export const ingest_last_success_timestamp = new Gauge({
   name: 'ingest_last_success_timestamp',
-  help: 'Unix timestamp of the last successful price write by venue and network',
+  help: 'Unix timestamp of the last successful ingestion cycle by venue and network (does not imply new rows)',
   labelNames: ['venue', 'network'],
   registers: [register],
 })

@@ -148,9 +148,10 @@ export async function writeSdexPricePoints(
   if (points.length === 0) return
 
   const stateId = `sdex:${network}:${pair.pairKey}`
-  const trackerKey = pair.pairKey
+  const { inserted } = await upsertPricePoints(points, network)
 
-  const res = await upsertPricePoints(points, network)
+  // The page was fetched successfully even when every row was a replay. That
+  // is liveness, not new data: only `inserted` rows move counters or events.
   markIngestSuccess('SDEX', network)
   const acceptedPoints: VenuePricePoint[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
     ? (res as any).acceptedPoints
@@ -167,21 +168,28 @@ export async function writeSdexPricePoints(
       Math.floor(tradeTime.getTime() / 1000)
     )
 
-    publishPriceUpdate({
-      pair: pair.pairKey,
-      price: currentPrice,
-      ts: (latest.observedAt ?? latest.timestamp).toISOString(),
-      network,
-    })
+  await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
+  if (inserted.length === 0) return
 
-    dispatchPriceUpdate({
-      assetA: pair.assetA.code,
-      assetB: pair.assetB.code,
-      previousPrice,
-      currentPrice,
-      network,
-    }).catch((err) => log.error({ pair: pair.pairKey, err }, 'webhook dispatch error'))
-  }
+  const latest = inserted[inserted.length - 1]
+  const trackerKey = pair.pairKey
+  const { previousPrice, currentPrice } = setLastPrice('SDEX', network, trackerKey, latest.price)
+
+  trades_ingested_total.inc({ pair: pair.pairKey, network }, inserted.length)
+  last_trade_timestamp.set(
+    { pair: pair.pairKey, network },
+    Math.floor(
+      (latest.sourceTime ?? latest.observedAt ?? latest.timestamp).getTime() / 1000
+    )
+  )
+  log.info({ pair: pair.pairKey, trades: inserted.length }, 'ingested trades')
+
+  publishPriceUpdate({
+    pair: pair.pairKey,
+    price: currentPrice,
+    ts: (latest.sourceTime ?? latest.observedAt ?? latest.timestamp).toISOString(),
+    network,
+  })
 
   await setIndexerCursor(stateId, lastPagingToken, network, finalLedger)
   log.info({ pair: pair.pairKey, trades: points.length, accepted: acceptedPoints.length }, 'ingested trades')

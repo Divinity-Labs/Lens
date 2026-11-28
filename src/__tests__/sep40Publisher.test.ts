@@ -56,7 +56,11 @@ vi.mock('../config', () => configMock)
 vi.mock('../db', () => ({
   pgPool: { query: vi.fn().mockResolvedValue({ rows: [] }) },
   prisma: { oraclePublication: { create: vi.fn().mockResolvedValue({}) } },
-  upsertPricePoints: vi.fn(),
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
 }))
 vi.mock('../aggregator/vwap', () => ({ getAggregatedPrice: vi.fn() }))
 vi.mock('../ingest/venues/runner', () => ({ sleep: async () => {} }))

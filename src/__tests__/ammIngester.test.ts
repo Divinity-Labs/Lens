@@ -5,7 +5,11 @@ vi.mock('../db', () => ({
       create: vi.fn(),
     },
   },
-  upsertPricePoints: vi.fn(),
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
   getIndexerState: vi.fn(),
   setIndexerCursor: vi.fn(),
 }))
@@ -62,7 +66,11 @@ describe('AMM Ingester', () => {
       const createSnapshot = vi.fn()
       vi.doMock('../db', () => ({
         prisma: { poolSnapshot: { create: createSnapshot } },
-        upsertPricePoints: vi.fn(),
+        upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+          inserted: points,
+          duplicate: [],
+          quarantined: [],
+        })),
         getIndexerCursor: vi.fn(),
         setIndexerCursor: vi.fn(),
       }))

@@ -15,7 +15,11 @@ vi.mock('../db', () => ({
   prisma: {
     poolSnapshot: { create: vi.fn().mockResolvedValue({}) },
   },
-  upsertPricePoints: vi.fn().mockResolvedValue(1),
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
   getIndexerState: vi.fn(),
   setIndexerCursor: vi.fn(),
 }))

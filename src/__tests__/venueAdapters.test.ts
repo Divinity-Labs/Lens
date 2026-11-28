@@ -24,7 +24,11 @@ import {
 } from '../ingest/venues'
 
 vi.mock('../db', () => ({
-  upsertPricePoints: vi.fn().mockResolvedValue(1),
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
 }))
 
 vi.mock('../webhookDispatcher', () => ({

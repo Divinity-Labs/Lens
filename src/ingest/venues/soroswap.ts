@@ -365,15 +365,7 @@ export async function ingestPool(
       return
     }
 
-    // Cycle-deadline checkpoint (#351), ahead of the write: nothing has been
-    // written yet, so skipping leaves no partial state — the reserves are
-    // re-read next cycle. The write itself is one upsert, so it commits whole
-    // or not at all, and Soroswap keeps no cursor whose advance could be
-    // separated from it.
-    if (signal?.aborted) return
-
-    const now = new Date()
-    const res = await upsertPricePoints(
+    const { inserted } = await upsertPricePoints(
       [
         {
           assetA: pair.assetA.code,
@@ -397,23 +389,29 @@ export async function ingestPool(
           eventId: `soroswap-${poolEntry.poolAddress}-${reserveA}-${reserveB}`,
         },
       ],
-      network
-    )
+        network
+      )
+
+    // The RPC poll succeeded even when the reserves were unchanged. Announce
+    // a price update only when a new observation was actually stored.
     markIngestSuccess('Soroswap', network)
-    const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
-      ? (res as any).acceptedPoints
-      : [spotPrice]
+    if (inserted.length === 0) return
 
     if (acceptedPoints.length > 0) {
       const trackerKey = pair.pairKey
       const { previousPrice } = setLastPrice('Soroswap', network, trackerKey, spotPrice)
 
-      publishPriceUpdate({
-        pair: pair.pairKey,
-        price: spotPrice,
-        ts: new Date().toISOString(),
-        network,
-      })
+
+    publishPriceUpdate({
+      pair: pair.pairKey,
+      price: spotPrice,
+      ts: (
+        inserted[inserted.length - 1].sourceTime ??
+        inserted[inserted.length - 1].observedAt ??
+        inserted[inserted.length - 1].timestamp
+      ).toISOString(),
+      network,
+    })
 
       dispatchPriceUpdate({
         assetA: pair.assetA.code,

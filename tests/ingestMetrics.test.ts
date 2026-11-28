@@ -14,7 +14,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  upsertPricePoints: vi.fn(),
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
   getIndexerState: vi.fn(),
   setIndexerCursor: vi.fn(),
   poolSnapshotCreate: vi.fn(),
@@ -104,6 +108,11 @@ function byLabel(values: { labels?: Record<string, string | number>; value: numb
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.upsertPricePoints.mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  }))
   // The Registry is a module singleton shared by everything in this file, so
   // every metric touched here is reset between cases.
   trades_ingested_total.reset()
@@ -165,6 +174,26 @@ describe('trades_ingested_total', () => {
     const values = await samples('trades_ingested_total')
     expect(values).toHaveLength(1)
     expect(values[0].value).toBe(2)
+  })
+
+  it('does not move on a duplicate-only replay', async () => {
+    mocks.sdexRecords = [trade('2024-06-01T00:00:00Z', { n: 2, d: 10 }, 't-1')]
+
+    await ingestPair(pair as never, 'testnet')
+    expect(byLabel(await samples('trades_ingested_total'), 'network')).toEqual({ testnet: 1 })
+    expect(mocks.publishPriceUpdate).toHaveBeenCalledTimes(1)
+    expect(mocks.dispatchPriceUpdate).toHaveBeenCalledTimes(1)
+
+    mocks.upsertPricePoints.mockImplementationOnce((points: any[]) => ({
+      inserted: [],
+      duplicate: points,
+      quarantined: [],
+    }))
+    await ingestPair(pair as never, 'testnet')
+
+    expect(byLabel(await samples('trades_ingested_total'), 'network')).toEqual({ testnet: 1 })
+    expect(mocks.publishPriceUpdate).toHaveBeenCalledTimes(1)
+    expect(mocks.dispatchPriceUpdate).toHaveBeenCalledTimes(1)
   })
 })
 

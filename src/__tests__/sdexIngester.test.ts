@@ -1,7 +1,11 @@
 // ── Mocks ───────────────────────────────────────────────────────────────────
 const mocks = vi.hoisted(() => ({
   db: {
-    upsertPricePoints: vi.fn(),
+    upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+      inserted: points,
+      duplicate: [],
+      quarantined: [],
+    })),
     getIndexerState: vi.fn(),
     setIndexerCursor: vi.fn(),
   },

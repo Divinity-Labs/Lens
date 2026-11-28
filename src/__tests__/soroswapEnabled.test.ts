@@ -29,7 +29,13 @@ vi.mock('../config', () => ({
   getNetworkConfig: () => mocks.config,
 }))
 vi.mock('../pairsRegistry', () => mocks.pairsRegistry)
-vi.mock('../db', () => ({ upsertPricePoints: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('../db', () => ({
+  upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+    inserted: points,
+    duplicate: [],
+    quarantined: [],
+  })),
+}))
 vi.mock('../webhookDispatcher', () => ({ dispatchPriceUpdate: vi.fn().mockResolvedValue(undefined) }))
 
 import { startSoroswapIngester } from '../ingest/venues/soroswap'

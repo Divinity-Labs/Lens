@@ -54,28 +54,27 @@ export async function writeVenuePricePoints(
 ): Promise<void> {
   if (points.length === 0) return
 
-  // Cycle-deadline checkpoint (#351): an abandoned cycle skips the write it
-  // has not started yet. The checkpoint is before the unit's only statement,
-  // never between statements — `upsertPricePoints` is a single
-  // `createMany(skipDuplicates)`, so it writes all of these points or none of
-  // them, and the events below fire only for points that actually landed.
-  if (signal?.aborted) return
+  const { inserted } = await upsertPricePoints(points, network)
 
-  const res = await upsertPricePoints(points as any, network)
+  // A duplicate-only cycle still proves the venue answered and the ingester is
+  // alive, so liveness is recorded here. New data is a separate signal: the
+  // events below fire only for points that actually landed.
   markIngestSuccess(venue, network)
-  const acceptedPoints: VenuePricePoint[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
-    ? (res as any).acceptedPoints
-    : points
+  if (inserted.length === 0) return
 
-  if (acceptedPoints.length === 0) return
-
-  const latest = acceptedPoints[acceptedPoints.length - 1]
+  const latest = inserted[inserted.length - 1]
   const { previousPrice, currentPrice } = setLastPrice(venue, network, pair.pairKey, latest.price)
 
   publishPriceUpdate({
     pair: pair.pairKey,
     price: currentPrice,
-    ts: latest.observedAt ? latest.observedAt.toISOString() : (latest.timestamp ? latest.timestamp.toISOString() : new Date().toISOString()),
+    ts: latest.sourceTime
+      ? latest.sourceTime.toISOString()
+      : latest.observedAt
+        ? latest.observedAt.toISOString()
+        : latest.timestamp
+          ? latest.timestamp.toISOString()
+          : new Date().toISOString(),
     network,
   })
 

@@ -11,7 +11,11 @@ const mocks = vi.hoisted(() => ({
         create: vi.fn(),
       },
     },
-    upsertPricePoints: vi.fn().mockResolvedValue(undefined),
+    upsertPricePoints: vi.fn().mockImplementation((points: any[]) => ({
+      inserted: points,
+      duplicate: [],
+      quarantined: [],
+    })),
     // Synthetic paging tokens carry no TOID, so the ingesters fall back to
     // the ledger stored on the cursor row.
     getIndexerState: vi.fn().mockResolvedValue({ cursor: '0', ledger: 64702061 }),

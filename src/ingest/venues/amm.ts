@@ -136,8 +136,7 @@ export async function snapshotPool(
 
     // Also record spot price as a price point (no volume — it's a snapshot, not a trade)
     if (spotPrice > 0) {
-      const now = new Date()
-      const res = await upsertPricePoints(
+      const { inserted } = await upsertPricePoints(
         [
           {
             assetA: pair.assetA.code,
@@ -164,30 +163,29 @@ export async function snapshotPool(
         ],
         network
       )
+
+      // Unchanged pool state is a successful poll, not a new observation.
+      // Only a row that landed is announced to subscribers and webhooks.
       markIngestSuccess('AMM', network)
-      const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
-        ? (res as any).acceptedPoints
-        : [spotPrice]
+      if (inserted.length === 0) return
 
-      if (acceptedPoints.length > 0) {
-        const trackerKey = pair.pairKey
-        const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
+      const trackerKey = pair.pairKey
+      const { previousPrice } = setLastPrice('AMM', network, trackerKey, spotPrice)
 
-        publishPriceUpdate({
-          pair: pair.pairKey,
-          price: spotPrice,
-          ts: new Date().toISOString(),
-          network,
-        })
+      publishPriceUpdate({
+        pair: pair.pairKey,
+        price: spotPrice,
+        ts: inserted[inserted.length - 1].timestamp.toISOString(),
+        network,
+      })
 
-        dispatchPriceUpdate({
-          assetA: pair.assetA.code,
-          assetB: pair.assetB.code,
-          previousPrice,
-          currentPrice: spotPrice,
-          network,
-        }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
-      }
+      dispatchPriceUpdate({
+        assetA: pair.assetA.code,
+        assetB: pair.assetB.code,
+        previousPrice,
+        currentPrice: spotPrice,
+        network,
+      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
     }
   } catch (err) {
     log.error({ pool: pool.id, err }, 'snapshot error')
@@ -256,52 +254,40 @@ export async function ingestPoolTrades(
       }
     })
 
-    const trackerKey = pair.pairKey
+    const { inserted } = await upsertPricePoints(points, network)
 
-    // Cycle-deadline checkpoint (#351), ahead of the write SEQUENCE: the page
-    // upsert and the cursor advance below commit together, so a cycle
-    // abandoned here skips both — never one without the other. The page is
-    // re-read from the same cursor next cycle and upsertPricePoints dedupes
-    // on conflict, so dropping out early costs nothing but a refetch.
-    if (signal?.aborted) return
-
-    const res = await upsertPricePoints(points, network)
+    // A replayed page still means Horizon answered; only inserted rows are new
+    // trades and only those get counters or price events.
     markIngestSuccess('AMM', network)
-    const acceptedPoints: any[] = (res && typeof res === 'object' && 'acceptedPoints' in res)
-      ? (res as any).acceptedPoints
-      : points
 
-    if (acceptedPoints.length > 0) {
-      const latest = acceptedPoints[acceptedPoints.length - 1]
-      const { previousPrice, currentPrice } = setLastPrice(
-        'AMM',
-        network,
-        trackerKey,
-        latest.price
+    const lastRecord = records[records.length - 1]
+    await setIndexerCursor(stateId, lastRecord.paging_token, network, ledgers[ledgers.length - 1])
+    if (inserted.length === 0) return
+
+    const latest = inserted[inserted.length - 1]
+    const trackerKey = pair.pairKey
+    const { previousPrice, currentPrice } = setLastPrice(
+      'AMM',
+      network,
+      trackerKey,
+      latest.price
+    )
+
+    trades_ingested_total.inc({ pair: pair.pairKey, network }, inserted.length)
+    last_trade_timestamp.set(
+      { pair: pair.pairKey, network },
+      Math.floor(
+        (latest.sourceTime ?? latest.observedAt ?? latest.timestamp).getTime() / 1000
       )
+    )
+    log.info({ pair: pair.pairKey, pool: pool.id, trades: inserted.length }, 'ingested pool trades')
 
-      trades_ingested_total.inc({ pair: pair.pairKey, network }, acceptedPoints.length)
-      const tradeTime = latest.sourceTime ?? latest.observedAt ?? latest.timestamp
-      last_trade_timestamp.set(
-        { pair: pair.pairKey, network },
-        Math.floor(tradeTime.getTime() / 1000)
-      )
-
-      publishPriceUpdate({
-        pair: pair.pairKey,
-        price: currentPrice,
-        ts: (latest.observedAt ?? latest.timestamp).toISOString(),
-        network,
-      })
-
-      dispatchPriceUpdate({
-        assetA: pair.assetA.code,
-        assetB: pair.assetB.code,
-        previousPrice,
-        currentPrice,
-        network,
-      }).catch((err) => log.error({ pool: pool.id, err }, 'webhook dispatch error'))
-    }
+    publishPriceUpdate({
+      pair: pair.pairKey,
+      price: currentPrice,
+      ts: (latest.sourceTime ?? latest.observedAt ?? latest.timestamp).toISOString(),
+      network,
+    })
 
     const lastRecord = records[records.length - 1]
     await setIndexerCursor(stateId, lastRecord.paging_token, network, ledgers[ledgers.length - 1])

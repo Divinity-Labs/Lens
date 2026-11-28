@@ -14,17 +14,33 @@ nonsense on any deployment with more than one.**
 | `trades_ingested_total` | Counter | `pair`, `network` |
 | `amm_snapshots_total` | Counter | `pool`, `network` |
 | `price_snapshots_total` | Counter | `network` |
-| `ingester_abandoned_cycles_total` | Counter | `venue`, `network` |
+| `price_points_inserted_total` | Counter | `source`, `network` |
+| `price_points_duplicate_total` | Counter | `source`, `network` |
 | `last_trade_timestamp` | Gauge | `pair`, `network` |
+| `ingest_last_success_timestamp` | Gauge | `venue`, `network` |
 
 | Label | Values | Notes |
 | --- | --- | --- |
 | `network` | `testnet`, `mainnet` | The `NetworkName` of the ingester loop that produced the sample, not the process-wide `STELLAR_NETWORK`. |
 | `pair` | `XLM/USDC`, … | The `pairKey` already used everywhere else in Lens. |
 | `pool` | Horizon liquidity-pool id | Pre-existing label, only on `amm_snapshots_total`. |
-| `venue` | `SDEX`, `AMM`, `Soroswap`, `Aquarius`, `Snapshot` | The ingester loop that abandoned a cycle past its deadline (#351). Bounded by the adapter registry, not by runtime data. |
+| `source` | `SDEX`, `AMM`, `soroswap_amm`, … | The venue's `source` string, from the finite adapter registry. |
 
-All five are also emitted with the registry-wide `app="lens"` default label.
+All of these are also emitted with the registry-wide `app="lens"` default label.
+
+## Liveness versus new data
+
+`ingest_last_success_timestamp` is updated on every successful ingestion cycle,
+including a cycle whose every row was a duplicate. A venue that answers with
+unchanged pool state still proves the ingester is alive, and marking only
+inserts would make quiet pools (and every replay after a restart) look like a
+stalled ingester. New data has its own signal: `price_points_inserted_total`
+counts only rows that actually landed, while `price_points_duplicate_total`
+makes replays visible. Price events, webhooks and trade counters use the same
+inserted-only set, so a replay cannot masquerade as a fresh observation.
+
+Both price-point counters are labelled by `source` and `network` only: a pool
+id or pair key per row would make the series count grow with on-chain pools.
 
 ## Why `network` is on all five
 
@@ -65,10 +81,9 @@ Series count is `pairs x networks`:
 - `amm_snapshots_total` — `pools x networks`. Pools are discovered from Horizon
   for the configured pairs only, so this stays bounded by the same watch list.
 - `price_snapshots_total` — `networks`. One series per network, full stop.
-- `ingester_abandoned_cycles_total` — `venues x networks`. `venue` is the five
-  ingester loops hard-coded in the adapter registry (plus the snapshot
-  appender), so this is a single-digit factor like `network`, not an ID
-  space: never label it with a pool id, a pair or a contract id.
+- `price_points_inserted_total` and `price_points_duplicate_total` —
+  `sources x networks`, bounded by the venue registry.
+- `ingest_last_success_timestamp` — `venues x networks`, likewise bounded.
 
 **Do not add `issuer` to any of these.** It would multiply the series count by
 every distinct token in the config for no gain: `pair` is the `pairKey` and

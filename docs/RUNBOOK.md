@@ -352,9 +352,10 @@ tracking issues for the batch this runbook was filed in.
 3. **No graceful shutdown** (#347, §4): in-flight requests are cut and WS
    clients are dropped without a close frame.
 4. **Ingestion pauses for the restart, then resumes from persisted cursors.**
-   Cursor state lives in `indexer_state`, writes are idempotent
-   (`skipDuplicates` in `upsertPricePoints`, `ON CONFLICT DO NOTHING` on
-   snapshots), so replay after restart is safe; the gap is the trades that
+    Cursor state lives in `indexer_state`, writes are idempotent
+    (`ON CONFLICT DO NOTHING` in `upsertPricePoints`, snapshots), so replay
+    after restart is safe; the gap is the trades that
+
    happened while the process was down (visible as missing `price_points` for
    that window and a lag spike in `/status`).
 5. **In-memory state is lost:** rate-limit windows (429 counters reset), WS

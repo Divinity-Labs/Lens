@@ -19,28 +19,46 @@
  * replay. `upsertPricePoints` therefore synthesizes a deterministic id from
  * the row's content when the venue does not supply one (see synthesizeEventId
  * in db.ts), and the replay tests below pin that behaviour.
+ *
+ * The fake `pg` pool also verifies that each batch is a single INSERT ...
+ * RETURNING statement: that is what lets callers tell inserted rows apart from
+ * duplicates without a second round trip.
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { fakeTable, mockCreateMany } = vi.hoisted(() => {
+const { fakeTable, mockQuery } = vi.hoisted(() => {
   const table: any[] = []
-  let seq = 0
+  const COLUMNS = 13
 
-  /** Emulates prisma.pricePoint.createMany under Postgres constraints. */
-  const createMany = vi.fn(({ data, skipDuplicates }: any) => {
-    let count = 0
-    for (const row of data) {
-      // prisma fills in the uuid default per row, so every insert attempt
-      // carries a fresh `id` unless the caller provided one.
-      const id = row.id ?? `gen-${++seq}`
-      const timestamp = new Date(row.timestamp)
+  /** Emulates one INSERT ... ON CONFLICT DO NOTHING RETURNING id statement. */
+  const query = vi.fn((sql: string, values?: unknown[]) => {
+    if (!/^\s*INSERT INTO price_points/i.test(sql) || !values) {
+      return Promise.resolve({ rows: [], rowCount: 0 })
+    }
+
+    const inserted: { id: string }[] = []
+    for (let i = 0; i < values.length / COLUMNS; i++) {
+      const base = i * COLUMNS
+      const row = {
+        id: values[base],
+        network: values[base + 1],
+        assetA: values[base + 2],
+        assetB: values[base + 3],
+        pairKey: values[base + 4],
+        source: values[base + 5],
+        poolId: values[base + 6],
+        price: values[base + 7],
+        baseVolume: values[base + 8],
+        counterVolume: values[base + 9],
+        ledger: values[base + 10],
+        timestamp: new Date(values[base + 11] as string),
+        eventId: values[base + 12],
+      }
 
       const pkClash = table.some(
-        r => r.id === id && r.timestamp.getTime() === timestamp.getTime(),
+        r => r.id === row.id && r.timestamp.getTime() === row.timestamp.getTime(),
       )
-      // Unique index on (network, source, event_id): NULLs are distinct, so a
-      // row without an event id can never be recognized as a duplicate.
       const uqClash =
         row.eventId != null &&
         table.some(
@@ -50,19 +68,14 @@ const { fakeTable, mockCreateMany } = vi.hoisted(() => {
             r.eventId === row.eventId,
         )
 
-      if (pkClash || uqClash) {
-        if (skipDuplicates) continue
-        throw Object.assign(new Error('duplicate key value violates unique constraint'), {
-          code: 'P2002',
-        })
-      }
-      table.push({ ...row, id, timestamp })
-      count++
+      if (pkClash || uqClash) continue
+      table.push(row)
+      inserted.push({ id: row.id as string })
     }
-    return Promise.resolve({ count })
+    return Promise.resolve({ rows: inserted, rowCount: inserted.length })
   })
 
-  return { fakeTable: table, mockCreateMany: createMany }
+  return { fakeTable: table, mockQuery: query }
 })
 
 vi.mock('pg', () => ({
@@ -71,8 +84,8 @@ vi.mock('pg', () => ({
   // only answers queries makes this file fail to import rather than fail a
   // test. A fake should look like the thing it replaces.
   Pool: class FakePool {
-    query() {
-      return Promise.resolve({ rows: [] })
+    query(...args: any[]) {
+      return mockQuery(...args)
     }
     on() {
       return this
@@ -81,17 +94,16 @@ vi.mock('pg', () => ({
 }))
 
 vi.mock('@prisma/client', () => ({
-  PrismaClient: class FakePrismaClient {
-    pricePoint = { createMany: (args: any) => mockCreateMany(args) }
-  },
+  PrismaClient: class FakePrismaClient {},
 }))
 
-import { upsertPricePoints, synthesizeEventId } from '../db'
+import { upsertPricePoints, type PricePointWrite } from '../db'
+import { price_points_duplicate_total, price_points_inserted_total } from '../metrics'
 
 /** A full USDC issuer address, kept whole per the repo convention. */
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
 
-function point(overrides: Record<string, any> = {}) {
+function point(overrides: Record<string, any> = {}): PricePointWrite {
   return {
     assetA: 'XLM',
     assetB: 'USDC',
@@ -109,23 +121,29 @@ function point(overrides: Record<string, any> = {}) {
 }
 
 /** Rebuild a batch as a retry would: fresh objects, identical field values. */
-function retransmit(batch: ReturnType<typeof point>[]) {
+function retransmit(batch: PricePointWrite[]) {
   return batch.map(p => ({ ...p, timestamp: new Date(p.timestamp.getTime()) }))
 }
 
 beforeEach(() => {
   fakeTable.splice(0, fakeTable.length)
-  mockCreateMany.mockClear()
+  mockQuery.mockClear()
+  price_points_duplicate_total.reset()
+  price_points_inserted_total.reset()
 })
 
 describe('replaying a batch never stores the same trade twice (#237)', () => {
   it('absorbs a replay of trades that carry a natural event id', async () => {
     const batch = [point(), point({ eventId: '277710193062797313-0' })]
 
-    expect((await upsertPricePoints(batch, 'testnet')).count).toBe(2)
+    const first = await upsertPricePoints(batch, 'testnet')
+    expect(first.inserted).toHaveLength(2)
+    expect(first.duplicate).toHaveLength(0)
     const rowsAfterFirstPass = fakeTable.length
 
-    expect((await upsertPricePoints(retransmit(batch), 'testnet')).count).toBe(0)
+    const replay = await upsertPricePoints(retransmit(batch), 'testnet')
+    expect(replay.inserted).toHaveLength(0)
+    expect(replay.duplicate).toHaveLength(2)
     expect(fakeTable.length).toBe(rowsAfterFirstPass)
   })
 
@@ -138,10 +156,13 @@ describe('replaying a batch never stores the same trade twice (#237)', () => {
       point({ source: 'aquarius_amm', eventId: undefined, price: 0.2 }),
     ]
 
-    expect((await upsertPricePoints(batch, 'testnet')).count).toBe(2)
+    const first = await upsertPricePoints(batch, 'testnet')
+    expect(first.inserted).toHaveLength(2)
     const rowsAfterFirstPass = fakeTable.length
 
-    expect((await upsertPricePoints(retransmit(batch), 'testnet')).count).toBe(0)
+    const replay = await upsertPricePoints(retransmit(batch), 'testnet')
+    expect(replay.inserted).toHaveLength(0)
+    expect(replay.duplicate).toHaveLength(2)
     expect(fakeTable.length).toBe(rowsAfterFirstPass)
   })
 
@@ -173,7 +194,9 @@ describe('replaying a batch never stores the same trade twice (#237)', () => {
 
     await upsertPricePoints(instanceA, 'testnet')
     const rowsAfterFirst = fakeTable.length
-    expect((await upsertPricePoints(instanceB, 'testnet')).count).toBe(0)
+    const second = await upsertPricePoints(instanceB, 'testnet')
+    expect(second.inserted).toHaveLength(0)
+    expect(second.duplicate).toHaveLength(1)
     expect(fakeTable.length).toBe(rowsAfterFirst)
   })
 
@@ -181,15 +204,51 @@ describe('replaying a batch never stores the same trade twice (#237)', () => {
     // The identity is network-scoped; the same event id on two networks is
     // two legitimately distinct rows (per-network ingesters, #237).
     await upsertPricePoints([point()], 'testnet')
-    expect((await upsertPricePoints([point()], 'mainnet')).count).toBe(1)
+    const mainnet = await upsertPricePoints([point()], 'mainnet')
+    expect(mainnet.inserted).toHaveLength(1)
     expect(fakeTable.length).toBe(2)
   })
 
   it('passes skipDuplicates so the batch degrades to ON CONFLICT DO NOTHING', async () => {
-    await upsertPricePoints([point()], 'testnet')
-    expect(mockCreateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ skipDuplicates: true })
+    await upsertPricePoints([point(), point({ eventId: 'another-id' })], 'testnet')
+
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+    const [sql] = mockQuery.mock.calls[0]
+    expect(sql).toMatch(/^INSERT INTO price_points/i)
+    expect(sql).toMatch(/ON CONFLICT \(network, source, event_id\) DO NOTHING/)
+    expect(sql).toMatch(/RETURNING id/)
+  })
+
+  it('reports inserted and duplicate rows per source and network', async () => {
+    const batch = [point(), point({ eventId: 'another-id' })]
+
+    const first = await upsertPricePoints(batch, 'testnet')
+    expect(first.inserted).toHaveLength(2)
+    const replay = await upsertPricePoints(batch, 'testnet')
+    expect(replay.duplicate).toHaveLength(2)
+
+    const inserted = await price_points_inserted_total.get()
+    const duplicates = await price_points_duplicate_total.get()
+
+    expect(inserted.values.find(v => v.labels.source === 'SDEX')?.value).toBe(2)
+    expect(
+      duplicates.values.find(
+        v => v.labels.source === 'SDEX' && v.labels.network === 'testnet'
+      )?.value
+    ).toBe(2)
+  })
+
+  it('quarantines implausible prices instead of writing them', async () => {
+    const result = await upsertPricePoints(
+      [point({ price: Number.NaN }), point({ eventId: 'good-id' })],
+      'testnet',
     )
+
+    expect(result.quarantined).toHaveLength(1)
+    expect(result.inserted).toHaveLength(1)
+    expect(result.duplicate).toHaveLength(0)
+    expect(fakeTable).toHaveLength(1)
+    expect(mockQuery).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -211,21 +270,23 @@ describe('synthesized event ids are deterministic from content, never random', (
   })
 
   it('fills in a non-null eventId when the source does not supply one', async () => {
-    await upsertPricePoints([point({ eventId: undefined })], 'testnet')
+    const result = await upsertPricePoints([point({ eventId: undefined })], 'testnet')
+    expect(result.inserted[0].eventId).toEqual(expect.any(String))
+    expect(result.inserted[0].eventId).not.toBe('')
     expect(fakeTable[0].eventId).toEqual(expect.any(String))
-    expect(fakeTable[0].eventId).not.toBe('')
   })
 
   it('derives the same id for identical content built as separate objects', async () => {
     await upsertPricePoints([point({ eventId: undefined })], 'testnet')
     const first = fakeTable[0].eventId
 
-    await upsertPricePoints(
+    const replay = await upsertPricePoints(
       [point({ eventId: undefined, timestamp: new Date('2026-10-17T08:00:00.000Z') })],
       'testnet',
     )
     // Deduped, so the stored row still shows the first derivation.
     expect(fakeTable.length).toBe(1)
+    expect(replay.duplicate).toHaveLength(1)
     expect(fakeTable[0].eventId).toBe(first)
   })
 
