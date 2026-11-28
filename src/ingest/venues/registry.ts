@@ -86,6 +86,7 @@ export const registeredVenues: VenueRegistration[] = [
     // (COINBASE_ENABLED_<NETWORK>, default off).
     adapter: coinbaseAdapter,
     hasCredentials: isCoinbaseConfigured,
+    onChain: false,
   },
 ]
 

@@ -134,6 +134,11 @@ export const coinbaseAdapter: VenueAdapter<CoinbaseProduct, CoinbaseTicker> = {
   name: COINBASE_VENUE_NAME,
   kind: 'orderbook',
   source: COINBASE_SOURCE_NAME,
+  // An exchange quote, not a Stellar trade: never part of the published
+  // on-chain price, the TWAP/VWAP or the last-trade age (#742). Stated here
+  // rather than left to the not-on-chain default, so it cannot flip by
+  // accident.
+  onChain: false,
   sourceTimeCapability: { status: 'provided', semantic: 'exchange_timestamp' },
   classification: 'primary',
   type: 'Order Book',

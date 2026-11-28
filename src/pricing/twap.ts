@@ -1,6 +1,7 @@
 import { pgPool } from '../db'
 import { activeNetwork, config, type NetworkName } from '../config'
 import type { DecimalFormat } from '../utils/decimals'
+import { getOnChainSources } from '../ingest/venues'
 
 // ─── TWAP — Time-Weighted Average Price ───────────────────────────────────────
 // Computed by averaging the midpoints of successive price points weighted by
@@ -73,15 +74,20 @@ export async function computeTWAP(
     ?? (config as any).pricing?.staleThresholdSeconds
     ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
-  // Fetch price points within the window for the specific network, ordered by observed_at
+  // Fetch price points within the window for the specific network, ordered by
+  // observed_at. Only on-chain venues are read (#652, #644): an exchange row
+  // (KuCoin, Gate.io, coinbase_cex) shares the pair's pair_key, and a TWAP
+  // weighs each row by time rather than volume, so even a zero-volume ticker
+  // quote would move it.
   const result = await pgPool.query(
     `SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
      FROM price_points
      WHERE pair_key = $1
        AND network = $3
+       AND source = ANY($4)
        AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
      ORDER BY COALESCE(observed_at, timestamp) ASC`,
-    [pairKey, windowMinutes, network]
+    [pairKey, windowMinutes, network, getOnChainSources()]
   )
 
   const rows = result.rows
@@ -256,13 +262,17 @@ export async function computeVWAP(
              ORDER BY COALESCE(observed_at, timestamp) ASC`
     params = [pairKey, windowMinutes, options.source, network]
   } else {
+    // Every on-chain venue and no exchange, as in computeTWAP above. A zero-
+    // volume exchange row adds nothing to the weighted sum, but it would still
+    // count as a sample, take part in outlier rejection and set the freshness.
     query = `SELECT price::numeric as price, base_volume::numeric as volume, COALESCE(observed_at, timestamp) as observed_at, timestamp
              FROM price_points
              WHERE pair_key = $1
                AND network = $3
+               AND source = ANY($4)
                AND COALESCE(observed_at, timestamp) > NOW() - ($2 || ' minutes')::interval
              ORDER BY COALESCE(observed_at, timestamp) ASC`
-    params = [pairKey, windowMinutes, network]
+    params = [pairKey, windowMinutes, network, getOnChainSources()]
   }
 
   const result = await pgPool.query(query, params)
