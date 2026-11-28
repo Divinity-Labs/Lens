@@ -15,6 +15,12 @@ RUN npm run build
 # Stage 2: Run
 FROM node:22-slim
 
+# Prisma's engines need libssl3 (prisma/schema.prisma targets
+# `debian-openssl-3.0.x`). On main it arrived only as a dependency of the curl
+# install this PR removes, so install openssl explicitly — it pulls libssl3
+# in — or `prisma migrate deploy` at start-up crash-loops.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy production dependencies (exact versions from package-lock.json)
@@ -50,8 +56,10 @@ USER node
 # Liveness only: /live answers as long as the event loop is turning and
 # touches neither Postgres nor Redis (see docs/health.md). /ready must not be
 # used here — a container must not be restarted because Postgres is briefly
-# away. A Node one-liner is used so no curl install is needed.
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=20s \
+# away. A Node one-liner is used so no curl install is needed. The 60s
+# start period is the grace the old compose healthcheck gave first-run
+# migrations before the server can become live.
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=60s \
   CMD ["node", "-e", "fetch(`http://localhost:${process.env.PORT || 3002}/live`).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
 # Migrations run at start-up from src/index.ts via src/db/migrate.ts

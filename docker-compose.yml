@@ -19,6 +19,8 @@ services:
     # No healthcheck here on purpose: the image's own HEALTHCHECK applies
     # (Node one-liner against /live, see Dockerfile). A compose healthcheck
     # would override it — the old curl one did, and curl isn't in the image.
+    # The 60s start period for first-run migrations now lives in that
+    # HEALTHCHECK instead of here.
 
   postgres:
     image: postgres:15-alpine
