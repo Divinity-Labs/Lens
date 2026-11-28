@@ -45,7 +45,7 @@ vi.mock('../network/clients', () => ({
 
 import { ingestPair as ingestSdexPair, _getLastPrice as getSdexLastPrice, _resetLastPrice as resetSdexLastPrice } from '../ingest/venues/sdex'
 import { snapshotPool, ingestPoolTrades, _getLastPrice as getAmmLastPrice, _resetLastPrice as resetAmmLastPrice } from '../ingest/venues/amm'
-import { ingestPool as ingestSoroswapPool, _getLastPrice as getSoroswapLastPrice, _resetLastPrice as resetSoroswapLastPrice } from '../ingest/venues/soroswap'
+import { ingestPool as ingestSoroswapPool, _getLastPrice as getSoroswapLastPrice, _resetLastPrice as resetSoroswapLastPrice, setCachedPoolToken0 } from '../ingest/venues/soroswap'
 import { ingestAquariusPair, _getLastPrice as getAquariusLastPrice, _resetLastPrice as resetAquariusLastPrice } from '../ingest/venues/aquarius'
 import { dispatchPriceUpdate } from '../webhookDispatcher'
 import type { WatchedPair } from '../types'
@@ -247,9 +247,10 @@ describe('Dual-network alerts and price tracking (#188)', () => {
         tokenA: { address: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', symbol: 'XLM', name: 'XLM', decimals: 7 },
         tokenB: { address: 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75', symbol: 'USD', name: 'USD', decimals: 7 },
       }
+      setCachedPoolToken0(mockPoolEntry.poolAddress, mockPoolEntry.tokenA.address)
 
       // Step 1: Ingest on testnet with reserves 8 / 100 = 0.08
-      const mockReservesTestnet = vi.fn().mockResolvedValue([8_000_000n, 100_000_000n])
+      const mockReservesTestnet = vi.fn().mockResolvedValue([100_000_000n, 8_000_000n])
       await ingestSoroswapPool(mockPoolEntry, mockPair, mockReservesTestnet, 'testnet')
 
       expect(getSoroswapLastPrice('testnet', mockPair.pairKey)).toBe(0.08)
@@ -257,7 +258,7 @@ describe('Dual-network alerts and price tracking (#188)', () => {
       expect(global.fetch).not.toHaveBeenCalled()
 
       // Step 2: Ingest on mainnet with reserves 12 / 100 = 0.12
-      const mockReservesMainnet = vi.fn().mockResolvedValue([12_000_000n, 100_000_000n])
+      const mockReservesMainnet = vi.fn().mockResolvedValue([100_000_000n, 12_000_000n])
       await ingestSoroswapPool(mockPoolEntry, mockPair, mockReservesMainnet, 'mainnet')
 
       expect(getSoroswapLastPrice('mainnet', mockPair.pairKey)).toBe(0.12)
@@ -354,7 +355,11 @@ describe('Dual-network alerts and price tracking (#188)', () => {
       expect(getAmmLastPrice('mainnet', mockPair.pairKey)).toBeUndefined()
 
       // Soroswap
-      const mockReserves = vi.fn().mockResolvedValue([10_000_000n, 100_000_000n])
+      setCachedPoolToken0(
+        'CBJJLMR6MXJ4YOM3VXFQS4HM2IVBZFVQ3UQXNZKG5R6U3LWJDV4AOPRD',
+        'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'
+      )
+      const mockReserves = vi.fn().mockResolvedValue([100_000_000n, 10_000_000n])
       await ingestSoroswapPool(
         {
           poolAddress: 'CBJJLMR6MXJ4YOM3VXFQS4HM2IVBZFVQ3UQXNZKG5R6U3LWJDV4AOPRD',
