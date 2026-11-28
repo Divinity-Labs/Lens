@@ -10,7 +10,7 @@ Instead of an arbitrary alphabetized URL list, this page organizes what Lens kno
 
 A developer arriving at Lens does not browse by HTTP verb or path parameter. Their exploration follows a natural progression:
 
-1. **Core Pricing & Trade Execution (Steps 1–6)**:
+1. **Core Pricing & Trade Execution (Steps 1–53)**:
    The universal entry question: *"What is an asset trading at right now?"* (`/price/:assetA/:assetB`). Once price is known, the immediate follow-up is execution: *"Where do I get the best return for my trade size?"* (`/price/:assetA/:assetB/route`), *"What does combined order-book depth look like?"* (`/book/:assetA/:assetB`), *"How much slippage will I incur?"* (`/price/:assetA/:assetB/depth`), and how that slippage grows with size (`/impact/:assetA/:assetB`). Pricing in a local currency rather than dollars lives here too (`/price/:asset/fiat`).
 
 2. **Market Overview & Liquidity Pools (Steps 7–17)**:
@@ -89,6 +89,7 @@ A developer arriving at Lens does not browse by HTTP verb or path parameter. The
 | 50 | How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` | Automation, Discovery & Payments |
 | 51 | How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` | Automation, Discovery & Payments |
 | 52 | How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` | Automation, Discovery & Payments |
+| 53 | What is the staleness-aware median price across venues, and which sources were included or excluded? | `GET /v1/price/:assetA/:assetB/median` | `GET /price/XLM/USDC/median?freshness=300&network=testnet` | Core Pricing & Trade Execution |
 
 ---
 
@@ -104,6 +105,7 @@ A developer arriving at Lens does not browse by HTTP verb or path parameter. The
 | **What is the simulated order-book depth and expected slippage for a trade size?** | `GET /v1/price/:assetA/:assetB/depth` | `GET /price/XLM/USDC/depth?amount=1000&network=testnet` | Get order-book depth and execution slippage for a pair |
 | **How does slippage grow as my trade size increases?** | `GET /v1/impact/:assetA/:assetB` | `GET /impact/XLM/USDC?network=testnet` | Get an adaptive slippage impact curve for a pair |
 | **What is this asset worth in my local currency, such as naira?** | `GET /v1/price/:asset/fiat` | `GET /price/XLM/fiat?currency=NGN&network=testnet` | Convert asset price to fiat currency with NGN support (#290) |
+| **What is the staleness-aware median price across venues, and which sources were included or excluded?** | `GET /v1/price/:assetA/:assetB/median` | `GET /price/XLM/USDC/median?freshness=300&network=testnet` | Get staleness-aware median price across fresh sources with priority fallback |
 
 ### Market Overview & Liquidity Pools
 

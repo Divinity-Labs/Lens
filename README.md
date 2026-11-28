@@ -101,6 +101,7 @@ npx @modelcontextprotocol/inspector npm run mcp:server
 | GET | `/v1/price/:assetA/:assetB` | Get aggregated price for a pair |
 | GET | `/v1/premium/:assetA/:assetB` | Get on-chain vs CEX price premium and spread |
 | GET | `/v1/price/:assetA/:assetB/route` | Get best swap route for a pair and amount |
+| GET | `/v1/price/:assetA/:assetB/median` | Get staleness-aware median price across fresh sources with priority fallback |
 | GET | `/v1/price/:asset/fiat` | Convert asset price to fiat currency with NGN support (#290) |
 | GET | `/v1/price/:assetA/:assetB/history` | Get price history buckets |
 | GET | `/v1/pools` | Get AMM liquidity pool reserves and spot prices |
@@ -204,6 +205,7 @@ the committed table differs from a fresh generation.
 | How do I submit and settle an x402 payment on the Stellar network? | `POST /v1/settle` | `POST /settle` |
 | How can my application receive push alerts when a price crosses a threshold? | `POST /v1/webhooks` | `POST /webhooks` |
 | How do I cancel an existing price threshold alert webhook? | `DELETE /v1/webhooks/:id` | `DELETE /webhooks/wh_9f8e7d6c5b4a3a2b1c?network=testnet` |
+| What is the staleness-aware median price across venues, and which sources were included or excluded? | `GET /v1/price/:assetA/:assetB/median` | `GET /price/XLM/USDC/median?freshness=300&network=testnet` |
 <!-- QUESTION_INDEX_END -->
 Every non-internal route above has a matching entry in [`openapi.yaml`](openapi.yaml);
 `tests/openapi.test.ts` boots the server and fails if a registered route is
