@@ -107,7 +107,7 @@ function installSeededDb() {
     const windowMinutes = boundWindowMinutes(sql, params)
     const pairKey = String(params[0])
 
-    // 24h price change: reference in [now-72h, now-24h) and latest inside [now-24h, now).
+    // 24h price change: reference in [now-26h, now-24h) and latest inside [now-24h, now).
     if (sql.includes('price_24h_ago')) {
       const allNet = rowsInWindow(network, pairKey, null)
       const refRows = allNet

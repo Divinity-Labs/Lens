@@ -216,8 +216,13 @@ export function addDecimalStrings(a: string, b: string): string {
 }
 
 export const PRICE_CHANGE_24H_WINDOW_HOURS = 24
-/** Look-back limit before `now - 24h` for finding the prior reference price in force. */
-export const PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS = 48
+/**
+ * How far before `now - 24h` the reference price may be: the reference is the
+ * newest price observed in [now - 24h - this, now - 24h), so it is between 24
+ * and 26 hours old. With no price in that range the change is null, never a
+ * comparison with an older price.
+ */
+export const PRICE_CHANGE_REFERENCE_LOOKBACK_HOURS = 2
 /** Short endpoint averaging window (minutes) around each end to damp thin-venue price noise. */
 export const PRICE_CHANGE_ENDPOINT_VWAP_MINUTES = 5
 

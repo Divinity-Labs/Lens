@@ -367,7 +367,7 @@ describe('aggregator/vwap.ts', () => {
       expect(venueDamped.num).not.toBeNull()
       expect(venueDamped.num!).toBeLessThan(1)
 
-      // 4. Exact 24h boundary belongs to [now-24h, now), not [now-72h, now-24h)
+      // 4. Exact 24h boundary belongs to [now-24h, now), not [now-26h, now-24h)
       mockQuery.mockImplementationOnce(async (_sql: string, params: unknown[]) =>
         runRefNowSql([{ price: 100, vol: 10, ageMs: 24 * hour }], Number(params[2]), Number(params[3]))
       )
