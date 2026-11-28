@@ -33,6 +33,7 @@ import {
   SCREENER_MAX_LIMIT,
 } from '../services/screener'
 import { computeVolumes, VolumesInputError } from '../routes/volumes'
+import { computeCurrentTvl, computeTvlHistory } from '../routes/tvl'
 import { isAggregatorVenue } from '../ingest/venues'
 import { computeSpreads, SpreadsInputError } from '../routes/spreads'
 import { priceEmitter, PRICE_PUBLISHED, type PricePublishedEvent } from '../events'
@@ -364,6 +365,104 @@ export const schema = `
     tightest: VenueQuote
   }
 
+  """
+  One venue's slice of total value locked, with the venue name as a field —
+  REST's \`venues\` map as a typed list.
+
+  \`tvlUsd\` is the venue's priced TVL; a venue whose pools are all unpriced has
+  \`tvlUsd\` of \`"0"\` while \`unpricedPoolCount\` explains why. Monetary figures
+  are decimal strings, not \`Float\`, so no additional precision is lost at the
+  GraphQL edge.
+  """
+  type TvlVenue {
+    venue: String!
+    tvlUsd: String!
+    poolCount: Int!
+    pricedPoolCount: Int!
+    unpricedPoolCount: Int!
+  }
+
+  """
+  One asset's share of TVL, with the normalized asset code as a field — REST's
+  \`byAsset\` map as a typed list.
+
+  \`amount\` is in the asset's own units; \`priceUsd\` and \`tvlUsd\` are null when
+  the asset has no USD price, and \`priced\` says which case applies. Monetary
+  figures are decimal strings, not \`Float\`.
+  """
+  type TvlAsset {
+    asset: String!
+    amount: String!
+    priceUsd: String
+    priceSource: String
+    tvlUsd: String
+    priced: Boolean!
+  }
+
+  """
+  One liquidity pool's TVL breakdown.
+
+  \`tvlUsd\` is null when the pool is unpriced; it is never reported as zero.
+  REST nests the two price sources under \`valuationSources.assetA\` /
+  \`valuationSources.assetB\`; here they are flattened onto the pool so a
+  selection stays within the query-depth limit. Monetary values are decimal
+  strings, not \`Float\`.
+  """
+  type TvlPool {
+    poolId: String!
+    venue: String!
+    pairKey: String!
+    assetA: String!
+    assetB: String!
+    reserveA: String!
+    reserveB: String!
+    priced: Boolean!
+    tvlUsd: String
+    assetAPrice: String
+    assetAPriceSource: String
+    assetAPriceTimestamp: String
+    assetBPrice: String
+    assetBPriceSource: String
+    assetBPriceTimestamp: String
+  }
+
+  """
+  Current total value locked: the same figures as REST GET /tvl, with the
+  \`venues\` and \`byAsset\` maps converted to typed lists.
+
+  Every monetary field (\`totalTvlUsd\`, venue/asset \`tvlUsd\`, \`amount\`, prices
+  and reserves) is a decimal \`String\`, preserving the value the REST
+  computation produced without narrowing it through a GraphQL \`Float\`.
+  """
+  type TvlResponse {
+    network: String!
+    totalTvlUsd: String!
+    unpricedPoolsCount: Int!
+    pricedPoolsCount: Int!
+    venues: [TvlVenue!]!
+    byAsset: [TvlAsset!]!
+    pools: [TvlPool!]!
+    computedAt: String!
+  }
+
+  """One hourly TVL point. \`tvlUsd\` is a decimal string, not a \`Float\`."""
+  type TvlHistoryPoint {
+    bucket: String!
+    tvlUsd: String!
+    pricedPoolsCount: Int!
+    unpricedPoolsCount: Int!
+  }
+
+  """
+  Hourly TVL history: the same points as REST GET /tvl?history=true.
+  """
+  type TvlHistoryResponse {
+    network: String!
+    window: String!
+    interval: String!
+    points: [TvlHistoryPoint!]!
+  }
+
   type Query {
     """
     Aggregated price for a pair. Three outcomes are kept distinct:
@@ -441,6 +540,25 @@ export const schema = `
     network; any other value fails with INVALID_INPUT, as REST answers 400.
     """
     spreads(asset: String!, window: String, network: String): SpreadReport!
+    """
+    Current total value locked per venue, asset and pool. Shares its
+    implementation with REST GET /tvl (computeCurrentTvl), so the figures
+    cannot drift between the two surfaces. \`network\` (testnet or mainnet)
+    defaults to the active network; any other value fails with INVALID_INPUT,
+    as REST answers 400. An unpriced pool keeps \`priced: false\` and
+    \`tvlUsd: null\`; it is never
+    folded in as a zero-valued pool. \`venues\` and \`byAsset\` are lists, with
+    the original map key as the \`venue\` / \`asset\` field.
+    """
+    tvl(network: String): TvlResponse
+    """
+    Hourly TVL history over \`windowHours\` (default 24, maximum 720). Shares
+    its implementation with REST GET /tvl?history=true (computeTvlHistory),
+    so the points cannot drift between the two surfaces. \`windowHours\` must
+    be an integer from 1 to 720; \`network\` (testnet or mainnet) defaults to
+    the active network. Invalid values fail with INVALID_INPUT.
+    """
+    tvlHistory(network: String, windowHours: Int): TvlHistoryResponse
   }
 
   type Subscription {
@@ -524,6 +642,62 @@ function asInvalidInput(err: unknown): never {
 }
 
 /**
+ * Upper bound for `tvlHistory.windowHours`: 30 days of hourly buckets. The
+ * REST route accepts any positive integer it can parse, but GraphQL rejects
+ * an out-of-range window instead of silently returning a huge scan.
+ */
+export const MAX_TVL_HISTORY_WINDOW_HOURS = 720
+const MIN_TVL_HISTORY_WINDOW_HOURS = 1
+const DEFAULT_TVL_HISTORY_WINDOW_HOURS = 24
+
+/** Validates `network` for the TVL queries, defaulting to the active network. */
+function tvlNetwork(network: string | null | undefined): NetworkName {
+  if (network != null && network !== 'testnet' && network !== 'mainnet') {
+    throw new ErrorWithProps('network must be one of: testnet, mainnet', {
+      code: 'INVALID_INPUT',
+      field: 'network',
+    })
+  }
+  return (network ?? activeNetwork) as NetworkName
+}
+
+/**
+ * Validates `windowHours`: a positive integer no larger than
+ * MAX_TVL_HISTORY_WINDOW_HOURS. Decimals are rejected here too, which is the
+ * layer a direct resolver call reaches; over HTTP the `Int` argument type
+ * rejects a non-integer before the resolver runs.
+ */
+function tvlWindowHours(value: number | null | undefined): number {
+  const windowHours = value ?? DEFAULT_TVL_HISTORY_WINDOW_HOURS
+  if (
+    !Number.isInteger(windowHours) ||
+    windowHours < MIN_TVL_HISTORY_WINDOW_HOURS ||
+    windowHours > MAX_TVL_HISTORY_WINDOW_HOURS
+  ) {
+    throw new ErrorWithProps(
+      `windowHours must be an integer between ${MIN_TVL_HISTORY_WINDOW_HOURS} and ${MAX_TVL_HISTORY_WINDOW_HOURS}`,
+      { code: 'INVALID_INPUT', field: 'windowHours' },
+    )
+  }
+  return windowHours
+}
+
+/**
+ * Renders a monetary figure the REST computation already produced as a decimal
+ * string. This is intentionally not a numeric conversion: no parseFloat,
+ * Number() or float cast happens at the GraphQL edge, so `Float`'s ~15-17
+ * significant digits cannot truncate the value further.
+ */
+function decimal(value: number): string {
+  return String(value)
+}
+
+function nullableDecimal(value: number | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  return decimal(value)
+}
+
+/**
  * Required scope for each GraphQL operation field, matching its REST equivalent route (#618).
  * Every query, mutation and subscription field declares the scope it needs.
  */
@@ -537,6 +711,8 @@ export const FIELD_SCOPES: Record<string, string> = {
   screener: 'read:prices',
   volumes: 'read:prices',
   spreads: 'read:prices',
+  tvl: 'read:prices',
+  tvlHistory: 'read:prices',
   priceUpdated: 'subscribe',
 }
 
@@ -969,6 +1145,68 @@ export const resolvers = {
       // The REST route's own computation (src/routes/spreads.ts), returned as is.
       return computeSpreads(asset, window ?? undefined, network ?? undefined)
         .catch(asInvalidInput)
+    }),
+
+    tvl: withScope('read:prices', async function (
+      _: unknown,
+      { network }: { network?: string | null }
+    ) {
+      // computeCurrentTvl (src/routes/tvl.ts) owns the SQL and the aggregation;
+      // this layer validates the inputs and reshapes maps into typed lists.
+      const report = await computeCurrentTvl(tvlNetwork(network))
+      return {
+        ...report,
+        totalTvlUsd: decimal(report.totalTvlUsd),
+        venues: Object.entries(report.venues).map(([venue, figures]) => ({
+          venue,
+          tvlUsd: decimal(figures.tvlUsd),
+          poolCount: figures.poolCount,
+          pricedPoolCount: figures.pricedPoolCount,
+          unpricedPoolCount: figures.unpricedPoolCount,
+        })),
+        byAsset: Object.entries(report.byAsset).map(([asset, figures]) => ({
+          asset,
+          amount: decimal(figures.amount),
+          priceUsd: nullableDecimal(figures.priceUsd),
+          priceSource: figures.priceSource,
+          tvlUsd: nullableDecimal(figures.tvlUsd),
+          priced: figures.priced,
+        })),
+        pools: report.pools.map(pool => ({
+          poolId: pool.poolId,
+          venue: pool.venue,
+          pairKey: pool.pairKey,
+          assetA: pool.assetA,
+          assetB: pool.assetB,
+          reserveA: decimal(pool.reserveA),
+          reserveB: decimal(pool.reserveB),
+          priced: pool.priced,
+          tvlUsd: nullableDecimal(pool.tvlUsd),
+          assetAPrice: nullableDecimal(pool.valuationSources.assetA?.price),
+          assetAPriceSource: pool.valuationSources.assetA?.source ?? null,
+          assetAPriceTimestamp: pool.valuationSources.assetA?.timestamp ?? null,
+          assetBPrice: nullableDecimal(pool.valuationSources.assetB?.price),
+          assetBPriceSource: pool.valuationSources.assetB?.source ?? null,
+          assetBPriceTimestamp: pool.valuationSources.assetB?.timestamp ?? null,
+        })),
+      }
+    }),
+
+    tvlHistory: withScope('read:prices', async function (
+      _: unknown,
+      { network, windowHours }: { network?: string | null; windowHours?: number | null }
+    ) {
+      // Validate both arguments before the REST computation touches the DB.
+      const net = tvlNetwork(network)
+      const hours = tvlWindowHours(windowHours)
+      const report = await computeTvlHistory(net, hours)
+      return {
+        ...report,
+        points: report.points.map(point => ({
+          ...point,
+          tvlUsd: decimal(point.tvlUsd),
+        })),
+      }
     }),
   },
 

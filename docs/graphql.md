@@ -17,6 +17,7 @@ Lens exposes a high-performance GraphQL API alongside its REST interface, powere
    - [`listPairs`](#4-listpairs)
    - [`screener`](#5-screener)
    - [`volumes` and `spreads`](#6-volumes-and-spreads)
+   - [`tvl` and `tvlHistory`](#7-tvl-and-tvlhistory)
 6. [Live Price Subscriptions (`graphql-transport-ws`)](#live-price-subscriptions-graphql-transport-ws)
    - [Protocol Handshake Walkthrough](#protocol-handshake-walkthrough)
    - [Network Filtering Semantics](#network-filtering-semantics)
@@ -54,6 +55,8 @@ GraphQL operations on Lens enforce the same fine-grained per-route scopes requir
 | `screener` | `Query` | `read:prices` | `GET /screener` |
 | `volumes` | `Query` | `read:prices` | `GET /volumes/:asset` |
 | `spreads` | `Query` | `read:prices` | `GET /spreads/:asset` |
+| `tvl` | `Query` | `read:prices` | `GET /tvl` |
+| `tvlHistory` | `Query` | `read:prices` | `GET /tvl?history=true` |
 | `priceUpdated` | `Subscription` | `subscribe` | WebSocket `/ws/prices` |
 
 ### Multi-Field Queries & Scope Union
@@ -138,6 +141,8 @@ type Query {
   screener(filters: ScreenerFilters, sortBy: String = "volume", order: ScreenerSortOrder = DESC, cursor: String, limit: Int = 20): ScreenerPage!
   volumes(asset: String!, window: String, network: String): VolumeReport!
   spreads(asset: String!, window: String, network: String): SpreadReport!
+  tvl(network: String): TvlResponse
+  tvlHistory(network: String, windowHours: Int): TvlHistoryResponse
 }
 
 type Subscription {
@@ -212,6 +217,49 @@ Payload delivered on every real-time subscription event.
 | `price` | `Float!` | Latest recorded trade or reserve spot price. |
 | `ts` | `String!` | ISO-8601 timestamp of trade execution or ingestion. |
 | `network` | `String!` | Network of origin: `"testnet"` or `"mainnet"`. |
+
+#### `TvlResponse`
+Current total value locked, matching REST `GET /tvl`. All monetary figures are
+`String`, not `Float` — see [Monetary representation](#monetary-representation).
+
+| Field | Type | Description |
+|---|---|---|
+| `network` | `String!` | Network answered: `"testnet"` or `"mainnet"`. |
+| `totalTvlUsd` | `String!` | Sum of every priced pool's USD TVL, rounded like REST. |
+| `pricedPoolsCount` | `Int!` | Pools with both sides priced. |
+| `unpricedPoolsCount` | `Int!` | Pools excluded from the total because at least one side has no USD price. |
+| `venues` | `[TvlVenue!]!` | REST's `venues` map as a list, keyed by the `venue` field. |
+| `byAsset` | `[TvlAsset!]!` | REST's `byAsset` map as a list, keyed by the normalized `asset` field. |
+| `pools` | `[TvlPool!]!` | Per-pool breakdown, including unpriced pools. |
+| `computedAt` | `String!` | ISO-8601 timestamp of this computation. |
+
+`TvlVenue` fields: `venue`, `tvlUsd`, `poolCount`, `pricedPoolCount`,
+`unpricedPoolCount`.
+
+`TvlAsset` fields: `asset`, `amount` (own units), `priceUsd` (nullable),
+`priceSource` (nullable), `tvlUsd` (nullable), `priced`.
+
+`TvlPool` fields: `poolId`, `venue`, `pairKey`, `assetA`, `assetB`, `reserveA`,
+`reserveB`, `priced`, `tvlUsd` (nullable), and the flattened price sources
+`assetAPrice`, `assetAPriceSource`, `assetAPriceTimestamp`, `assetBPrice`,
+`assetBPriceSource`, `assetBPriceTimestamp`. REST's
+`valuationSources.assetA`/`assetB` are flattened so one selection stays
+within the default query-depth limit. An unpriced pool has `priced: false`
+and `tvlUsd: null`; it is never reported as zero.
+
+#### `TvlHistoryResponse`
+Hourly TVL history, matching REST `GET /tvl?history=true`. `tvlUsd` on each
+point is a `String`.
+
+| Field | Type | Description |
+|---|---|---|
+| `network` | `String!` | Network answered. |
+| `window` | `String!` | Window covered, e.g. `"24h"`. |
+| `interval` | `String!` | Bucket interval, `"60m"`. |
+| `points` | `[TvlHistoryPoint!]!` | Oldest first. |
+
+`TvlHistoryPoint` fields: `bucket` (ISO-8601), `tvlUsd`, `pricedPoolsCount`,
+`unpricedPoolsCount`.
 
 ---
 
@@ -574,6 +622,152 @@ curl -s -X POST http://localhost:3002/graphql \
     "query": "query VenueViews($asset: String!, $network: String) { volumes(asset: $asset, network: $network) { network totals { net gross } venues { venue volume aggregator } } spreads(asset: $asset, network: $network) { network tightest { venue pairKey spreadBps } } }",
     "variables": { "asset": "XLM", "network": "testnet" }
   }'
+```
+
+---
+
+### 7. `tvl` and `tvlHistory`
+
+GraphQL counterparts of REST `GET /tvl` and `GET /tvl?history=true`. Both
+resolvers call the REST route's own implementation — `computeCurrentTvl` and
+`computeTvlHistory` in `src/routes/tvl.ts` — so there is no second copy of the
+SQL or the valuation maths.
+
+| Argument | `tvl` | `tvlHistory` |
+|---|---|---|
+| `network` | `testnet` / `mainnet`; defaults to the active network | same |
+| `windowHours` | — | positive integer, default `24`, maximum `720` (30 days) |
+
+An invalid `network`, or a `windowHours` of zero, a negative number, a
+non-integer or more than `720`, fails with `INVALID_INPUT` and an identifying
+`field`. Because the argument is a GraphQL `Int`, a decimal such as `1.5` is
+rejected by the scalar before the resolver runs; the shared validator rejects
+non-integers with `INVALID_INPUT` when it is reached directly.
+
+#### Monetary representation
+
+Every monetary field — `totalTvlUsd`, venue and asset `tvlUsd`, `amount`, pool
+reserves and asset prices — is a GraphQL **`String`**, not `Float`. A GraphQL
+`Float` is an IEEE-754 double, the same precision ceiling as issue #371; using
+`String` means the GraphQL edge does not narrow the value a second time.
+
+Precision implications:
+
+- REST already rounds pool and venue USD TVL to 2 decimal places and asset
+  amounts / reserves to 7 decimal places. The string carries exactly the value
+  REST computed, with no additional rounding or float cast in the resolver.
+- The string is the shortest representation of that value: a whole-dollar
+  figure can be `"2000"`, not `"2000.00"`. Parse it as a decimal on the client
+  (for example `BigDecimal`), not as a binary float.
+- An unpriced pool/asset has `tvlUsd: null`, never `"0"`. A venue with only
+  unpriced pools reports `tvlUsd: "0"` for the venue total and a non-zero
+  `unpricedPoolCount`.
+
+#### Example: current TVL
+
+```graphql
+query CurrentTvl($network: String) {
+  tvl(network: $network) {
+    network
+    totalTvlUsd
+    pricedPoolsCount
+    unpricedPoolsCount
+    venues { venue tvlUsd poolCount pricedPoolCount unpricedPoolCount }
+    byAsset { asset amount priceUsd priceSource tvlUsd priced }
+    pools {
+      poolId
+      venue
+      pairKey
+      assetA
+      assetB
+      reserveA
+      reserveB
+      priced
+      tvlUsd
+      assetAPrice
+      assetAPriceSource
+      assetAPriceTimestamp
+      assetBPrice
+      assetBPriceSource
+      assetBPriceTimestamp
+    }
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query CurrentTvl($network: String) { tvl(network: $network) { network totalTvlUsd pricedPoolsCount unpricedPoolsCount venues { venue tvlUsd } byAsset { asset amount tvlUsd priced } pools { poolId priced tvlUsd } } }",
+    "variables": { "network": "testnet" }
+  }'
+```
+
+```json
+{
+  "data": {
+    "tvl": {
+      "network": "testnet",
+      "totalTvlUsd": "1200.2",
+      "pricedPoolsCount": 1,
+      "unpricedPoolsCount": 1,
+      "venues": [
+        { "venue": "Stellar Classic AMM", "tvlUsd": "1200.2" },
+        { "venue": "Soroswap", "tvlUsd": "0" }
+      ],
+      "byAsset": [
+        { "asset": "XLM", "amount": "2000.7654321", "tvlUsd": "123.46", "priced": true }
+      ],
+      "pools": [
+        { "poolId": "pool-amm-1", "priced": true, "tvlUsd": "1200.2" },
+        { "poolId": "pool-soro", "priced": false, "tvlUsd": null }
+      ]
+    }
+  }
+}
+```
+
+#### Example: TVL history
+
+```graphql
+query TvlHistory($network: String, $windowHours: Int) {
+  tvlHistory(network: $network, windowHours: $windowHours) {
+    network
+    window
+    interval
+    points { bucket tvlUsd pricedPoolsCount unpricedPoolsCount }
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost:3002/graphql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query TvlHistory($network: String, $windowHours: Int) { tvlHistory(network: $network, windowHours: $windowHours) { network window interval points { bucket tvlUsd pricedPoolsCount unpricedPoolsCount } } }",
+    "variables": { "network": "testnet", "windowHours": 24 }
+  }'
+```
+
+```json
+{
+  "data": {
+    "tvlHistory": {
+      "network": "testnet",
+      "window": "24h",
+      "interval": "60m",
+      "points": [
+        {
+          "bucket": "2026-11-20T11:00:00.000Z",
+          "tvlUsd": "1200.2",
+          "pricedPoolsCount": 1,
+          "unpricedPoolsCount": 1
+        }
+      ]
+    }
+  }
+}
 ```
 
 ---
