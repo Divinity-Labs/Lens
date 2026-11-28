@@ -135,7 +135,7 @@ function fakeRpc(...pools: ChainPool[]) {
       store.set(
         ledgerKey.toXDR('base64'),
         xdr.LedgerEntryData.contractData(
-          new xdr.ContractDataEntry({ ext: new xdr.ExtensionPoint(0), contract, key, durability, val })
+          new xdr.ContractDataEntry({ ext: new (xdr.ExtensionPoint as unknown as new (v: number) => xdr.ExtensionPoint)(0), contract, key, durability, val })
         )
       )
     }
