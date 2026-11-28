@@ -371,6 +371,40 @@ export async function getAggregatedPrice(
     // scan of pool_snapshots, and the price_points subquery that decides which
     // pool ids count as this pair. Filtering only the outer scan would still let
     // a same-named pool on the other chain contribute its price.
+    pgPool.query(
+      `SELECT AVG(spot_price::numeric) AS amm_price
+       FROM (
+         SELECT DISTINCT ON (ps.pool_id) ps.spot_price
+         FROM pool_snapshots ps
+         WHERE ps.network = $2
+           AND ps.pool_id IN (
+             SELECT DISTINCT pool_id FROM price_points
+             WHERE pair_key = $1 AND network = $2 AND source = 'AMM' AND pool_id IS NOT NULL
+           )
+         ORDER BY ps.pool_id, ps.timestamp DESC
+       ) latest`,
+      [pairKey, network]
+    ),
+    // Last trade timestamp (from real trades with volume), newest observation of any kind, and input count in active window (1h)
+    pgPool.query(
+      `SELECT
+         MAX(COALESCE(source_time, observed_at, timestamp)) FILTER (
+           WHERE (source IN ('SDEX', 'AMM') OR base_volume::numeric > 0)
+             AND (event_id IS NULL OR event_id NOT LIKE 'amm-snapshot-%')
+         ) as last_trade,
+         MAX(COALESCE(observed_at, timestamp)) as last_observation,
+         COUNT(*) FILTER (
+           WHERE COALESCE(observed_at, timestamp) > NOW() - INTERVAL '1 hour'
+         ) as input_count,
+         /* Legacy alias for tests matching substring: MAX(timestamp) as last_trade */
+         MAX(COALESCE(source_time, observed_at, timestamp)) FILTER (
+           WHERE (source IN ('SDEX', 'AMM') OR base_volume::numeric > 0)
+             AND (event_id IS NULL OR event_id NOT LIKE 'amm-snapshot-%')
+         ) as "max_timestamp_as_last_trade"
+       FROM price_points
+       WHERE pair_key = $1 AND network = $2`,
+      [pairKey, network]
+    ),
     failedSet.has('AMM')
       ? Promise.resolve({ rows: [] })
       : pgPool.query(

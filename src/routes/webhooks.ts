@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { randomBytes } from 'crypto'
 import { prisma } from '../db'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, getNetworkConfig, type NetworkName } from '../config'
 import { resolveNetworkName } from '../middleware/network'
 import { apiError } from '../errors'
 import { findWatchedPair } from '../utils/watchedPair'
@@ -31,6 +31,34 @@ function parseAssetInput(a: string): { code: string; issuer: string | null } | n
     if (!/^G[A-Z2-7]{55}$/.test(issuer)) return null
   }
   return { code, issuer }
+}
+
+function findWatchedPair(
+  qA: { code: string; issuer: string | null },
+  qB: { code: string; issuer: string | null },
+  network: NetworkName,
+) {
+  const matches = (
+    q: { code: string; issuer: string | null },
+    side: { code: string; issuer?: string | null },
+  ) => {
+    if (q.code !== side.code.toUpperCase()) return false
+    // Only enforce the issuer when both sides name one; XLM has none, and a
+    // caller passing a bare code is not asserting which issuer they meant.
+    if (!q.issuer || !side.issuer) return true
+    return q.issuer === side.issuer
+  }
+
+  const pairs = getNetworkConfig(network).pairs ?? []
+  for (const p of pairs) {
+    if (matches(qA, p.assetA) && matches(qB, p.assetB)) {
+      return { pair: p, isReversed: false }
+    }
+    if (matches(qA, p.assetB) && matches(qB, p.assetA)) {
+      return { pair: p, isReversed: true }
+    }
+  }
+  return null
 }
 
 export async function registerWebhookRoutes(app: FastifyInstance) {
@@ -74,6 +102,12 @@ export async function registerWebhookRoutes(app: FastifyInstance) {
       return reply.status(400).send(apiError('invalid_parameter', `Invalid assetB: "${assetB}"`))
     }
 
+    const match = findWatchedPair(parsedA, parsedB, targetNetwork)
+    if (!match) {
+      return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${targetNetwork}`))
+    }
+
+    const { pair, isReversed } = match
     const pair = findWatchedPair(assetA, assetB, targetNetwork)
     if (!pair) {
       return reply.status(404).send(apiError('unwatched_pair', `Pair ${assetA}/${assetB} not watched on ${targetNetwork}`))

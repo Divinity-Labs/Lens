@@ -3,7 +3,7 @@ import { trades_ingested_total, last_trade_timestamp, markIngestSuccess } from '
 import { config, activeNetwork, type NetworkName } from '../../config'
 import { getHorizonServer } from '../../network/clients'
 import { upsertPricePoints, getIndexerState, setIndexerCursor } from '../../db'
-import { resolvePageLedgers } from '../toid'
+import { calculateStartingCursor, resolvePageLedgers } from '../toid'
 import { dispatchPriceUpdate } from '../../webhookDispatcher'
 import { publishPriceUpdate } from '../../events'
 import { createLogger } from '../../logger'
@@ -45,7 +45,11 @@ export async function fetchSdexTrades(
 ): Promise<SdexRawTrades | null> {
   const stateId = `sdex:${network}:${pair.pairKey}`
   const state = await getIndexerState(stateId, network)
-  const cursor = state.cursor ?? '0'
+  let cursor = state.cursor
+  if (!cursor) {
+    cursor = calculateStartingCursor(config.indexer.initialLookbackHours, state.ledger)
+    log.info({ pair: pair.pairKey, network, cursor, lookbackHours: config.indexer.initialLookbackHours }, 'fresh SDEX ingester started')
+  }
 
   try {
     // Cycle-deadline checkpoint (#351): an already-abandoned cycle must not

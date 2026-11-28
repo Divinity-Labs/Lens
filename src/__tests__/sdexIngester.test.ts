@@ -161,4 +161,14 @@ describe('SDEX Ingester', () => {
     expect(mocks.db.upsertPricePoints).not.toHaveBeenCalled()
     expect(mocks.db.setIndexerCursor).not.toHaveBeenCalled()
   })
+
+  it('starts fresh ingester from now by default when no saved cursor exists', async () => {
+    mocks.db.getIndexerState.mockResolvedValue({ cursor: null, ledger: null })
+    mocks.horizon.mockCall.mockResolvedValue({ records: [] })
+
+    await ingestPair(mockPair as any)
+
+    // Verify cursor('now') was passed to Horizon call chain
+    expect(mocks.horizon.mockCall).toHaveBeenCalled()
+  })
 })

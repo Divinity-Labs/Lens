@@ -9,16 +9,16 @@ This document formally states the data quality guarantees provided by Lens: fres
 Lens continuously aggregates order book trades and AMM liquidity pool snapshots across Stellar networks. The following freshness bounds are enforced:
 
 ### Live Pricing Staleness Bound
-A price response is considered fresh when its newest underlying trade observation occurred within [`300`](../src/aggregator/vwap.ts#L4) seconds ([`5`](../src/aggregator/vwap.ts#L4) minutes). When the newest observation age exceeds [`300`](../src/aggregator/vwap.ts#L4) seconds, the response explicitly sets `stale: true`.
+A price response is considered fresh when its newest underlying real trade observation occurred within [`300`](../src/aggregator/vwap.ts#L4) seconds ([`5`](../src/aggregator/vwap.ts#L4) minutes). Staleness is evaluated strictly on real trade age (`lastTradeAgeSeconds`), derived from venue trades with positive volume (`source IN ('SDEX', 'AMM')` or positive base volume) using the trade's native `source_time` (falling back to `observed_at`). Pool snapshots and zero-volume tickers update observation times but do not refresh trade age. When the trade age equals or exceeds [`300`](../src/aggregator/vwap.ts#L4) seconds (or the configured staleness threshold), the response explicitly sets `stale: true`.
 
 - **Enforcing Code**: [`src/aggregator/vwap.ts`](../src/aggregator/vwap.ts#L4) (`STALENESS_THRESHOLD_SECONDS`)
 - **Violation Behavior**: The engine returns the last observed price alongside `stale: true` and `lastTradeAgeSeconds: <age>` (exceeding [`300`](../src/aggregator/vwap.ts#L4) seconds). Confidence rating degrades to `'low'`.
 
 ### Confidence Rating Freshness Tiers
-Every pricing response carries a categorical `confidence` rating derived from observation age and venue diversity:
-- **High Confidence**: Requires an observation age under [`30`](../src/aggregator/vwap.ts#L5) seconds across at least [`2`](../src/aggregator/vwap.ts#L187) distinct sources with positive [`24`](../src/aggregator/vwap.ts#L181)h volume.
-- **Medium Confidence**: Requires an observation age under [`300`](../src/aggregator/vwap.ts#L6) seconds.
-- **Low Confidence**: Assigned when observation age equals or exceeds [`300`](../src/aggregator/vwap.ts#L6) seconds.
+Every pricing response carries a categorical `confidence` rating derived from real trade age (`lastTradeAgeSeconds`) and venue diversity:
+- **High Confidence**: Requires a real trade age under [`30`](../src/aggregator/vwap.ts#L5) seconds across at least [`2`](../src/aggregator/vwap.ts#L187) distinct sources with positive [`24`](../src/aggregator/vwap.ts#L181)h volume.
+- **Medium Confidence**: Requires a real trade age under [`300`](../src/aggregator/vwap.ts#L6) seconds.
+- **Low Confidence**: Assigned when real trade age equals or exceeds [`300`](../src/aggregator/vwap.ts#L6) seconds.
 - **Unknown Confidence**: Assigned when no trades have ever been recorded (`lastTradeAgeSeconds === null`).
 - **Enforcing Code**: [`src/aggregator/vwap.ts`](../src/aggregator/vwap.ts#L4)
 

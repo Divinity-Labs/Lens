@@ -1,3 +1,4 @@
+import { calculateStartingCursor, ledgerFromPagingToken, resolvePageLedgers } from '../ingest/toid'
 import { describe, it, expect } from 'vitest'
 import { ledgerFromPagingToken, resolvePageLedgers } from '../ingest/toid'
 
@@ -53,5 +54,25 @@ describe('resolvePageLedgers', () => {
     // The caller must skip the batch rather than write a fabricated ledger.
     expect(resolvePageLedgers(['p-1'], null)).toBeNull()
     expect(resolvePageLedgers([], null)).toBeNull()
+  })
+
+  describe('calculateStartingCursor', () => {
+    it('defaults to "now" when lookback is 0 or negative', () => {
+      expect(calculateStartingCursor(0)).toBe('now')
+      expect(calculateStartingCursor(-1)).toBe('now')
+      expect(calculateStartingCursor(0, 1000)).toBe('now')
+    })
+
+    it('derives a past TOID token when lookback is positive and ledger is given', () => {
+      // 1 hour at 5s/ledger = 720 ledgers.
+      // ledger 1000 - 720 = 280.
+      const expectedToid = (280n << 32n).toString()
+      expect(calculateStartingCursor(1, 1000)).toBe(`${expectedToid}-0`)
+    })
+
+    it('falls back to "now" if no ledger is available', () => {
+      expect(calculateStartingCursor(1)).toBe('now')
+      expect(calculateStartingCursor(1, null)).toBe('now')
+    })
   })
 })

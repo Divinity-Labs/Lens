@@ -122,6 +122,21 @@ describe('guards outrank triggers', () => {
     if (!decision.publish) expect(decision.guard).toBe('aggregate_too_old')
   })
 
+  it('blocks a pair whose only fresh rows are snapshots (stale trade age) (#648)', () => {
+    // A market with fresh snapshot polling but no real trade in 2 hours (7200s):
+    // stale flag is true and lastTradeAgeSeconds is 7200s.
+    const decision = decidePublication(
+      aggregate({ stale: true, lastTradeAgeSeconds: 7200 }),
+      published(0.04, 600),
+      thresholds,
+      NOW_MS
+    )
+    expect(decision.publish).toBe(false)
+    if (!decision.publish) {
+      expect(decision.guard).toBe('stale_aggregate')
+    }
+  })
+
   it('is reusable on its own, for a caller that wants to skip without reading the chain', () => {
     expect(evaluateGuards(aggregate({ stale: true }), thresholds, TICK)?.guard).toBe('stale_aggregate')
     expect(evaluateGuards(aggregate(), thresholds, TICK)).toBeNull()
