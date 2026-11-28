@@ -3,7 +3,10 @@ import { PRICING_EDGE_CASES, PRICING_PAIR, PRICING_POINTS, PRICING_START, DEPTH_
 
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
-vi.mock('../db', () => ({ pgPool: { query: mockQuery } }))
+vi.mock('../db', async () => {
+  const { withTwapDbClock } = await import('../../tests/support/twapDbClock')
+  return { pgPool: { query: withTwapDbClock(mockQuery) } }
+})
 
 import { calculateOHLCV, calculateVWAP } from '../aggregator/vwap'
 import { computeTWAP, computeVWAP } from '../pricing/twap'

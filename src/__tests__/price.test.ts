@@ -7,9 +7,10 @@ const { mockQuery, mockGetCachedPrice, mockGetBestRoute } = vi.hoisted(() => ({
   mockGetBestRoute: vi.fn(),
 }))
 
-vi.mock('../db', () => ({
-  pgPool: { query: mockQuery },
-}))
+vi.mock('../db', async () => {
+  const { withTwapDbClock } = await import('../../tests/support/twapDbClock')
+  return { pgPool: { query: withTwapDbClock(mockQuery) } }
+})
 
 vi.mock('../redis', () => ({
   getCachedPrice: mockGetCachedPrice,

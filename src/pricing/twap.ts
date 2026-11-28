@@ -44,13 +44,26 @@ export function median(arr: number[]): number {
 
 // ─── TWAP Computation ─────────────────────────────────────────────────────────
 
-/** How far before the TWAP window start to look back for the prior price already in force. */
-export const TWAP_CARRY_IN_LOOKBACK_MINUTES = 24 * 60
-const TWAP_CARRY_IN_LOOKBACK_MS = TWAP_CARRY_IN_LOOKBACK_MINUTES * 60_000
+/**
+ * The last price before the window is carried in only if it was observed at most this many
+ * window lengths before the window start...
+ */
+export const TWAP_CARRY_IN_WINDOW_MULTIPLE = 3
+/** ...and never more than this many minutes before it, whatever the window. */
+export const TWAP_CARRY_IN_MAX_MINUTES = 180
 
 /**
- * Compute Time-Weighted Average Price over a configurable window [now - windowMinutes, now).
- * Uses IQR outlier rejection by default.
+ * How far before the window start the carried-in price may be: the smaller of
+ * TWAP_CARRY_IN_WINDOW_MULTIPLE windows and TWAP_CARRY_IN_MAX_MINUTES. An older
+ * price is not used, so a quiet window returns no value instead of an old price.
+ */
+export function twapCarryInLookbackMinutes(windowMinutes: number): number {
+  return Math.min(windowMinutes * TWAP_CARRY_IN_WINDOW_MULTIPLE, TWAP_CARRY_IN_MAX_MINUTES)
+}
+
+/**
+ * Compute Time-Weighted Average Price over a configurable window [now - windowMinutes, now),
+ * where `now` is the database clock. Uses IQR outlier rejection by default.
  *
  * Default (continuous) mode integrates step-function prices in a single O(n) pass over the rows:
  * each price is weighted by the exact duration (ms) it stayed in force from its timestamp (or
@@ -58,6 +71,9 @@ const TWAP_CARRY_IN_LOOKBACK_MS = TWAP_CARRY_IN_LOOKBACK_MINUTES * 60_000
  *
  * When `options.sampleIntervalSeconds` is explicitly provided, uses fixed-width discrete step
  * resampling over `[windowStart, windowEnd)` in a single forward pass with the carried-in price.
+ *
+ * The carried-in price is limited by `twapCarryInLookbackMinutes`. With no price in the window
+ * and none recent enough to carry in, the result is the empty one: twap 0, sampleCount 0.
  */
 export async function computeTWAP(
   pairKey: string,
@@ -79,17 +95,22 @@ export async function computeTWAP(
     ?? (config as any).pricing?.staleThresholdSeconds
     ?? parseInt(process.env.PRICE_STALE_THRESHOLD_SECONDS ?? process.env.STALENESS_BOUND_SECONDS ?? '300', 10)
 
-  const windowEndMs = Date.now()
-  const windowStartMs = windowEndMs - windowMinutes * 60_000
-  const startTime = new Date(windowStartMs)
-  const endTime = new Date(windowEndMs)
+  const carryInMinutes = twapCarryInLookbackMinutes(windowMinutes)
 
-  // Fetch up to 1 prior carry-in observation within TWAP_CARRY_IN_LOOKBACK_MINUTES before
+  // One statement, one clock. The window bounds are the database's NOW(), cut
+  // to the millisecond precision of the stored times, and come back on every
+  // row, so the weighting below uses exactly the bounds the rows were filtered
+  // by: a process clock that runs behind the database can no longer drop the
+  // newest rows. The LEFT JOIN returns a bounds-only row when nothing matched.
+  // Row times come back as timestamptz so they are read on the same basis as
+  // the bounds whatever the process time zone.
+  //
+  // Rows: up to 1 prior carry-in observation within carryInMinutes before
   // window_start, plus all half-open in-window observations [window_start, window_end).
   const result = await pgPool.query(
     `WITH bounds AS (
-       SELECT NOW() - ($2 || ' minutes')::interval AS window_start,
-              NOW() AS window_end
+       SELECT date_trunc('milliseconds', NOW()) - ($2 || ' minutes')::interval AS window_start,
+              date_trunc('milliseconds', NOW()) AS window_end
      ),
      carry_in AS (
        SELECT price::numeric as price, timestamp, COALESCE(observed_at, timestamp) as observed_at
@@ -109,15 +130,31 @@ export async function computeTWAP(
          AND COALESCE(observed_at, timestamp) >= b.window_start
          AND COALESCE(observed_at, timestamp) < b.window_end
        ORDER BY COALESCE(observed_at, timestamp) ASC
+     ),
+     series AS (
+       SELECT price, timestamp, observed_at FROM carry_in
+       UNION ALL
+       SELECT price, timestamp, observed_at FROM in_window
      )
-     SELECT price::numeric as price, timestamp, observed_at FROM carry_in
-     UNION ALL
-     SELECT price::numeric as price, timestamp, observed_at FROM in_window
-     ORDER BY observed_at ASC`,
-    [pairKey, windowMinutes, network, TWAP_CARRY_IN_LOOKBACK_MINUTES]
+     SELECT b.window_start, b.window_end, s.price, s.timestamp,
+            s.observed_at::timestamptz AS observed_at
+     FROM bounds b
+     LEFT JOIN series s ON TRUE
+     ORDER BY s.observed_at ASC NULLS FIRST`,
+    [pairKey, windowMinutes, network, carryInMinutes]
   )
 
-  const rows = result.rows
+  const clock = result.rows[0]
+  if (clock?.window_start == null || clock?.window_end == null) {
+    // The statement always returns the bounds row; without it there is no window to weight.
+    throw new Error('TWAP query returned no window bounds')
+  }
+  const startTime = new Date(clock.window_start)
+  const endTime = new Date(clock.window_end)
+  const windowStartMs = startTime.getTime()
+  const windowEndMs = endTime.getTime()
+
+  const rows = result.rows.filter((r: any) => r.price != null)
   if (rows.length === 0) {
     return {
       twap: isString ? '0' : 0,
@@ -182,7 +219,7 @@ export async function computeTWAP(
     }
   }
 
-  const carryInFloorMs = windowStartMs - TWAP_CARRY_IN_LOOKBACK_MS
+  const carryInFloorMs = windowStartMs - carryInMinutes * 60_000
   let twap = 0
   let weightedSum = 0
   let totalWeightMs = 0
@@ -255,10 +292,10 @@ export async function computeTWAP(
   if (totalWeightMs > 0) {
     twap = weightedSum / totalWeightMs
   } else if (usable.length > 0) {
-    // No price held for any measurable time inside the window: the only row
-    // landed on or after windowEnd (written while this request was in flight).
-    // Report that newest price, as a single-row series always has, instead of
-    // a TWAP of 0 next to a non-zero sampleCount.
+    // No price held for any measurable time inside the window. The query
+    // returns only rows before windowEnd, so it does not produce this; if a
+    // row at windowEnd does arrive, report its price, as a single-row series
+    // always has, instead of a TWAP of 0 next to a non-zero sampleCount.
     const newest = usable[usable.length - 1]
     twap = newest.price
     exactTwap = newest.raw

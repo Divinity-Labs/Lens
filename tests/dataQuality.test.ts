@@ -14,6 +14,8 @@ import {
   IQR_MIN_BAND_RATIO,
   MODIFIED_Z_SCORE_THRESHOLD,
   MODIFIED_Z_SCORE_FACTOR,
+  TWAP_CARRY_IN_WINDOW_MULTIPLE,
+  TWAP_CARRY_IN_MAX_MINUTES,
 } from '../src/pricing/twap'
 import {
   TWAP_WINDOW_MIN_MINUTES,
@@ -21,7 +23,6 @@ import {
   TWAP_WINDOW_DEFAULT_MINUTES,
   TWAP_SAMPLE_INTERVAL_MIN_SECONDS,
   TWAP_SAMPLE_INTERVAL_MAX_SECONDS,
-  TWAP_SAMPLE_INTERVAL_DEFAULT_SECONDS,
   VWAP_WINDOW_MIN_MINUTES,
   VWAP_WINDOW_MAX_MINUTES,
   VWAP_WINDOW_DEFAULT_MINUTES,
@@ -163,7 +164,10 @@ describe('Data Quality Documentation & Drift Guard (#249)', () => {
     expect(bounds['twap_window_default'].value).toBe(TWAP_WINDOW_DEFAULT_MINUTES)
     expect(bounds['twap_sample_interval_min'].value).toBe(TWAP_SAMPLE_INTERVAL_MIN_SECONDS)
     expect(bounds['twap_sample_interval_max'].value).toBe(TWAP_SAMPLE_INTERVAL_MAX_SECONDS)
-    expect(bounds['twap_sample_interval_default'].value).toBe(TWAP_SAMPLE_INTERVAL_DEFAULT_SECONDS)
+    // sampleInterval has no default: omitted means continuous weighting (#650).
+    expect(bounds['twap_sample_interval_default']).toBeUndefined()
+    expect(bounds['twap_carry_in_window_multiple'].value).toBe(TWAP_CARRY_IN_WINDOW_MULTIPLE)
+    expect(bounds['twap_carry_in_max'].value).toBe(TWAP_CARRY_IN_MAX_MINUTES)
     expect(bounds['vwap_window_min'].value).toBe(VWAP_WINDOW_MIN_MINUTES)
     expect(bounds['vwap_window_max'].value).toBe(VWAP_WINDOW_MAX_MINUTES)
     expect(bounds['vwap_window_default'].value).toBe(VWAP_WINDOW_DEFAULT_MINUTES)

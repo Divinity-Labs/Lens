@@ -52,20 +52,21 @@ High confidence requires price observations from at least [`2`](../src/aggregato
 
 ### Statistical Outlier Rejection Thresholds
 TWAP and VWAP computations apply statistical filtering to reject manipulation spikes:
-- **Minimum Sample Count**: Outlier filtering requires at least [`4`](../src/pricing/twap.ts#L375) sample points.
-- **Interquartile Range (IQR)**: Rejects samples below Q1 - `margin` or above Q3 + `margin`, where `margin` is the larger of [`1.5`](../src/pricing/twap.ts#L376) × IQR and [`0.05`](../src/pricing/twap.ts#L378) × |median| (`IQR_MIN_BAND_RATIO`).
-- **Zero-IQR Rule**: When three quarters or more of the samples share one price, Q1 equals Q3 and the IQR is zero, so a pure IQR fence would collapse onto that price and reject every other sample. The minimum band keeps the fence at least [`5%`](../src/pricing/twap.ts#L378) of the median wide on each side instead: small real moves are kept, a value far from the median (for example ten times it) is still rejected, and a series of identical prices rejects nothing.
-- **Modified Z-Score**: Rejects samples with absolute score exceeding [`3.5`](../src/pricing/twap.ts#L379), using a consistency factor of [`0.6745`](../src/pricing/twap.ts#L380).
-- **Enforcing Code**: [`src/pricing/twap.ts`](../src/pricing/twap.ts#L375)
-- **Violation Behavior**: If fewer than [`4`](../src/pricing/twap.ts#L375) samples exist, filtering is bypassed (`outlierRejected` is zero). If [`0`](../src/pricing/twap.ts#L78) samples exist in the window, endpoints return zero TWAP and sample count.
+- **Minimum Sample Count**: Outlier filtering requires at least [`4`](../src/pricing/twap.ts#L484) sample points.
+- **Interquartile Range (IQR)**: Rejects samples below Q1 - `margin` or above Q3 + `margin`, where `margin` is the larger of [`1.5`](../src/pricing/twap.ts#L485) × IQR and [`0.05`](../src/pricing/twap.ts#L487) × |median| (`IQR_MIN_BAND_RATIO`).
+- **Zero-IQR Rule**: When three quarters or more of the samples share one price, Q1 equals Q3 and the IQR is zero, so a pure IQR fence would collapse onto that price and reject every other sample. The minimum band keeps the fence at least [`5%`](../src/pricing/twap.ts#L487) of the median wide on each side instead: small real moves are kept, a value far from the median (for example ten times it) is still rejected, and a series of identical prices rejects nothing.
+- **Modified Z-Score**: Rejects samples with absolute score exceeding [`3.5`](../src/pricing/twap.ts#L488), using a consistency factor of [`0.6745`](../src/pricing/twap.ts#L489).
+- **Enforcing Code**: [`src/pricing/twap.ts`](../src/pricing/twap.ts#L484)
+- **Violation Behavior**: If fewer than [`4`](../src/pricing/twap.ts#L484) samples exist, filtering is bypassed (`outlierRejected` is zero). If [`0`](../src/pricing/twap.ts#L158) samples exist in the window, endpoints return zero TWAP and sample count.
 
 ### Request Window & Parameter Bounds
-- **TWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L8) to [`1440`](../src/routes/price.ts#L9) minutes (default [`60`](../src/routes/price.ts#L10) minutes). Sample intervals range from [`1`](../src/routes/price.ts#L11) to [`3600`](../src/routes/price.ts#L12) seconds (default [`60`](../src/routes/price.ts#L13) seconds).
-- **VWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L15) to [`1440`](../src/routes/price.ts#L16) minutes (default [`60`](../src/routes/price.ts#L17) minutes).
+- **TWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L11) to [`1440`](../src/routes/price.ts#L12) minutes (default [`60`](../src/routes/price.ts#L13) minutes), ending at the database clock. `sampleInterval` is optional and ranges from [`1`](../src/routes/price.ts#L14) to [`3600`](../src/routes/price.ts#L15) seconds: when given, prices are read on that fixed grid; when omitted, each price is weighted by the exact time it was in force (continuous mode), and the response reports `sampleIntervalSeconds` as `null`.
+- **TWAP Carry-In**: The last price before the window covers the window start only if it was observed at most [`3`](../src/pricing/twap.ts#L51) window lengths, and never more than [`180`](../src/pricing/twap.ts#L53) minutes, before the window start. An older price is not used: with no price in the window either, the response is the empty one (zero TWAP and sample count) rather than an old price.
+- **VWAP Windows**: Window ranges from [`1`](../src/routes/price.ts#L17) to [`1440`](../src/routes/price.ts#L18) minutes (default [`60`](../src/routes/price.ts#L19) minutes).
 - **Price History Limits**: Bucket count is capped at [`1000`](../src/api/rest.ts#L25) buckets (default [`100`](../src/api/rest.ts#L24) buckets).
 - **Screener Pair Limits**: Pair count defaults to [`20`](../src/services/screener.ts#L16) and is clamped between [`1`](../src/services/screener.ts#L109) and [`100`](../src/services/screener.ts#L17).
 - **Spread Observations**: Venues must quote at least [`2`](../src/routes/spreads.ts#L20) observations in the window to report a spread.
-- **Violation Behavior**: Inputs outside allowed ranges trigger HTTP [`400`](../src/routes/price.ts#L55) Bad Request with validation details.
+- **Violation Behavior**: Inputs outside allowed ranges trigger HTTP [`400`](../src/routes/price.ts#L68) Bad Request with validation details.
 
 ---
 
@@ -107,7 +108,7 @@ When a data quality guarantee is breached, Lens behaves deterministically:
 - **Stale Observation (age >= [`300`](../src/aggregator/vwap.ts#L4) s)**: Returns the last known price marked with `stale: true` and downgraded confidence (`low`), preserving availability while warning callers.
 - **Missing Ingestion / Empty Window (trades = [`0`](../src/aggregator/vwap.ts#L185))**: Returns `confidence: "unknown"` with `lastTradeAgeSeconds: null`, falling back through VWAP [`1`](../src/aggregator/vwap.ts#L198)h -> VWAP [`24`](../src/aggregator/vwap.ts#L198)h -> AMM Spot -> [`0`](../src/aggregator/vwap.ts#L198).
 - **Unwatched Pair**: Returns HTTP [`404`](../src/api/rest.ts#L111) Not Found with `{ "error": "Pair <A>/<B> not watched on <network>" }`.
-- **Invalid Query Parameters**: Returns HTTP [`400`](../src/routes/price.ts#L55) Bad Request with structured Zod validation errors.
+- **Invalid Query Parameters**: Returns HTTP [`400`](../src/routes/price.ts#L68) Bad Request with structured Zod validation errors.
 - **Outbound Failure / Ingestion Silence (>= [`300000`](../src/routes/venues.ts#L7) ms)**: Venue liveness degrades from `'live'` to `'stale'`.
 - **Rate Limit Exceeded**: Returns HTTP [`429`](../src/app.ts#L107) Too Many Requests.
 
@@ -130,20 +131,21 @@ When a data quality guarantee is breached, Lens behaves deterministically:
 | `snapshot_retention_days` | [`30`](../src/jobs/snapshotRetention.ts#L12) | days | [`src/jobs/snapshotRetention.ts:12`](../src/jobs/snapshotRetention.ts#L12) | Retention window for historical pool snapshots |
 | `snapshot_retention_batch_size` | [`1000`](../src/jobs/snapshotRetention.ts#L14) | rows | [`src/jobs/snapshotRetention.ts:14`](../src/jobs/snapshotRetention.ts#L14) | Row limit for batch snapshot pruning statements |
 | `price_points_retention_days` | [`30`](../src/partitioning/pricePoints.ts#L5) | days | [`src/partitioning/pricePoints.ts:5`](../src/partitioning/pricePoints.ts#L5) | Retention window before daily partition drops |
-| `min_outlier_samples` | [`4`](../src/pricing/twap.ts#L375) | samples | [`src/pricing/twap.ts:375`](../src/pricing/twap.ts#L375) | Minimum samples required for statistical outlier rejection |
-| `iqr_multiplier` | [`1.5`](../src/pricing/twap.ts#L376) | factor | [`src/pricing/twap.ts:376`](../src/pricing/twap.ts#L376) | Interquartile range multiplier for outlier fence |
-| `iqr_min_band_ratio` | [`0.05`](../src/pricing/twap.ts#L378) | fraction of median | [`src/pricing/twap.ts:378`](../src/pricing/twap.ts#L378) | Minimum half-width of the IQR fence, so a zero IQR does not reject every differing price |
-| `modified_z_score_threshold` | [`3.5`](../src/pricing/twap.ts#L379) | factor | [`src/pricing/twap.ts:379`](../src/pricing/twap.ts#L379) | Modified Z-Score deviation threshold |
-| `modified_z_score_factor` | [`0.6745`](../src/pricing/twap.ts#L380) | factor | [`src/pricing/twap.ts:380`](../src/pricing/twap.ts#L380) | Consistency adjustment factor for MAD normal distribution |
-| `twap_window_min` | [`1`](../src/routes/price.ts#L8) | minutes | [`src/routes/price.ts:8`](../src/routes/price.ts#L8) | Minimum allowed TWAP calculation window |
-| `twap_window_max` | [`1440`](../src/routes/price.ts#L9) | minutes | [`src/routes/price.ts:9`](../src/routes/price.ts#L9) | Maximum allowed TWAP calculation window (24h) |
-| `twap_window_default` | [`60`](../src/routes/price.ts#L10) | minutes | [`src/routes/price.ts:10`](../src/routes/price.ts#L10) | Default TWAP window |
-| `twap_sample_interval_min` | [`1`](../src/routes/price.ts#L11) | seconds | [`src/routes/price.ts:11`](../src/routes/price.ts#L11) | Minimum sample interval for TWAP calculation |
-| `twap_sample_interval_max` | [`3600`](../src/routes/price.ts#L12) | seconds | [`src/routes/price.ts:12`](../src/routes/price.ts#L12) | Maximum sample interval for TWAP calculation |
-| `twap_sample_interval_default` | [`60`](../src/routes/price.ts#L13) | seconds | [`src/routes/price.ts:13`](../src/routes/price.ts#L13) | Default sample interval for TWAP calculation |
-| `vwap_window_min` | [`1`](../src/routes/price.ts#L15) | minutes | [`src/routes/price.ts:15`](../src/routes/price.ts#L15) | Minimum allowed VWAP calculation window |
-| `vwap_window_max` | [`1440`](../src/routes/price.ts#L16) | minutes | [`src/routes/price.ts:16`](../src/routes/price.ts#L16) | Maximum allowed VWAP calculation window (24h) |
-| `vwap_window_default` | [`60`](../src/routes/price.ts#L17) | minutes | [`src/routes/price.ts:17`](../src/routes/price.ts#L17) | Default VWAP window |
+| `min_outlier_samples` | [`4`](../src/pricing/twap.ts#L484) | samples | [`src/pricing/twap.ts:484`](../src/pricing/twap.ts#L484) | Minimum samples required for statistical outlier rejection |
+| `iqr_multiplier` | [`1.5`](../src/pricing/twap.ts#L485) | factor | [`src/pricing/twap.ts:485`](../src/pricing/twap.ts#L485) | Interquartile range multiplier for outlier fence |
+| `iqr_min_band_ratio` | [`0.05`](../src/pricing/twap.ts#L487) | fraction of median | [`src/pricing/twap.ts:487`](../src/pricing/twap.ts#L487) | Minimum half-width of the IQR fence, so a zero IQR does not reject every differing price |
+| `modified_z_score_threshold` | [`3.5`](../src/pricing/twap.ts#L488) | factor | [`src/pricing/twap.ts:488`](../src/pricing/twap.ts#L488) | Modified Z-Score deviation threshold |
+| `modified_z_score_factor` | [`0.6745`](../src/pricing/twap.ts#L489) | factor | [`src/pricing/twap.ts:489`](../src/pricing/twap.ts#L489) | Consistency adjustment factor for MAD normal distribution |
+| `twap_window_min` | [`1`](../src/routes/price.ts#L11) | minutes | [`src/routes/price.ts:11`](../src/routes/price.ts#L11) | Minimum allowed TWAP calculation window |
+| `twap_window_max` | [`1440`](../src/routes/price.ts#L12) | minutes | [`src/routes/price.ts:12`](../src/routes/price.ts#L12) | Maximum allowed TWAP calculation window (24h) |
+| `twap_window_default` | [`60`](../src/routes/price.ts#L13) | minutes | [`src/routes/price.ts:13`](../src/routes/price.ts#L13) | Default TWAP window |
+| `twap_sample_interval_min` | [`1`](../src/routes/price.ts#L14) | seconds | [`src/routes/price.ts:14`](../src/routes/price.ts#L14) | Minimum sample interval for TWAP calculation |
+| `twap_sample_interval_max` | [`3600`](../src/routes/price.ts#L15) | seconds | [`src/routes/price.ts:15`](../src/routes/price.ts#L15) | Maximum sample interval for TWAP calculation |
+| `twap_carry_in_window_multiple` | [`3`](../src/pricing/twap.ts#L51) | windows | [`src/pricing/twap.ts:51`](../src/pricing/twap.ts#L51) | Oldest carried-in TWAP price, in window lengths before the window start |
+| `twap_carry_in_max` | [`180`](../src/pricing/twap.ts#L53) | minutes | [`src/pricing/twap.ts:53`](../src/pricing/twap.ts#L53) | Oldest carried-in TWAP price before the window start, whatever the window |
+| `vwap_window_min` | [`1`](../src/routes/price.ts#L17) | minutes | [`src/routes/price.ts:17`](../src/routes/price.ts#L17) | Minimum allowed VWAP calculation window |
+| `vwap_window_max` | [`1440`](../src/routes/price.ts#L18) | minutes | [`src/routes/price.ts:18`](../src/routes/price.ts#L18) | Maximum allowed VWAP calculation window (24h) |
+| `vwap_window_default` | [`60`](../src/routes/price.ts#L19) | minutes | [`src/routes/price.ts:19`](../src/routes/price.ts#L19) | Default VWAP window |
 | `history_default_limit` | [`100`](../src/api/rest.ts#L24) | buckets | [`src/api/rest.ts:24`](../src/api/rest.ts#L24) | Default bucket limit for historical aggregates |
 | `history_max_limit` | [`1000`](../src/api/rest.ts#L25) | buckets | [`src/api/rest.ts:25`](../src/api/rest.ts#L25) | Upper ceiling for historical aggregates |
 | `screener_default_limit` | [`20`](../src/services/screener.ts#L16) | pairs | [`src/services/screener.ts:16`](../src/services/screener.ts#L16) | Default limit of pairs returned by screener |

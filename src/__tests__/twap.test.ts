@@ -4,14 +4,17 @@ const { mockQuery } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
 }))
 
-vi.mock('../db', () => ({
-  pgPool: { query: mockQuery },
-}))
+vi.mock('../db', async () => {
+  const { withTwapDbClock } = await import('../../tests/support/twapDbClock')
+  return { pgPool: { query: withTwapDbClock(mockQuery) } }
+})
 
 import {
   computeTWAP,
   computeVWAP,
-  TWAP_CARRY_IN_LOOKBACK_MINUTES,
+  twapCarryInLookbackMinutes,
+  TWAP_CARRY_IN_MAX_MINUTES,
+  TWAP_CARRY_IN_WINDOW_MULTIPLE,
   rejectOutliersWithIndices,
   IQR_MIN_BAND_RATIO,
 } from '../pricing/twap'
@@ -403,7 +406,7 @@ describe('TWAP continuous window weighting & carry-in (#650)', () => {
     const result = await computeTWAP('XLM/USDC', 60)
     // [0..1) = 8 (1m), [1..5) = 10 (4m), [5..60) = 20 (55m) -> (8 + 40 + 1100) / 60 = 1148 / 60
     expect(result.twap).toBeCloseTo(1148 / 60, 12)
-    expect(mockQuery.mock.calls[0][1][3]).toBe(TWAP_CARRY_IN_LOOKBACK_MINUTES)
+    expect(mockQuery.mock.calls[0][1][3]).toBe(twapCarryInLookbackMinutes(60))
     expect(mockQuery.mock.calls[0][0]).toMatch(/>=\s*b\.window_start/)
     expect(mockQuery.mock.calls[0][0]).toMatch(/<\s*b\.window_end/)
   })
@@ -425,6 +428,45 @@ describe('TWAP continuous window weighting & carry-in (#650)', () => {
     const result = await computeTWAP('XLM/USDC', 1)
     // 10s * 10 + 30s * 20 + 20s * 10 = 900 / 60 = 15
     expect(result.twap).toBeCloseTo(15, 12)
+  })
+
+  it('caps the carry-in look-back at a few windows and never more than a few hours', async () => {
+    expect(TWAP_CARRY_IN_WINDOW_MULTIPLE).toBe(3)
+    expect(TWAP_CARRY_IN_MAX_MINUTES).toBe(180)
+    expect(twapCarryInLookbackMinutes(1)).toBe(3)
+    expect(twapCarryInLookbackMinutes(5)).toBe(15)
+    expect(twapCarryInLookbackMinutes(60)).toBe(180)
+    expect(twapCarryInLookbackMinutes(1440)).toBe(180)
+
+    mockQuery.mockResolvedValue({ rows: [] })
+    await computeTWAP('XLM/USDC', 5, { network: 'testnet' })
+    await computeTWAP('XLM/USDC', 1440, { network: 'testnet' })
+    expect(mockQuery.mock.calls[0][1]).toEqual(['XLM/USDC', 5, 'testnet', 15])
+    expect(mockQuery.mock.calls[1][1]).toEqual(['XLM/USDC', 1440, 'testnet', 180])
+  })
+
+  it('weights against the window bounds the query returns, not the process clock', async () => {
+    // The database clock is 5 minutes ahead of this process. A row 2 minutes
+    // old by the database is after the process's "now"; it must still count.
+    vi.useFakeTimers()
+    const dbNow = new Date('2026-01-01T01:00:00.000Z')
+    vi.setSystemTime(new Date(dbNow.getTime() - 5 * 60_000))
+    const bounds = { window_start: new Date(dbNow.getTime() - 30 * 60_000), window_end: dbNow }
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        { ...bounds, price: '10', observed_at: new Date(dbNow.getTime() - 20 * 60_000) },
+        { ...bounds, price: '20', observed_at: new Date(dbNow.getTime() - 2 * 60_000) },
+      ],
+    })
+
+    const result = await computeTWAP('XLM/USDC', 30)
+    expect(result.startTime).toEqual(bounds.window_start)
+    expect(result.endTime).toEqual(dbNow)
+    // 10 for 18 minutes, 20 for the last 2: (180 + 40) / 20 = 11.
+    expect(result.twap).toBeCloseTo(11, 12)
+    expect(result.newestInputObservedAt).toBe(new Date(dbNow.getTime() - 2 * 60_000).toISOString())
+    expect(result.stale).toBe(false)
   })
 })
 
