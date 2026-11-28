@@ -138,7 +138,7 @@ describe('toSep40Asset', () => {
     // A second issuer that is structurally valid, built from raw bytes rather
     // than typed by hand: the point of the assertion is that two *resolvable*
     // issuers give two different assets, which a mangled address cannot show.
-    const otherIssuer = StrKey.encodeEd25519PublicKey(Uint8Array.from({ length: 32 }, (_, i) => i + 1))
+    const otherIssuer = StrKey.encodeEd25519PublicKey(Buffer.from(Uint8Array.from({ length: 32 }, (_, i) => i + 1)))
     const imposter = toSep40Asset({ code: 'USDC', issuer: otherIssuer }, 'testnet')
     expect(assetKey(real)).not.toBe(assetKey(imposter))
     // A near-miss address is a refusal, not a second asset.

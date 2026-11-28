@@ -46,7 +46,8 @@ import {
   getCycleDeadlineMs,
   DEFAULT_CYCLE_DEADLINE_MS,
 } from '../ingest/cycleDeadline'
-import { startVenueAdapter, type VenueAdapter } from '../ingest/venues/runner'
+import { startVenueAdapter } from '../ingest/venues/runner'
+import type { VenueAdapter } from '../ingest/venues/types'
 import { ingestPair as sdexIngestPair } from '../ingest/venues/sdex'
 import { ingester_abandoned_cycles_total } from '../metrics'
 
@@ -114,6 +115,9 @@ describe('slow upstream (#351 acceptance)', () => {
       name: 'SlowDEX',
       source: 'slow_dex',
       sourceTimeCapability: { status: 'unavailable' },
+      classification: 'primary',
+      type: 'Liquidity Pool',
+      description: 'Slow test venue adapter for deadline tests',
       isEnabled: () => true,
       getPollIntervalMs: () => 10,
       discover: async () => [],

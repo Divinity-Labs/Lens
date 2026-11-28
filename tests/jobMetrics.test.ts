@@ -92,7 +92,7 @@ async function samples(name: string) {
 
 /** The value of one counter series, or 0 when the series does not exist. */
 function seriesValue(
-  values: { labels?: Record<string, string | number>; value: number }[],
+  values: Array<{ metricName?: string; labels?: Partial<Record<string, string | number>>; value: number }>,
   wanted: Record<string, string>
 ): number {
   const found = values.find(v =>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import Fastify from 'fastify'
+import Fastify, { type FastifyInstance } from 'fastify'
 
 const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }))
 
@@ -7,9 +7,27 @@ vi.mock('../db', () => ({
   pgPool: { query: mockQuery },
 }))
 
-vi.mock('../config', () => ({
-  activeNetwork: 'testnet',
-}))
+const CIRCLE_USDC = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>()
+  return {
+    ...actual,
+    activeNetwork: 'testnet',
+    getNetworkConfig: () => ({
+      pairs: [
+        {
+          pairKey: `USDC:${CIRCLE_USDC}/XLM`,
+          assetA: { code: 'USDC', issuer: CIRCLE_USDC },
+          assetB: { code: 'XLM', issuer: null },
+        },
+      ],
+      pegged: [
+        { asset: { code: 'USDC', issuer: CIRCLE_USDC }, target: 'USD', targetPrice: 1.0, windowHours: 24 },
+      ],
+    }),
+  }
+})
 
 import { registerOracleRoutes } from '../routes/oracle'
 import {
@@ -195,7 +213,7 @@ describe('Oracle comparison persistence', () => {
 })
 
 describe('GET /compare/:asset/history and /compare/:asset/summary endpoints', () => {
-  let app: Fastify.FastifyInstance
+  let app: FastifyInstance
 
   beforeEach(async () => {
     mockQuery.mockReset()

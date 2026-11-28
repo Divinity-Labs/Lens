@@ -2,6 +2,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHmac } from 'crypto'
 import Fastify from 'fastify'
 
+// ── Mock Config ──────────────────────────────────────────────────────────────
+const mockWatchedPairs = [
+  {
+    pairKey: 'USD/XLM',
+    assetA: { code: 'XLM', issuer: null },
+    assetB: { code: 'USD', issuer: null },
+  },
+  {
+    pairKey: 'USDC/XLM',
+    assetA: { code: 'XLM', issuer: null },
+    assetB: { code: 'USDC', issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN' },
+  },
+]
+
+vi.mock('../config', async () => {
+  const actual = await vi.importActual<typeof import('../config')>('../config')
+  return {
+    ...actual,
+    getNetworkConfig: (network: string) => {
+      const cfg = actual.getNetworkConfig(network as any)
+      return {
+        ...cfg,
+        pairs: mockWatchedPairs,
+      }
+    },
+  }
+})
+
 // ── Mock Prisma ───────────────────────────────────────────────────────────────
 vi.mock('../db', () => ({
   prisma: {
@@ -60,12 +88,19 @@ describe('POST /webhooks', () => {
     const body = res.json()
     expect(body.id).toBe('abc-123')
     expect(body.secret).toBeDefined()
+    expect(body.assetA).toBe('XLM')
+    expect(body.assetB).toBe('USD')
+    expect(body.network).toBe('testnet')
+    expect(body.threshold).toBe(0.10)
+    expect(body.direction).toBe('above')
 
     // Ensure prisma.create was called with correct shape
     const callArg = vi.mocked(prisma.webhook.create).mock.calls[0][0].data
     expect(callArg.url).toBe('https://example.com/hook')
     expect(callArg.assetA).toBe('XLM')
+    expect(callArg.assetB).toBe('USD')
     expect(callArg.direction).toBe('above')
+    expect(callArg.threshold).toBe(0.10)
     expect(typeof callArg.secret).toBe('string')
     expect(callArg.secret.length).toBe(64) // 32 random bytes → 64 hex chars
   })
@@ -142,6 +177,200 @@ describe('POST /webhooks', () => {
     })
     expect(res.statusCode).toBe(400)
     expect(res.json().error).toMatch(/Invalid network/)
+  })
+
+  it('rejects an unwatched pair with 404 unwatched_pair', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks',
+      payload: {
+        url: 'https://example.com/hook',
+        assetA: 'BTC',
+        assetB: 'ETH',
+        threshold: 100,
+        direction: 'above',
+      },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({
+      error: 'Pair BTC/ETH not watched on testnet',
+      code: 'unwatched_pair',
+    })
+  })
+
+  it('rejects non-positive and non-finite thresholds with 400 invalid_parameter', async () => {
+    const app = await buildApp()
+    for (const badThreshold of [0, -1, -0.05, Infinity, -Infinity, NaN, '0.1' as any, null as any]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks',
+        payload: {
+          url: 'https://example.com/hook',
+          assetA: 'XLM',
+          assetB: 'USD',
+          threshold: badThreshold,
+          direction: 'above',
+        },
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().code).toBe('invalid_parameter')
+    }
+  })
+
+  it('rejects malformed asset strings with 400 invalid_parameter', async () => {
+    const app = await buildApp()
+    for (const badAsset of ['   ', 'INVALIDTOOLONGASSETCODE', 'USDC:BAD_ISSUER', 'A:B:C']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks',
+        payload: {
+          url: 'https://example.com/hook',
+          assetA: badAsset,
+          assetB: 'USD',
+          threshold: 0.10,
+          direction: 'above',
+        },
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().code).toBe('invalid_parameter')
+    }
+
+    const missingRes = await app.inject({
+      method: 'POST',
+      url: '/webhooks',
+      payload: {
+        url: 'https://example.com/hook',
+        assetA: '',
+        assetB: 'USD',
+        threshold: 0.10,
+        direction: 'above',
+      },
+    })
+    expect(missingRes.statusCode).toBe(400)
+    expect(missingRes.json().code).toBe('missing_parameter')
+  })
+
+  it('accepts native and CODE:ISSUER formats and resolves against watched pairs', async () => {
+    const app = await buildApp()
+    const fakeWebhook = { id: 'abc-usdc', secret: 'beef'.repeat(16) }
+    vi.mocked(prisma.webhook.create).mockResolvedValue(fakeWebhook as any)
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks',
+      payload: {
+        url: 'https://example.com/hook',
+        assetA: 'native',
+        assetB: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        threshold: 0.15,
+        direction: 'above',
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    const body = res.json()
+    expect(body.assetA).toBe('XLM')
+    expect(body.assetB).toBe('USDC')
+    expect(body.threshold).toBe(0.15)
+    expect(body.direction).toBe('above')
+  })
+
+  it('canonicalizes a swapped pair by ordering assets and inverting threshold and direction', async () => {
+    const app = await buildApp()
+    const fakeWebhook = { id: 'abc-swapped', secret: 'beef'.repeat(16) }
+    vi.mocked(prisma.webhook.create).mockResolvedValue(fakeWebhook as any)
+
+    // Watched pair is assetA: XLM, assetB: USD.
+    // Client sends USD/XLM with threshold 10 and direction 'above'
+    // Swapped means inverting: 1 / 10 = 0.1, direction 'above' -> 'below'
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks',
+      payload: {
+        url: 'https://example.com/hook',
+        assetA: 'USD',
+        assetB: 'XLM',
+        threshold: 10,
+        direction: 'above',
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    const body = res.json()
+    expect(body.assetA).toBe('XLM')
+    expect(body.assetB).toBe('USD')
+    expect(body.threshold).toBe(0.1)
+    expect(body.direction).toBe('below')
+
+    const createCall = vi.mocked(prisma.webhook.create).mock.calls[0][0].data
+    expect(createCall.assetA).toBe('XLM')
+    expect(createCall.assetB).toBe('USD')
+    expect(createCall.threshold).toBe(0.1)
+    expect(createCall.direction).toBe('below')
+  })
+
+  it('fires dispatcher end-to-end for native/CODE:ISSUER and swapped pairs', async () => {
+    const app = await buildApp()
+    const secret = 'test-secret-value'
+
+    // Simulate stored webhook in canonical order (XLM / USDC)
+    vi.mocked(prisma.webhook.create).mockImplementation((async (args: any) => {
+      return { id: 'wh-e2e', ...args.data }
+    }) as any)
+
+    // Register with swapped order: USDC/native, threshold 5 (meaning 5 USDC per XLM, or 0.2 XLM per USDC), direction 'above'
+    // Swapped canonical: XLM/USDC, threshold 1/5 = 0.2, direction 'below'
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks',
+      payload: {
+        url: 'https://webhook.internal/receive',
+        assetA: 'USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        assetB: 'native',
+        threshold: 5,
+        direction: 'above',
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    const registered = res.json()
+    expect(registered.assetA).toBe('XLM')
+    expect(registered.assetB).toBe('USDC')
+    expect(registered.threshold).toBe(0.2)
+    expect(registered.direction).toBe('below')
+
+    // Now verify the dispatcher finds this webhook and triggers it
+    vi.mocked(prisma.webhook.findMany).mockResolvedValue([
+      {
+        id: registered.id,
+        url: 'https://webhook.internal/receive',
+        assetA: registered.assetA,
+        assetB: registered.assetB,
+        threshold: registered.threshold,
+        direction: registered.direction,
+        secret,
+        createdAt: new Date(),
+      } as any,
+    ])
+
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response)
+
+    // Price crossing below 0.2: previous 0.25 -> current 0.18
+    await dispatchPriceUpdate({
+      assetA: 'XLM',
+      assetB: 'USDC',
+      previousPrice: 0.25,
+      currentPrice: 0.18,
+      network: 'testnet',
+    })
+
+    expect(global.fetch).toHaveBeenCalledOnce()
+    const [calledUrl, calledOpts] = vi.mocked(global.fetch).mock.calls[0]
+    expect(calledUrl).toBe('https://webhook.internal/receive')
+    const payload = JSON.parse(String(calledOpts?.body))
+    expect(payload.assetA).toBe('XLM')
+    expect(payload.assetB).toBe('USDC')
+    expect(payload.price).toBe(0.18)
+    expect(payload.threshold).toBe(0.2)
+    expect(payload.direction).toBe('below')
   })
 })
 

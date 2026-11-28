@@ -60,8 +60,8 @@ describe('Price aggregator property tests', () => {
   it('produces valid route results for random venue prices', { timeout: 30_000 }, async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.float({ min: 0, max: 2000, noNaN: true, noDefaultInfinity: true, noNegativeZero: true }),
-        fc.float({ min: 0, max: 2000, noNaN: true, noDefaultInfinity: true, noNegativeZero: true }),
+        fc.float({ min: 0, max: 2000, noNaN: true, noDefaultInfinity: true }),
+        fc.float({ min: 0, max: 2000, noNaN: true, noDefaultInfinity: true }),
         fc.integer({ min: 1, max: 20000 }),
         async (sdexPrice, ammPrice, amount) => {
           const feeBp = 30

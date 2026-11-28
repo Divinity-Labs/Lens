@@ -12,7 +12,7 @@ interface Captured {
 
 function makeCaptureFetch() {
   const calls: Captured[] = []
-  const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const request = new Request(input, init)
     const headers: Record<string, string> = {}
     request.headers.forEach((value, name) => {

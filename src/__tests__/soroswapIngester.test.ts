@@ -44,6 +44,7 @@ vi.mock('../ingest/venues/soroswap', async (importOriginal) => {
 })
 
 // ── Imports ──────────────────────────────────────────────────────────────────
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   calcSpotPrice,
   ingestPool,
@@ -59,6 +60,7 @@ import {
   type PoolEntry,
   type SoroswapToken,
 } from '../ingest/venues/soroswap'
+import { fetchOk, fetchFailed } from '../ingest/fetchResult'
 import { upsertPricePoints } from '../db'
 import { dispatchPriceUpdate } from '../webhookDispatcher'
 import { price_rejected_total } from '../metrics'
@@ -333,17 +335,20 @@ describe('fetchSoroswapTokenList', () => {
   })
 
   it('returns tokens from a successful fetch', async () => {
-    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue([xlmToken, usdcToken])
+    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue(fetchOk([xlmToken, usdcToken]))
 
     const result = await fetchSoroswapTokenList()
-    expect(result).toHaveLength(2)
-    expect(result[0].symbol).toBe('XLM')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toHaveLength(2)
+      expect(result.data[0].symbol).toBe('XLM')
+    }
   })
 
-  it('returns empty array on fetch failure', async () => {
-    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue([])
+  it('returns a failure result on fetch failure', async () => {
+    ;(fetchSoroswapTokenList as ReturnType<typeof vi.fn>).mockResolvedValue(fetchFailed(new Error('token list unreachable')))
 
     const result = await fetchSoroswapTokenList()
-    expect(result).toEqual([])
+    expect(result.ok).toBe(false)
   })
 })

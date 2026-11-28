@@ -11,6 +11,7 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   }
 })
 
+import { describe, it, expect, vi } from 'vitest'
 import { getHorizonServer, getRpcServer } from '../network/clients'
 
 describe('getHorizonServer', () => {

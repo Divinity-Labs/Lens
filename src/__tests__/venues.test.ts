@@ -31,6 +31,10 @@ const testAdapter: VenueAdapter = {
   name: 'test-adapter',
   source: 'test-source',
   kind: 'amm',
+  sourceTimeCapability: { status: 'unavailable' },
+  classification: 'primary',
+  type: 'Liquidity Pool',
+  description: 'Test adapter for the venues routes',
   isEnabled: () => true,
   getPollIntervalMs: () => 1000,
   discover: async () => [],
@@ -104,7 +108,7 @@ describe('GET /venues?window= — Venue Share of Volume', () => {
   const ammVolumeRows = [
     { source: 'AMM', samples: 5, base_volume: 500, counter_volume: 1000, last_seen: new Date() },
   ]
-  const emptyRows = []
+  const emptyRows: Array<{ source: string; samples: number; base_volume: number; counter_volume: number; last_seen: Date }> = []
 
   beforeEach(() => {
     vi.clearAllMocks()
