@@ -16,16 +16,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      # /ready, not /status: /status answers as soon as the server listens,
-      # before boot finishes; /ready stays unhealthy until markBootComplete()
-      # and the Postgres/Redis probes pass (src/health.ts, docs/health.md).
-      test: ["CMD", "curl", "-f", "http://localhost:3002/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      # First-run migrations run before the server can become ready.
-      start_period: 60s
+    # No healthcheck here on purpose: the image's own HEALTHCHECK applies
+    # (Node one-liner against /live, see Dockerfile). A compose healthcheck
+    # would override it — the old curl one did, and curl isn't in the image.
+    # The 60s start period for first-run migrations now lives in that
+    # HEALTHCHECK instead of here.
 
   postgres:
     image: postgres:15-alpine

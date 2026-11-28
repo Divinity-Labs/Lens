@@ -913,7 +913,7 @@ docker compose ps
 ```
 The API will be available at `http://localhost:3002`. Database migrations run automatically on startup.
 
-`docker compose ps` shows each service's health. `lens` reports `healthy` only once `/ready` is green — the server has finished booting, migrations are applied, and Postgres and Redis are reachable. Until then it shows `starting` (or `unhealthy` if boot fails), even though the process is already listening: `/status` answers as soon as the server listens, so it cannot tell you the stack is ready. `postgres` and `redis` have their own health checks, and Lens waits for both before starting.
+`docker compose ps` shows each service's health. `lens` reports `healthy` once `/live` is green — that only means the process is alive and its event loop is turning; it says nothing about boot or dependencies. To tell whether the stack is actually ready to serve, poll `/ready` separately: it stays unhealthy until boot finishes, migrations are applied, and Postgres and Redis are reachable. Until then `lens` shows `starting` (or `unhealthy` if the process dies), even though the process is already listening: `/status` answers as soon as the server listens, so it cannot tell you the stack is ready. `postgres` and `redis` have their own health checks, and Lens waits for both before starting.
 
 ## Quick Start (Manual)
 
