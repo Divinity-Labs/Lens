@@ -4,6 +4,7 @@ import { getHorizonServer, resetNetworkClients } from '../network/clients'
 import type { AssetId, RouteInfo, RouteHop, RouteOption, RouteProvenance } from '../types'
 import { pgPool } from '../db'
 import { calculateAMMSpotPrice } from '../pricing/depth'
+export { getSplitRecommendation } from './splitRoute'
 
 function assetIdToStellar(asset: AssetId) {
   if (!asset.issuer) return Asset.native()
