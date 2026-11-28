@@ -16,6 +16,8 @@ vi.mock('../pairsRegistry', () => ({
 
 import { registerBenchmarkRoutes } from '../routes/benchmark'
 
+const USDC_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'
+
 async function buildApp() {
   const app = Fastify({ logger: false })
   await registerBenchmarkRoutes(app)
@@ -44,8 +46,8 @@ describe('GET /benchmark/:asset', () => {
     mockGetActivePairs.mockReturnValue([
       {
         pairKey: 'USD/USDC',
-        assetA: { code: 'USD', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
-        assetB: { code: 'USDC', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+        assetA: { code: 'USD', issuer: USDC_ISSUER },
+        assetB: { code: 'USDC', issuer: USDC_ISSUER },
       },
     ])
 
@@ -77,26 +79,18 @@ describe('GET /benchmark/:asset', () => {
     expect(data.pairKey).toBe('USD/USDC')
     expect(data.currentPrice).toBe(1.0002)
     expect(data.currentDeviationBp).toBeCloseTo(2)
-    expect(data.rolling24h).toEqual({
-      maxDeviationBp: 2,
-      minDeviationBp: -3,
-      maxAbsoluteDeviationBp: 5,
-      averageDeviationBp: CloseTo(1),
-      sampleCount: 100,
-    })
-
-    function CloseTo(val: number) {
-      return {
-        asymmetricMatch: (actual: any) => Math.abs(actual - val) < 0.0001,
-      }
-    }
+    expect(data.rolling24h.maxDeviationBp).toBeCloseTo(2)
+    expect(data.rolling24h.minDeviationBp).toBeCloseTo(-3)
+    expect(data.rolling24h.maxAbsoluteDeviationBp).toBeCloseTo(5)
+    expect(data.rolling24h.averageDeviationBp).toBeCloseTo(1)
+    expect(data.rolling24h.sampleCount).toBe(100)
   })
 
   it('calculates benchmark deviation correctly when asset is assetA in the pair (e.g. USDC/XLM)', async () => {
     mockGetActivePairs.mockReturnValue([
       {
         pairKey: 'USDC/XLM',
-        assetA: { code: 'USDC', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+        assetA: { code: 'USDC', issuer: USDC_ISSUER },
         assetB: { code: 'XLM', issuer: null },
       },
     ])
@@ -134,8 +128,8 @@ describe('GET /benchmark/:asset', () => {
     mockGetActivePairs.mockReturnValue([
       {
         pairKey: 'USD/USDC',
-        assetA: { code: 'USD', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
-        assetB: { code: 'USDC', issuer: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5' },
+        assetA: { code: 'USD', issuer: USDC_ISSUER },
+        assetB: { code: 'USDC', issuer: USDC_ISSUER },
       },
     ])
 
@@ -171,5 +165,43 @@ describe('GET /benchmark/:asset', () => {
       averageDeviationBp: null,
       sampleCount: 0,
     })
+  })
+
+  it('returns null deviations and a reason when no target price is known (never assumes 1.0)', async () => {
+    mockGetActivePairs.mockReturnValue([
+      {
+        pairKey: 'USDC/XLM',
+        assetA: { code: 'USDC', issuer: USDC_ISSUER },
+        assetB: { code: 'XLM', issuer: null },
+      },
+    ])
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          latest_price: '0.1234',
+          max_price: '0.1240',
+          min_price: '0.1230',
+          avg_price: '0.1235',
+          max_abs_deviation_bps: '50.0',
+          max_deviation_bps: '40.0',
+          min_deviation_bps: '-30.0',
+          sample_count: '10',
+        },
+      ],
+    })
+
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/benchmark/USDC?target=XLM',
+    })
+
+    expect(res.statusCode).toBe(200)
+    const data = res.json()
+    expect(data.currentPrice).toBe(0.1234)
+    expect(data.currentDeviationBp).toBeNull()
+    expect(data.rolling24h.maxDeviationBp).toBeNull()
+    expect(typeof data.reason).toBe('string')
   })
 })

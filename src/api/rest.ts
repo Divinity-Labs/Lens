@@ -10,7 +10,7 @@ import { getBestRoute } from '../aggregator/bestRoute'
 import { pgPool } from '../db'
 import { config, getNetworkConfig, activeNetwork, type NetworkName } from '../config'
 import { isAdminConfigured } from './auth'
-import '../middleware/network' // declares req.network on the FastifyRequest type
+import '../middleware/network'
 import {
   statusResponseSchema,
   statusErrorResponseSchema,
@@ -34,22 +34,10 @@ export const HISTORY_DEFAULT_LIMIT = 100
 export const HISTORY_MAX_LIMIT = 1000
 
 export async function registerRESTRoutes(app: FastifyInstance) {
-  // Validate every response against its declared schema in dev/test (no-op in
-  // production). Must run before the routes below are registered so they pick
-  // up the validating serializer.
   installResponseValidation(app)
 
-  /**
-   * How long the last ingester write may be stale before `/status` says so.
-   *
-   * Named rather than inlined because it is a published threshold: the README's
-   * Datadog/Prometheus/BetterStack examples and the `degraded` contract in
-   * `openapi.yaml` all quote it, and a monitor tuned to one number while the
-   * service uses another is worse than no monitor.
-   */
   const INGEST_STALE_AFTER_SECONDS = 300
 
-  // GET /status — public health/monitoring endpoint (no API key required) (#273)
   app.get(
     '/status',
     {
@@ -78,14 +66,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           [network]
         )
       } catch (err: unknown) {
-        // The driver's own message is not safe to return here. `/status` is
-        // public and unauthenticated, and a pg connection failure puts the host,
-        // the user and sometimes the whole connection string into
-        // `err.message` — this endpoint is the most-polled surface Lens has.
-        // Lens has already had to rotate a database password over exactly this
-        // shape of leak on another route, so the detail goes to the log, where
-        // buildLogger pipes it through redactSecrets, and the response says only
-        // which dependency is down.
         req.log.error({ err }, 'status: database query failed')
         return reply.status(503).send({
           ok: false,
@@ -101,12 +81,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         ? Math.max(0, Math.round((Date.now() - new Date(lastProcessedAt).getTime()) / 1000))
         : null
       const isStale = ingestLagSeconds !== null && ingestLagSeconds > INGEST_STALE_AFTER_SECONDS
-      // Process health has to be measured, or the split this endpoint exists to
-      // make is cosmetic. Boot is the signal that is actually available and
-      // actually distinct from data freshness: between `listen()` and
-      // `markBootComplete()` the process answers requests while its ingesters
-      // are not all running yet, which is a degraded *process*, not stale data.
-      // It is the same signal `/ready` gates on.
       const processHealth = isBootComplete() ? ('healthy' as const) : ('degraded' as const)
       const dataHealth = isStale ? ('stale' as const) : ('healthy' as const)
       const overallStatus =
@@ -136,10 +110,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         lastProcessedAt,
         ingestLagSeconds,
         retentionPath: getRetentionPath(),
-        // #508: whether the admin surface is usable at all, so an operator
-        // can tell "I sent the wrong token" from "this deployment has no
-        // ADMIN_TOKEN" without guessing from a 401. It reports only that the
-        // token is configured, never any part of its value.
         adminConfigured: isAdminConfigured(),
         crashes: listCrashes(network).map(c => ({
           name: c.name,
@@ -147,10 +117,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
           message: c.message,
           at: c.at.toISOString(),
         })),
-        // #329: sources whose latest fetch failed on this network, so a venue
-        // that is down is visible rather than reading as a venue with nothing
-        // to report. The error message stays in the log: an upstream client
-        // error can carry the upstream URL, and this route is public.
         failedSources: listSourceFailures(network).map(f => ({
           source: f.source,
           network: f.network,
@@ -161,8 +127,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   )
 
-
-  // GET /price/:assetA/:assetB
   app.get<{
     Params: { assetA: string; assetB: string }
     Querystring: {
@@ -195,8 +159,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
         reply.header('x-decimal-format', 'string')
       }
 
-      // Cache key is network-scoped and format-isolated so number and string payloads never collide,
-      // and scoped to staleThreshold if customized.
       const cacheParts = [network, pair.pairKey]
       if (decimalFormat === 'string') cacheParts.push('decimals_string')
       if (staleThreshold !== undefined) cacheParts.push(`stale_${staleThreshold}`)
@@ -228,7 +190,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
     }
   )
 
-  // GET /price/:assetA/:assetB/route?amount=1000
   app.get<{
     Params: { assetA: string; assetB: string }
     Querystring: { amount?: string; network?: string }
@@ -252,13 +213,6 @@ export async function registerRESTRoutes(app: FastifyInstance) {
       const routeInfo = await getBestRoute(pair.assetA, pair.assetB, pair.pairKey, amount, network)
       if (decimalFormat === 'string') {
         reply.header('x-decimal-format', 'string')
-        return {
-          ...routeInfo,
-          sdexPrice: String(routeInfo.sdexPrice),
-          ammPrice: String(routeInfo.ammPrice),
-          estimatedOutput: String(routeInfo.estimatedOutput),
-          slippagePct: String(routeInfo.slippagePct),
-        }
       }
       return routeInfo
     }

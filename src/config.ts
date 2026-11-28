@@ -28,6 +28,20 @@ export interface PeggedAssetConfig {
   windowHours?: number
 }
 
+/** Target price lookup helper: returns the configured targetPrice for an asset code+issuer on a network, or null. */
+export function findPeggedTargetPrice(
+  pegged: PeggedAssetConfig[] | undefined,
+  code: string,
+  issuer: string | null,
+): number | null {
+  if (!pegged) return null
+  const upper = code.toUpperCase()
+  const match = pegged.find(
+    p => p.asset.code === upper && (p.asset.issuer ?? null) === (issuer ?? null),
+  )
+  return match ? match.targetPrice : null
+}
+
 /** Per-network configuration block. */
 export interface NetworkConfig {
   horizon: {

@@ -164,7 +164,7 @@ export const statusResponseSchema = {
  */
 export const statusErrorResponseSchema = {
   type: 'object',
-  required: ['ok', 'status', 'error', 'pagingCondition'],
+  required: ['ok', 'status', 'error', 'pagingCondition'  ],
   additionalProperties: false,
   properties: {
     ok: { type: 'boolean', const: false },
@@ -625,14 +625,29 @@ export const impactResponseSchema = {
 /** GET /benchmark/:asset */
 export const benchmarkResponseSchema = {
   type: 'object',
-  required: ['asset', 'target', 'pairKey', 'currentPrice', 'currentDeviationBp', 'rolling24h'],
+  required: [
+    'asset',
+    'target',
+    'pairKey',
+    'targetPrice',
+    'currentPrice',
+    'currentPriceAt',
+    'currentPriceAgeSeconds',
+    'currentDeviationBp',
+    'reason',
+    'rolling24h',
+  ],
   additionalProperties: false,
   properties: {
     asset: { type: 'string' },
     target: { type: 'string' },
     pairKey: { type: 'string' },
+    targetPrice: { type: ['number', 'null'] },
     currentPrice: { type: ['number', 'string', 'null'] },
+    currentPriceAt: { type: ['string', 'null'] },
+    currentPriceAgeSeconds: { type: ['integer', 'null'] },
     currentDeviationBp: { type: ['number', 'string', 'null'] },
+    reason: { type: ['string', 'null'] },
     rolling24h: {
       type: 'object',
       required: [
