@@ -69,6 +69,7 @@ import {
   coinbaseAdapter,
   _setCoinbaseClient,
   _resetLastPrice,
+  coinbaseSymbolFor,
 } from '../ingest/venues/coinbase'
 import type { WatchedPair } from '../types'
 
@@ -102,18 +103,26 @@ function stubExchange(url: string): Response {
   return response(404, { message: 'NotFound' })
 }
 
-/** Configured the same way round as the product: USD per one XLM. */
-const XLM_USD: WatchedPair = {
-  pairKey: 'USD/XLM',
-  assetA: { code: 'XLM', issuer: null },
-  assetB: { code: 'USD', issuer: null },
+/** Circle's USDC issuers, as allow-listed in src/ingest/venues/coinbase.ts. */
+const CIRCLE_USDC: Record<'testnet' | 'mainnet', string> = {
+  testnet: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+  mainnet: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
 }
 
-/** Configured the other way round: XLM per one USD. */
-const USD_XLM: WatchedPair = {
-  pairKey: 'USD/XLM',
-  assetA: { code: 'USD', issuer: null },
-  assetB: { code: 'XLM', issuer: null },
+/** Configured the same way round as the product: USDC (Coinbase's USD book) per one XLM. */
+const XLM_USD: WatchedPair = {
+  pairKey: 'USDC/XLM',
+  assetA: { code: 'XLM', issuer: null },
+  assetB: { code: 'USDC', issuer: CIRCLE_USDC.testnet },
+}
+
+/** Configured the other way round: XLM per one USDC. */
+function usdXlm(network: 'testnet' | 'mainnet'): WatchedPair {
+  return {
+    pairKey: 'USDC/XLM',
+    assetA: { code: 'USDC', issuer: CIRCLE_USDC[network] },
+    assetB: { code: 'XLM', issuer: null },
+  }
 }
 
 beforeEach(() => {
@@ -162,7 +171,7 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
     expect(row.source).toBe('coinbase_cex')
     expect(row.network).toBe('testnet')
     expect(row.assetA).toBe('XLM')
-    expect(row.assetB).toBe('USD')
+    expect(row.assetB).toBe('USDC')
     expect(row.price).toBe(0.25)
     // The ticker said 18,234,567 XLM traded in 24h; none of it is this row's.
     expect(row.baseVolume).toBe(0)
@@ -177,7 +186,7 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
   })
 
   it('requests the listed product and inverts it when the pair is configured the other way round', async () => {
-    await coinbaseAdapter.ingestPair(USD_XLM, 'mainnet')
+    await coinbaseAdapter.ingestPair(usdXlm('mainnet'), 'mainnet')
 
     // USD-XLM is not listed; the listed XLM-USD is what gets read.
     expect(requests).toEqual([
@@ -189,7 +198,7 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
     const row = fakeTable[0]
     expect(row.source).toBe('coinbase_cex')
     expect(row.network).toBe('mainnet')
-    expect(row.assetA).toBe('USD')
+    expect(row.assetA).toBe('USDC')
     expect(row.assetB).toBe('XLM')
     // 1 / 0.25: XLM per one USD.
     expect(row.price).toBe(4)
@@ -200,10 +209,10 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
   })
 
   it('remembers the resolved product instead of looking it up every cycle', async () => {
-    await coinbaseAdapter.ingestPair(USD_XLM, 'testnet')
+    await coinbaseAdapter.ingestPair(usdXlm('testnet'), 'testnet')
     requests = []
     ticker = { ...ticker, time: '2026-11-20T10:00:05.000000Z' }
-    await coinbaseAdapter.ingestPair(USD_XLM, 'testnet')
+    await coinbaseAdapter.ingestPair(usdXlm('testnet'), 'testnet')
 
     expect(requests).toEqual(['https://coinbase.test/products/XLM-USD/ticker'])
   })
@@ -233,6 +242,8 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
   })
 
   it('writes nothing when the exchange lists the pair in neither orientation', async () => {
+    // EURC is not on the allow-list either, so this pair stops before the
+    // exchange is asked; the allow-list cases below cover that rule directly.
     const pair: WatchedPair = {
       pairKey: 'EURC/XLM',
       assetA: { code: 'EURC', issuer: null },
@@ -242,5 +253,36 @@ describe('Coinbase venue cycle against a stubbed exchange (#644)', () => {
 
     expect(fakeTable).toHaveLength(0)
     expect(mocks.createMany).not.toHaveBeenCalled()
+  })
+})
+
+describe('Coinbase prices only allow-listed assets, by code and issuer (#644)', () => {
+  it('never prices a USDC issued by anyone other than Circle', async () => {
+    const lookalike: WatchedPair = {
+      pairKey: 'USDC/XLM',
+      assetA: { code: 'XLM', issuer: null },
+      assetB: { code: 'USDC', issuer: 'GCZJM35NKGVK47BB4SPBDV25477PZYIYPVVG453LPYFNXLS3FGHDXOCM' },
+    }
+    await coinbaseAdapter.ingestPair(lookalike, 'testnet')
+
+    expect(requests).toHaveLength(0)
+    expect(fakeTable).toHaveLength(0)
+    expect(mocks.createMany).not.toHaveBeenCalled()
+  })
+
+  it("does not take one network's USDC issuer on the other network", async () => {
+    await coinbaseAdapter.ingestPair(usdXlm('mainnet'), 'testnet')
+
+    expect(requests).toHaveLength(0)
+    expect(fakeTable).toHaveLength(0)
+  })
+
+  it('maps only native XLM and Circle USDC, per network', () => {
+    expect(coinbaseSymbolFor({ code: 'XLM', issuer: null }, 'mainnet')).toBe('XLM')
+    expect(coinbaseSymbolFor({ code: 'USDC', issuer: CIRCLE_USDC.mainnet }, 'mainnet')).toBe('USD')
+    expect(coinbaseSymbolFor({ code: 'USDC', issuer: CIRCLE_USDC.testnet }, 'testnet')).toBe('USD')
+    expect(coinbaseSymbolFor({ code: 'XLM', issuer: CIRCLE_USDC.mainnet }, 'mainnet')).toBeNull()
+    expect(coinbaseSymbolFor({ code: 'BTC', issuer: CIRCLE_USDC.mainnet }, 'mainnet')).toBeNull()
+    expect(coinbaseSymbolFor({ code: 'USD', issuer: null }, 'mainnet')).toBeNull()
   })
 })
