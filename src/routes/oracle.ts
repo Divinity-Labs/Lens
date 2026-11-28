@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { activeNetwork, type NetworkName } from '../config'
+import { activeNetwork, config, type NetworkName } from '../config'
 import type { OracleAdapter } from '../ingest/oracles/adapter'
 import { reflectorOracleAdapter } from '../ingest/oracles/reflector'
 import {
@@ -152,7 +152,7 @@ export async function registerOracleRoutes(
       }
       const network: NetworkName = (requestedNetwork as NetworkName) ?? req.network ?? activeNetwork
 
-      const comparison = await compareOracles(assetCode, network, adapters)
+      const comparison = await compareOracles(assetCode, network, adapters, { persist: false })
       // CHANGE FROM UPSTREAM (#262): Return 200 with status:"no_data" instead of 404
       // when both Lens and all oracles have no data. The asset code itself is valid,
       // the query succeeded — there is just no data yet. A 404 would imply the asset
@@ -191,7 +191,13 @@ export async function registerOracleRoutes(
       limit,
     })
 
-    const summary = computeOracleSummaryStatistics(points, bandPct, from, to)
+    const summary = computeOracleSummaryStatistics(
+      points,
+      bandPct,
+      from,
+      to,
+      config.oracleComparison.intervalMs,
+    )
     if (summary.length === 0 && oracle) {
       summary.push({
         oracle,
@@ -200,6 +206,7 @@ export async function registerOracleRoutes(
         timeOutsideBandSeconds: null,
         outsideBandSeconds: null,
         outsideBandPct: null,
+        noDataSeconds: Math.max(0, Math.floor((to.getTime() - from.getTime()) / 1000)),
         bandPct,
         samples: 0,
         venues: [],
@@ -239,7 +246,13 @@ export async function registerOracleRoutes(
       limit,
     })
 
-    const summary = computeOracleSummaryStatistics(points, bandPct, from, to)
+    const summary = computeOracleSummaryStatistics(
+      points,
+      bandPct,
+      from,
+      to,
+      config.oracleComparison.intervalMs,
+    )
     if (summary.length === 0 && oracle) {
       summary.push({
         oracle,
@@ -248,6 +261,7 @@ export async function registerOracleRoutes(
         timeOutsideBandSeconds: null,
         outsideBandSeconds: null,
         outsideBandPct: null,
+        noDataSeconds: Math.max(0, Math.floor((to.getTime() - from.getTime()) / 1000)),
         bandPct,
         samples: 0,
         venues: [],

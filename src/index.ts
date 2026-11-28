@@ -20,6 +20,12 @@ import { startSnapshotIngester } from './ingest/snapshot'
 import { createAggregateQueue, startAggregateWorker, scheduleAggregateRefresh } from './jobs/aggregateRefresh'
 import { createSnapshotRetentionQueue, startSnapshotRetentionWorker, scheduleSnapshotRetention, pruneAllNetworks, SNAPSHOT_RETENTION_DAYS } from './jobs/snapshotRetention'
 import { createVenueReconciliationQueue, startVenueReconciliationWorker, scheduleVenueReconciliation, startInProcessVenueReconciliation } from './jobs/venueReconciliation'
+import {
+  createOracleComparisonQueue,
+  startOracleComparisonWorker,
+  scheduleOracleComparison,
+  startInProcessOracleComparison,
+} from './jobs/oracleComparison'
 import { createRateRetentionQueue, startRateRetentionWorker, scheduleRateRetention, pruneAllRateNetworks, RATE_RETENTION_DAYS } from './jobs/lendingRateRetention'
 import { POOL_SNAPSHOT_RETENTION_ENABLED, poolSnapshotRetentionJob } from './jobs/poolSnapshotRetention'
 import { startScheduledJob } from './jobs/scheduledJob'
@@ -225,6 +231,26 @@ async function main() {
         log.warn({ err, network }, 'venue reconciliation worker unavailable; falling back to in-process timer')
         await Promise.allSettled([reconQueue?.close(), reconWorker?.close()])
         startInProcessVenueReconciliation(network)
+      }
+    }
+  }
+
+  // ── Scheduled oracle comparison history ──────────────────────────────────
+  // Each enabled network gets an independent sampler. Redis is only the job
+  // scheduler; an in-process timer keeps history moving while it is unavailable.
+  {
+    for (const network of getEnabledNetworks()) {
+      let comparisonQueue: ReturnType<typeof createOracleComparisonQueue> | undefined
+      let comparisonWorker: ReturnType<typeof startOracleComparisonWorker> | undefined
+      try {
+        comparisonQueue = createOracleComparisonQueue(network)
+        comparisonWorker = startOracleComparisonWorker(network)
+        await scheduleOracleComparison(comparisonQueue, network)
+        log.info({ network }, 'oracle comparison worker started')
+      } catch (err) {
+        log.warn({ err, network }, 'oracle comparison worker unavailable; falling back to in-process timer')
+        await Promise.allSettled([comparisonQueue?.close(), comparisonWorker?.close()])
+        startInProcessOracleComparison(network)
       }
     }
   }

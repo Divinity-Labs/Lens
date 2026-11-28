@@ -7469,6 +7469,7 @@
           "worstDeviationPct",
           "timeOutsideBandSeconds",
           "outsideBandPct",
+          "noDataSeconds",
           "bandPct",
           "samples",
           "venues",
@@ -7505,6 +7506,10 @@
             "type": "number",
             "nullable": true,
             "description": "Percentage of window duration spent outside bandPct"
+          },
+          "noDataSeconds": {
+            "type": "integer",
+            "description": "Seconds in the window not covered by a valid, interval-capped sample"
           },
           "bandPct": {
             "type": "number",
@@ -8874,6 +8879,7 @@
             "required": [
               "status",
               "verified",
+              "checkComplete",
               "checkedAt",
               "tomlUrl"
             ],
@@ -8887,6 +8893,10 @@
               },
               "verified": {
                 "type": "boolean"
+              },
+              "checkComplete": {
+                "type": "boolean",
+                "description": "Whether the Horizon and stellar.toml checks completed successfully"
               },
               "checkedAt": {
                 "type": "string",
@@ -8904,7 +8914,8 @@
               "source",
               "checkedAt",
               "tomlUrl",
-              "verified"
+              "verified",
+              "checkComplete"
             ],
             "properties": {
               "source": {
@@ -8920,6 +8931,10 @@
               },
               "verified": {
                 "type": "boolean"
+              },
+              "checkComplete": {
+                "type": "boolean",
+                "description": "Whether the metadata lookup completed successfully"
               }
             }
           }

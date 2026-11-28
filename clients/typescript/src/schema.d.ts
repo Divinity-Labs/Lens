@@ -1730,6 +1730,8 @@ export interface components {
             outsideBandSeconds?: number | null;
             /** @description Percentage of window duration spent outside bandPct */
             outsideBandPct: number | null;
+            /** @description Seconds in the window not covered by a valid, interval-capped sample */
+            noDataSeconds: number;
             /** @description Deviation percentage threshold applied for outside-band calculations */
             bandPct: number;
             /** @description Number of comparison samples in the window */
@@ -2123,6 +2125,8 @@ export interface components {
                 /** @enum {string} */
                 status: "verified" | "unverified";
                 verified: boolean;
+                /** @description Whether the Horizon and stellar.toml checks completed successfully */
+                checkComplete: boolean;
                 /** Format: date-time */
                 checkedAt: string;
                 tomlUrl: string | null;
@@ -2133,6 +2137,8 @@ export interface components {
                 checkedAt: string;
                 tomlUrl: string | null;
                 verified: boolean;
+                /** @description Whether the metadata lookup completed successfully */
+                checkComplete: boolean;
             };
         };
         AssetsResponse: {

@@ -907,7 +907,8 @@ export const resolvers = {
       const comparison = await compareOracles(
         asset.toUpperCase(),
         (network ?? activeNetwork) as NetworkName,
-        oracleAdapters
+        oracleAdapters,
+        { persist: false }
       )
       if (!comparison) return null
       return {

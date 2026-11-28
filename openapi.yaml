@@ -4873,7 +4873,7 @@ components:
 
     OracleSummaryStatistic:
       type: object
-      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, bandPct, samples, venues, freshestComparison, oldestComparison, status]
+      required: [oracle, meanDeviationPct, worstDeviationPct, timeOutsideBandSeconds, outsideBandPct, noDataSeconds, bandPct, samples, venues, freshestComparison, oldestComparison, status]
       additionalProperties: true
       properties:
         oracle:
@@ -4898,6 +4898,9 @@ components:
           type: number
           nullable: true
           description: Percentage of window duration spent outside bandPct
+        noDataSeconds:
+          type: integer
+          description: Seconds in the window not covered by a valid, interval-capped sample
         bandPct:
           type: number
           description: Deviation percentage threshold applied for outside-band calculations
@@ -5745,13 +5748,16 @@ components:
           example: https://circle.com/.well-known/stellar.toml
         verification:
           type: object
-          required: [status, verified, checkedAt, tomlUrl]
+          required: [status, verified, checkComplete, checkedAt, tomlUrl]
           properties:
             status:
               type: string
               enum: [verified, unverified]
             verified:
               type: boolean
+            checkComplete:
+              type: boolean
+              description: Whether the Horizon and stellar.toml checks completed successfully
             checkedAt:
               type: string
               format: date-time
@@ -5760,7 +5766,7 @@ components:
               nullable: true
         provenance:
           type: object
-          required: [source, checkedAt, tomlUrl, verified]
+          required: [source, checkedAt, tomlUrl, verified, checkComplete]
           properties:
             source:
               type: string
@@ -5772,6 +5778,9 @@ components:
               nullable: true
             verified:
               type: boolean
+            checkComplete:
+              type: boolean
+              description: Whether the metadata lookup completed successfully
 
     AssetsResponse:
       type: object

@@ -1185,24 +1185,26 @@ export const assetMetadataSchema = {
     tomlUrl: { type: ['string', 'null'] },
     verification: {
       type: 'object',
-      required: ['status', 'verified', 'checkedAt', 'tomlUrl'],
+      required: ['status', 'verified', 'checkComplete', 'checkedAt', 'tomlUrl'],
       additionalProperties: false,
       properties: {
         status: { type: 'string', enum: ['verified', 'unverified'] },
         verified: { type: 'boolean' },
+        checkComplete: { type: 'boolean' },
         checkedAt: { type: 'string' },
         tomlUrl: { type: ['string', 'null'] },
       },
     },
     provenance: {
       type: 'object',
-      required: ['source', 'checkedAt', 'tomlUrl', 'verified'],
+      required: ['source', 'checkedAt', 'tomlUrl', 'verified', 'checkComplete'],
       additionalProperties: false,
       properties: {
         source: { type: 'string' },
         checkedAt: { type: 'string' },
         tomlUrl: { type: ['string', 'null'] },
         verified: { type: 'boolean' },
+        checkComplete: { type: 'boolean' },
       },
     },
   },

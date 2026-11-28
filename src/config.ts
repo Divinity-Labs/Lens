@@ -689,6 +689,8 @@ const globalConfig = {
     // toml do not move minute to minute, and re-fetching them per request would
     // put a network round trip in front of every asset lookup.
     assetTtl: parseInt(process.env.ASSET_CACHE_TTL ?? '3600', 10),
+    // Failed verification lookups are retried after this short cache window.
+    assetFailureTtl: parseInt(process.env.ASSET_FAILURE_CACHE_TTL ?? '60', 10),
   },
   plausibility: {
     minPrice: parseFloat(process.env.PRICE_MIN_PLAUSIBLE ?? '0.0000000001'),
@@ -714,6 +716,9 @@ const globalConfig = {
     thresholdPct: parseFloat(process.env.RECONCILIATION_THRESHOLD_PCT ?? '2.0'),
     cooldownSeconds: parseInt(process.env.RECONCILIATION_ALERT_COOLDOWN_SECONDS ?? '300', 10),
     pairThresholds: parsePairThresholds(process.env.RECONCILIATION_PAIR_THRESHOLDS),
+  },
+  oracleComparison: {
+    intervalMs: parseInt(process.env.ORACLE_COMPARISON_INTERVAL_MS ?? '60000', 10),
   },
   ws: {
     pingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS ?? '30000', 10),
@@ -832,6 +837,7 @@ export const config = {
   premium: globalConfig.premium,
   http:    globalConfig.http,
   reconciliation: globalConfig.reconciliation,
+  oracleComparison: globalConfig.oracleComparison,
   ws:      globalConfig.ws,
   outbound: globalConfig.outbound,
   mcp: globalConfig.mcp,

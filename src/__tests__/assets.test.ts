@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Fastify from 'fastify'
 
 // Hoist mock functions before vi.mock calls
@@ -8,16 +8,20 @@ const {
   mockSsrfSafeFetch,
   mockAssertUrlSafe,
   mockGetCachedAsset,
+  mockGetCachedLastGoodAsset,
   mockSetCachedAsset,
   mockDbFindMany,
+  mockLogWarn,
 } = vi.hoisted(() => ({
   mockLoadAccount: vi.fn(),
   mockAssetsCall: vi.fn(),
   mockSsrfSafeFetch: vi.fn(),
   mockAssertUrlSafe: vi.fn(),
   mockGetCachedAsset: vi.fn(),
+  mockGetCachedLastGoodAsset: vi.fn(),
   mockSetCachedAsset: vi.fn(),
   mockDbFindMany: vi.fn(),
+  mockLogWarn: vi.fn(),
 }))
 
 vi.mock('../db', () => ({
@@ -31,10 +35,20 @@ vi.mock('../db', () => ({
 
 vi.mock('../redis', () => ({
   getCachedAsset: mockGetCachedAsset,
+  getCachedLastGoodAsset: mockGetCachedLastGoodAsset,
   setCachedAsset: mockSetCachedAsset,
   getCachedPrice: vi.fn().mockResolvedValue(null),
   setCachedPrice: vi.fn().mockResolvedValue(undefined),
   redis: { get: vi.fn(), set: vi.fn(), on: vi.fn() },
+}))
+
+vi.mock('../logger', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockLogWarn,
+    error: vi.fn(),
+  }),
 }))
 
 vi.mock('../network/clients', () => ({
@@ -71,6 +85,7 @@ import {
   clearAssetCache,
   resolveAssetMetadata,
   getTrackedAssets,
+  ASSET_MEMORY_CACHE_MAX_ENTRIES,
   STELLAR_TOML_MAX_SIZE,
 } from '../services/assetMetadata'
 
@@ -113,7 +128,9 @@ beforeEach(() => {
   mockSsrfSafeFetch.mockReset()
   mockAssertUrlSafe.mockReset().mockResolvedValue(undefined)
   mockGetCachedAsset.mockReset().mockResolvedValue(null)
+  mockGetCachedLastGoodAsset.mockReset().mockResolvedValue(null)
   mockSetCachedAsset.mockReset().mockResolvedValue(undefined)
+  mockLogWarn.mockReset()
   mockDbFindMany.mockReset().mockResolvedValue([
     {
       network: 'testnet',
@@ -123,6 +140,10 @@ beforeEach(() => {
       assetBIssuer: null,
     },
   ])
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('Asset Metadata Service', () => {
@@ -142,6 +163,7 @@ describe('Asset Metadata Service', () => {
     expect(meta.verification).toEqual({
       status: 'verified',
       verified: true,
+      checkComplete: true,
       checkedAt: expect.any(String),
       tomlUrl: 'https://stellar.org/.well-known/stellar.toml',
     })
@@ -150,6 +172,7 @@ describe('Asset Metadata Service', () => {
       checkedAt: expect.any(String),
       tomlUrl: 'https://stellar.org/.well-known/stellar.toml',
       verified: true,
+      checkComplete: true,
     })
     // Neither Horizon nor TOML fetch should have been touched
     expect(mockLoadAccount).not.toHaveBeenCalled()
@@ -190,7 +213,9 @@ describe('Asset Metadata Service', () => {
     expect(meta.tomlUrl).toBe('https://circle.com/.well-known/stellar.toml')
     expect(meta.verification.status).toBe('verified')
     expect(meta.verification.verified).toBe(true)
+    expect(meta.verification.checkComplete).toBe(true)
     expect(meta.provenance.source).toBe('stellar-toml')
+    expect(meta.provenance.checkComplete).toBe(true)
     expect(meta.dateChecked).toBeTruthy()
   })
 
@@ -208,6 +233,8 @@ describe('Asset Metadata Service', () => {
     expect(meta.name).toBeNull()
     expect(meta.dateChecked).toBeTruthy()
     expect(meta.provenance.source).toBe('horizon')
+    expect(meta.verification.checkComplete).toBe(true)
+    expect(meta.provenance.checkComplete).toBe(true)
     expect(mockSsrfSafeFetch).not.toHaveBeenCalled()
   })
 
@@ -229,6 +256,7 @@ describe('Asset Metadata Service', () => {
     expect(meta.homeDomain).toBe('circle.com')
     expect(meta.dateChecked).toBeTruthy()
     expect(meta.verification.status).toBe('unverified')
+    expect(meta.verification.checkComplete).toBe(true)
   })
 
   it('reports unverified (not an error) when TOML fetch encounters network error or timeout', async () => {
@@ -244,6 +272,14 @@ describe('Asset Metadata Service', () => {
     expect(meta.verified).toBe(false)
     expect(meta.homeDomain).toBe('circle.com')
     expect(meta.dateChecked).toBeTruthy()
+    expect(meta.verification.checkComplete).toBe(false)
+    expect(meta.provenance.checkComplete).toBe(false)
+    expect(mockSetCachedAsset).toHaveBeenLastCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
   })
 
   it('reports unverified when stellar.toml does not list the requested currency', async () => {
@@ -265,6 +301,13 @@ issuer = "${VALID_ISSUER}"
     const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
     expect(meta.status).toBe('unverified')
     expect(meta.verified).toBe(false)
+    expect(meta.verification.checkComplete).toBe(true)
+    expect(mockSetCachedAsset).toHaveBeenLastCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ status: 'unverified', verification: expect.objectContaining({ checkComplete: true }) }),
+      3600,
+    )
   })
 
   it('reports unverified when stellar.toml lists the asset but under a different issuer', async () => {
@@ -286,6 +329,30 @@ issuer = "${ANOTHER_ISSUER}"
     const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
     expect(meta.status).toBe('unverified')
     expect(meta.verified).toBe(false)
+    expect(meta.verification.checkComplete).toBe(true)
+  })
+
+  it('marks malformed stellar.toml as incomplete and uses the short cache TTL', async () => {
+    mockLoadAccount.mockResolvedValueOnce({
+      id: VALID_ISSUER,
+      home_domain: 'circle.com',
+    })
+    mockAssetsCall.mockResolvedValueOnce({ records: [] })
+    mockSsrfSafeFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => '[[CURRENCIES]\nnot valid toml',
+    })
+
+    const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+    expect(meta.status).toBe('unverified')
+    expect(meta.verification.checkComplete).toBe(false)
+    expect(mockSetCachedAsset).toHaveBeenLastCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
   })
 
   it('reports unverified when stellar.toml exceeds maximum file size', async () => {
@@ -305,6 +372,13 @@ issuer = "${ANOTHER_ISSUER}"
     const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
     expect(meta.status).toBe('unverified')
     expect(meta.verified).toBe(false)
+    expect(meta.verification.checkComplete).toBe(false)
+    expect(mockSetCachedAsset).toHaveBeenLastCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
   })
 
   it('caches metadata in-memory and in Redis with TTL', async () => {
@@ -343,6 +417,108 @@ issuer = "${ANOTHER_ISSUER}"
     expect(meta3.verified).toBe(true)
     // ssrfSafeFetch still not called again
     expect(mockSsrfSafeFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('shortens legacy unverified Redis entries that cannot report lookup completion', async () => {
+    const checkedAt = '2026-01-01T00:00:00.000Z'
+    mockGetCachedAsset.mockResolvedValueOnce(JSON.stringify({
+      code: 'USDC',
+      issuer: VALID_ISSUER,
+      name: null,
+      homeDomain: null,
+      domain: null,
+      decimals: 7,
+      displayDecimals: null,
+      status: 'unverified',
+      verified: false,
+      checkedAt,
+      dateChecked: checkedAt,
+      contractId: null,
+      tomlUrl: null,
+      verification: { status: 'unverified', verified: false, checkedAt, tomlUrl: null },
+      provenance: { source: 'horizon', checkedAt, tomlUrl: null, verified: false },
+    }))
+
+    const meta = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+
+    expect(meta.verification.checkComplete).toBe(false)
+    expect(meta.provenance.checkComplete).toBe(false)
+    expect(mockSetCachedAsset).toHaveBeenCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
+    expect(mockLogWarn).toHaveBeenCalledOnce()
+    expect(mockLoadAccount).not.toHaveBeenCalled()
+  })
+
+  it('retries a Horizon failure after the short TTL and warns once per failure window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+    mockLoadAccount
+      .mockRejectedValueOnce(new Error('Horizon unavailable'))
+      .mockResolvedValueOnce({ id: VALID_ISSUER })
+    mockAssetsCall.mockResolvedValue({ records: [] })
+
+    const first = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+    const cachedFailure = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+    expect(first.verification.checkComplete).toBe(false)
+    expect(cachedFailure).toEqual(first)
+    expect(mockLoadAccount).toHaveBeenCalledTimes(1)
+    expect(mockLogWarn).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(60_001)
+    const retried = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+    expect(retried.verification.checkComplete).toBe(true)
+    expect(mockLoadAccount).toHaveBeenCalledTimes(2)
+    expect(mockLogWarn).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain('https://')
+  })
+
+  it('returns a last-known verified result when its refresh fails', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+    mockLoadAccount.mockResolvedValue({
+      id: VALID_ISSUER,
+      home_domain: 'circle.com',
+    })
+    mockAssetsCall.mockResolvedValue({ records: [] })
+    mockSsrfSafeFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => SAMPLE_TOML })
+      .mockRejectedValueOnce(new Error('private toml URL should not be logged'))
+
+    const knownGood = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+    vi.advanceTimersByTime(3_600_001)
+    const fallback = await resolveAssetMetadata({ code: 'USDC', issuer: VALID_ISSUER }, 'testnet')
+
+    expect(fallback.status).toBe('verified')
+    expect(fallback.verified).toBe(true)
+    expect(fallback.verification.checkComplete).toBe(false)
+    expect(fallback.provenance.checkComplete).toBe(false)
+    expect(fallback.checkedAt).toBe(knownGood.checkedAt)
+    expect(mockSetCachedAsset).toHaveBeenLastCalledWith(
+      'testnet',
+      `USDC:${VALID_ISSUER}`,
+      expect.objectContaining({ verified: true, verification: expect.objectContaining({ checkComplete: false }) }),
+      60,
+    )
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain('private toml URL')
+  })
+
+  it('bounds the in-memory metadata cache and evicts its least-recently-used entry', async () => {
+    mockLoadAccount.mockResolvedValue({ id: VALID_ISSUER })
+    mockAssetsCall.mockResolvedValue({ records: [] })
+
+    for (let index = 0; index <= ASSET_MEMORY_CACHE_MAX_ENTRIES; index++) {
+      await resolveAssetMetadata(
+        { code: `ASSET${String(index).padStart(4, '0')}`, issuer: VALID_ISSUER },
+        'testnet',
+      )
+    }
+
+    await resolveAssetMetadata({ code: 'ASSET0000', issuer: VALID_ISSUER }, 'testnet')
+    expect(mockLoadAccount).toHaveBeenCalledTimes(ASSET_MEMORY_CACHE_MAX_ENTRIES + 2)
   })
 })
 
