@@ -1293,6 +1293,23 @@
               "maximum": 5000,
               "default": 500
             }
+          },
+          {
+            "$ref": "#/components/parameters/DecimalFormatHeader"
+          },
+          {
+            "name": "decimals",
+            "in": "query",
+            "required": false,
+            "description": "Decimal formatting. Set to `string` for exact decimal strings.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "number",
+                "string"
+              ],
+              "default": "number"
+            }
           }
         ],
         "responses": {
@@ -1341,19 +1358,54 @@
                             "format": "date-time"
                           },
                           "open": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           },
                           "high": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           },
                           "low": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           },
                           "close": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           },
                           "volume": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           }
                         }
                       }
@@ -1480,6 +1532,23 @@
           },
           {
             "$ref": "#/components/parameters/NetworkQuery"
+          },
+          {
+            "$ref": "#/components/parameters/DecimalFormatHeader"
+          },
+          {
+            "name": "decimals",
+            "in": "query",
+            "required": false,
+            "description": "Decimal formatting. Set to `string` for exact decimal strings.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "number",
+                "string"
+              ],
+              "default": "number"
+            }
           }
         ],
         "responses": {
@@ -1569,10 +1638,24 @@
                             "format": "date-time"
                           },
                           "price": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           },
                           "volume": {
-                            "type": "number"
+                            "oneOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
                           }
                         }
                       }
@@ -3736,6 +3819,9 @@
           },
           "400": {
             "description": "Invalid webhook definition"
+          },
+          "404": {
+            "description": "Pair not watched"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -8237,7 +8323,12 @@
         "type": "object",
         "required": [
           "id",
-          "secret"
+          "secret",
+          "assetA",
+          "assetB",
+          "network",
+          "threshold",
+          "direction"
         ],
         "additionalProperties": false,
         "properties": {
@@ -8246,6 +8337,29 @@
           },
           "secret": {
             "type": "string"
+          },
+          "assetA": {
+            "type": "string"
+          },
+          "assetB": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ]
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "above",
+              "below"
+            ]
           }
         }
       },
